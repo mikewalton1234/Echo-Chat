@@ -1,0 +1,24 @@
+# Echo-Chat Caddy reverse proxy example
+#
+# Safe default: LAN-only HTTP helper. This works for home/LAN testing and will
+# not request a public TLS certificate for a fake placeholder domain.
+#
+# For public beta, run the settings-aware generator instead:
+#   python main.py --generate-proxy-config caddy --proxy-output-dir deploy/generated-proxy
+# Then review the generated Caddyfile, set a real HTTPS public_base_url, and
+# point DNS for that real domain at your server.
+
+http://:8080 {
+    encode zstd gzip
+
+    # Echo-Chat backend. Keep the raw app port private when using a proxy.
+    reverse_proxy http://127.0.0.1:5000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    # Health probes are proxied by the catch-all reverse_proxy above.
+    # Default Echo-Chat health path: /health
+}
