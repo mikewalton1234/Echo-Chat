@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{ server_name }} Admin Test Lab</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#0f172a;color:#e5eefc;margin:0;padding:24px}
+    .wrap{max-width:1180px;margin:0 auto}
+    .card{background:#111827;border:1px solid rgba(255,255,255,.12);border-radius:18px;padding:18px 20px;box-shadow:0 20px 50px rgba(0,0,0,.35);margin-bottom:16px}
+    h1,h2,h3{margin:0 0 12px}
+    p{color:#c6d2ea}
+    .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+    button{background:#2563eb;color:#fff;border:0;border-radius:12px;padding:12px 16px;font-weight:700;cursor:pointer}
+    button[disabled]{opacity:.6;cursor:not-allowed}
+    label{display:flex;align-items:center;gap:8px}
+    .pill{display:inline-block;padding:4px 10px;border-radius:999px;background:#1f2937;border:1px solid rgba(255,255,255,.12)}
+    .ok{color:#8df0b6}.bad{color:#ff9b9b}.muted{color:#9fb0cc}
+    table{width:100%;border-collapse:collapse;margin-top:12px}
+    th,td{text-align:left;padding:10px;border-bottom:1px solid rgba(255,255,255,.08);vertical-align:top}
+    th{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#9fb0cc}
+    pre{white-space:pre-wrap;word-break:break-word;background:#0b1220;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,.08)}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+    .toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:12px}
+    .toolbar input,.toolbar select{min-height:40px;border:1px solid rgba(255,255,255,.14);border-radius:12px;padding:8px 11px;background:#0b1220;color:#e5eefc}
+    .mini-btn{background:#1f2937;border:1px solid rgba(255,255,255,.14);color:#e5eefc;border-radius:999px;padding:8px 12px;font-weight:700;cursor:pointer}
+    .mini-btn.active{background:#22c55e;color:#052e14}
+    .mini-btn.bad.active{background:#ef4444;color:#fff}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <noscript><div class="card"><p class="bad">JavaScript is required for this page. If the button does nothing, make sure inline scripts are allowed by the current CSP for this template build.</p></div></noscript>
+    <div class="card">
+      <h1>{{ server_name }} Admin Test Lab</h1>
+      <p class="muted">Build v{{ app_version }}</p>
+      <p>This page runs live automated admin, user, and realtime checks against the current {{ server_name }} server. It provisions two isolated <code>zz_test_*</code> users and temporary rooms, exercises the flows, and then cleans them up.</p>
+      <div class="row">
+        <label><input id="includeSettingsWrites" type="checkbox" checked> Include reversible settings write tests</label>
+        <label><input id="includeBrowserP2P" type="checkbox" checked> Include browser P2P/WebRTC diagnostics</label>
+        <label><input id="includeAutosplitLoad" type="checkbox" checked> Include 10-user Introductions autosplit test</label>
+        <label><input id="waitAutosplitCleanup" type="checkbox"> Keep autosplit users joined until I click cleanup</label>
+        <label>Safety timeout seconds <input id="autosplitHoldSeconds" type="number" min="0" max="1800" value="300" style="width:5.5rem"></label>
+        <label style="display:flex;flex-direction:column;align-items:flex-start;gap:6px;min-width:280px">
+          <span class="muted">Current admin password for live mutating tests</span>
+          <input id="currentPassword" type="password" autocomplete="current-password" placeholder="Required for create/update/delete tests" style="width:100%;min-height:42px;border:1px solid rgba(255,255,255,.14);border-radius:12px;padding:10px 12px;background:#0b1220;color:#e5eefc">
+        </label>
+        <button id="runBtn">Run full suite</button>
+        <button id="runLiveFlowBtn" type="button">Run live user flow</button>
+        <button id="runP2PBtn" type="button">Run P2P browser check</button>
+        <button id="cleanupAutosplitBtn" type="button">Cleanup visible autosplit users</button>
+        <a class="pill" href="/chat" style="color:#e5eefc;text-decoration:none">Back to chat</a>
+      </div>
+      <p class="muted" id="statusLine">Idle. Normal full-suite runs clean up autosplit users automatically. Turn on wait mode only when you want to watch fake users join live, then click cleanup.</p>
+      <div class="toolbar" aria-label="Test Lab 2.0 tools">
+        <button id="runReadinessBtn" type="button">Run readiness only</button>
+        <select id="categoryFilter" title="Filter results by category"><option value="">All categories</option></select>
+        <input id="resultSearch" type="search" placeholder="Search result names/details" autocomplete="off">
+        <button id="copyJsonBtn" type="button">Copy JSON</button>
+        <button id="downloadJsonBtn" type="button">Download JSON</button>
+      </div>
+    </div>
+
+    <div class="grid" id="summaryGrid"></div>
+    <div class="card" id="categorySummaryCard">
+      <h2>Category summary</h2>
+      <div class="toolbar" id="categoryChips"><span class="muted">No run yet.</span></div>
+    </div>
+
+    <div class="card" id="coverageCard">
+      <h2>Coverage</h2>
+      <p class="muted">Test Lab 2.0 has two modes: a read-only readiness check for deployment/security/config drift, and the live mutating suite that creates temporary <code>zz_test_*</code> users, rooms, custom rooms, and groups, checks admin tools plus realtime flows, then cleans up after itself.</p>
+      <div class="grid">
+        <div><span class="pill">Auth</span><p>Admin session, recent admin confirmation, public auth pages.</p></div>
+        <div><span class="pill">Admin</span><p>Stats, diagnostics, users, roles, permissions, settings writes, room tools, user tools.</p></div>
+        <div><span class="pill">Rooms</span><p>Room catalog, room browser APIs, room joins, messages, typing, reactions, clearing, invites.</p></div>
+        <div><span class="pill">Custom rooms</span><p>Create/list/join behavior, owner metadata, auto-enter response, cleanup.</p></div>
+        <div><span class="pill">Social</span><p>Friends, private messages, invitation alerts.</p></div>
+        <div><span class="pill">P2P files</span><p>Browser WebRTC preflight plus two-user PM file-transfer signaling: offer, answer, ICE, cleanup.</p></div>
+        <div><span class="pill">Files/torrents</span><p>Quota settings, file/torrent limits, transfer-disable flags, and tracker-scrape posture.</p></div>
+        <div><span class="pill">Deployment</span><p>Public-beta readiness, Redis/Socket.IO topology, secure-cookie posture, and deployment-plan generation.</p></div>
+        <div><span class="pill">Groups</span><p>Create, invite, accept, role changes, mutes, settings, files, sockets, history, members, delete.</p></div>
+        <div><span class="pill">Load autosplit</span><p>Creates 10 temporary users and proves Introductions overflows into Introductions (2) when the temporary room capacity is 5. In wait mode, the users stay joined until you click cleanup, so you can switch to Introductions and watch them.</p></div>
+        <div><span class="pill">Live user flow</span><p>Runs a fast normal-user smoke path: authenticated chat shell, room list, immediate Join click, room message, room switch, friend request, private message, group invite, and group message.</p></div>
+      </div>
+    </div>
+
+    <div class="card" id="browserReleaseGateCard">
+      <h2>Browser release gate</h2>
+      <p class="muted">Run these checks after the automated suite passes. They catch real Chrome/Firefox media and reconnect behavior that static tests cannot fully prove.</p>
+      <div class="grid">
+        <div><span class="pill">1. Automated gate</span><p>Run readiness, full suite, live user flow, and P2P browser check. All should pass before moving to manual browser media checks.</p></div>
+        <div><span class="pill">2. Chrome webcam-only</span><p>Join a room, click Webcam only, confirm the browser asks for camera only, Voice stays inactive, refresh/reconnect, and voice does not auto-restore.</p></div>
+        <div><span class="pill">3. Firefox webcam-only</span><p>Repeat the webcam-only test in Firefox because media permissions and device labels can behave differently from Chrome.</p></div>
+        <div><span class="pill">4. Voice combinations</span><p>Test Voice only, Webcam only, Voice + Webcam, then turn Voice off while Webcam remains on. The microphone should stop and the camera should stay active.</p></div>
+        <div><span class="pill">5. Reconnect recovery</span><p>Restart the server or refresh during media use. The reconnect banner should clear, normal room join should recover, and voice should restore only when Voice was explicitly enabled.</p></div>
+        <div><span class="pill">6. After-test cleanup</span><p>Confirm no <code>zz_test_*</code> users stay online, normal users can join rooms, and the browser does not remain stuck on reconnecting after Test Lab finishes.</p></div>
+      </div>
+      <div class="toolbar" id="browserGateChecks" aria-label="Browser release gate manual checklist">
+        <label><input class="browserGateCheck" type="checkbox" data-key="automated_gate"> Automated gate passed</label>
+        <label><input class="browserGateCheck" type="checkbox" data-key="chrome_webcam_only"> Chrome webcam-only passed</label>
+        <label><input class="browserGateCheck" type="checkbox" data-key="firefox_webcam_only"> Firefox webcam-only passed</label>
+        <label><input class="browserGateCheck" type="checkbox" data-key="voice_combinations"> Voice combinations passed</label>
+        <label><input class="browserGateCheck" type="checkbox" data-key="reconnect_recovery"> Reconnect recovery passed</label>
+        <label><input class="browserGateCheck" type="checkbox" data-key="after_test_cleanup"> After-test cleanup passed</label>
+        <button id="saveBrowserGateBtn" type="button">Save browser gate status</button>
+        <span id="browserGateStatus" class="muted">Browser gate not saved yet.</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Results</h2>
+      <table id="resultsTable">
+        <thead>
+          <tr><th>Status</th><th>Category</th><th>Name</th><th>Details</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>Raw response</h2>
+      <pre id="rawOut">No run yet.</pre>
+    </div>
+  </div>
+  <script nonce="{{ csp_nonce }}">
+    function getCookie(name){
+      const m=document.cookie.match(new RegExp('(?:^|; )'+name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'=([^;]*)'));
+      return m?decodeURIComponent(m[1]):'';
+    }
+    function clearNode(node){
+      while(node && node.firstChild) node.removeChild(node.firstChild);
+    }
+    function el(tag, opts={}, kids=[]){
+      const node=document.createElement(tag);
+      if(opts.className) node.className=String(opts.className);
+      if(opts.text!==undefined) node.textContent=String(opts.text);
+      if(opts.colSpan!==undefined) node.colSpan=Number(opts.colSpan)||1;
+      if(opts.style && typeof opts.style === 'object') Object.entries(opts.style).forEach(([k,v])=>{ node.style[k]=String(v); });
+      (Array.isArray(kids)?kids:[kids]).forEach(k=>{
+        if(k===null || k===undefined || k===false) return;
+        node.appendChild(k instanceof Node ? k : document.createTextNode(String(k)));
+      });
+      return node;
+    }
+    let lastData = null;
+    let activeAutosplitLoadId = '';
+    const BROWSER_GATE_CHECKS = [
+      ['automated_gate', 'Automated gate passed'],
+      ['chrome_webcam_only', 'Chrome webcam-only passed'],
+      ['firefox_webcam_only', 'Firefox webcam-only passed'],
+      ['voice_combinations', 'Voice combinations passed'],
+      ['reconnect_recovery', 'Reconnect recovery passed'],
+      ['after_test_cleanup', 'After-test cleanup passed']
+    ];
+    function browserReleaseGateStorageKey(){
+      return 'echochat:browserReleaseGate:v1:' + window.location.host;
+    }
+    function collectBrowserReleaseGateRows(){
+      const checks = Array.from(document.querySelectorAll('.browserGateCheck'));
+      const byKey = {};
+      checks.forEach(ch => { byKey[String(ch.dataset.key || '')] = !!ch.checked; });
+      return BROWSER_GATE_CHECKS.map(([key,label]) => testlabResult('browser release gate: ' + label, !!byKey[key], {key, checked: !!byKey[key]}, 'browser-release-gate'));
+    }
+    function saveBrowserReleaseGate(){
+      const payload = {};
+      document.querySelectorAll('.browserGateCheck').forEach(ch => { payload[String(ch.dataset.key || '')] = !!ch.checked; });
+      try { localStorage.setItem(browserReleaseGateStorageKey(), JSON.stringify(payload)); } catch(_) {}
+      const passed = Object.values(payload).filter(Boolean).length;
+      const status = document.getElementById('browserGateStatus');
+      if(status) status.textContent = `Browser gate saved: ${passed}/${BROWSER_GATE_CHECKS.length} checked.`;
+      if(lastData && Array.isArray(lastData.results)) renderAll(mergeReleaseGateRows(lastData));
+    }
+    function loadBrowserReleaseGate(){
+      let saved = {};
+      try { saved = JSON.parse(localStorage.getItem(browserReleaseGateStorageKey()) || '{}') || {}; } catch(_) { saved = {}; }
+      document.querySelectorAll('.browserGateCheck').forEach(ch => { ch.checked = !!saved[String(ch.dataset.key || '')]; });
+      const passed = Object.values(saved).filter(Boolean).length;
+      const status = document.getElementById('browserGateStatus');
+      if(status) status.textContent = passed ? `Browser gate loaded: ${passed}/${BROWSER_GATE_CHECKS.length} checked.` : 'Browser gate not saved yet.';
+    }
+    function updateCategoryFilter(data){
+      const sel=document.getElementById('categoryFilter');
+      if(!sel) return;
+      const prev=sel.value;
+      const cats=[...new Set(((data&&data.results)||[]).map(r=>String((r&&r.category)||'general')).filter(Boolean))].sort();
+      clearNode(sel);
+      sel.appendChild(el('option', {text:'All categories'}));
+      sel.firstChild.value='';
+      cats.forEach(cat=>{ const opt=el('option', {text:cat}); opt.value=cat; sel.appendChild(opt); });
+      if(cats.includes(prev)) sel.value=prev;
+    }
+    function renderCategorySummary(data){
+      const wrap=document.getElementById('categoryChips');
+      if(!wrap) return;
+      clearNode(wrap);
+      const rows=(data&&data.results)||[];
+      if(!rows.length){ wrap.appendChild(el('span',{className:'muted',text:'No run yet.'})); return; }
+      const byCat={};
+      rows.forEach(r=>{ const cat=String((r&&r.category)||'general'); byCat[cat]=byCat[cat]||{passed:0,failed:0,total:0}; byCat[cat].total++; if(r&&r.ok) byCat[cat].passed++; else byCat[cat].failed++; });
+      Object.keys(byCat).sort().forEach(cat=>{
+        const b=byCat[cat];
+        const btn=el('button',{className:'mini-btn'+(b.failed?' bad':''),text:`${cat}: ${b.passed}/${b.total}`});
+        btn.type='button';
+        btn.addEventListener('click',()=>{ const sel=document.getElementById('categoryFilter'); if(sel){ sel.value=cat; renderResults(lastData); } });
+        wrap.appendChild(btn);
+      });
+    }
+    function renderAll(data){
+      lastData=data||{};
+      updateCategoryFilter(lastData);
+      renderSummary(lastData);
+      renderCategorySummary(lastData);
+      renderResults(lastData);
+      document.getElementById('rawOut').textContent = JSON.stringify(lastData, null, 2);
+    }
+    function renderSummary(data){
+      const grid=document.getElementById('summaryGrid');
+      const sum=(data&&data.summary)||{};
+      const cards=[
+        ['Overall', data&&data.ok ? 'PASS' : 'FAIL', data&&data.ok],
+        ['Passed', String(sum.passed||0), true],
+        ['Failed', String(sum.failed||0), !(sum.failed>0)],
+        ['Actor', String((data&&data.actor)||'unknown'), true],
+      ];
+      clearNode(grid);
+      cards.forEach(([k,v,ok])=>{
+        grid.appendChild(el('div', {className:'card'}, [
+          el('div', {className:'muted', text:k}),
+          el('div', {className: ok?'ok':'bad', text:v, style:{fontSize:'28px', fontWeight:'800'}})
+        ]));
+      });
+    }
+    function renderResults(data){
+      const tbody=document.querySelector('#resultsTable tbody');
+      clearNode(tbody);
+      const selectedCat=(document.getElementById('categoryFilter')&&document.getElementById('categoryFilter').value)||'';
+      const term=((document.getElementById('resultSearch')&&document.getElementById('resultSearch').value)||'').trim().toLowerCase();
+      const allRows=(data&&data.results)||[];
+      const rows=allRows.filter(item=>{
+        if(selectedCat && String((item&&item.category)||'general')!==selectedCat) return false;
+        if(!term) return true;
+        const hay=[item&&item.category,item&&item.name,JSON.stringify((item&&item.details)||{})].join(' ').toLowerCase();
+        return hay.includes(term);
+      });
+      if(!rows.length){
+        const tr=el('tr');
+        tr.appendChild(el('td', {className:'muted', colSpan:4, text:allRows.length?'No results match the current filter.':'No results.'}));
+        tbody.appendChild(tr);
+        return;
+      }
+      rows.forEach(item=>{
+        const tr=el('tr');
+        const status=el('span', {className:item.ok?'ok':'bad', text:item.ok?'PASS':'FAIL'});
+        tr.appendChild(el('td', {}, [status]));
+        tr.appendChild(el('td', {text:item.category||''}));
+        tr.appendChild(el('td', {text:item.name||''}));
+        const detailsPayload = item.details ?? item.detail ?? item.meta ?? {};
+        const details=typeof detailsPayload === 'string' ? detailsPayload : JSON.stringify(detailsPayload, null, 2);
+        tr.appendChild(el('td', {}, [el('pre', {text:details})]));
+        tbody.appendChild(tr);
+      });
+    }
+    function testlabResult(name, ok, details={}, category='p2p-browser') {
+      return { name, ok: !!ok, details, category };
+    }
+    function summarizeRows(rows, actor='browser') {
+      const passed = rows.filter(r => r && r.ok).length;
+      const failed = rows.filter(r => r && !r.ok).length;
+      return {
+        ok: failed === 0,
+        actor,
+        coverage: ['p2p-browser'],
+        summary: { passed, failed, skipped: 0 },
+        results: rows
+      };
+    }
+    async function runDataChannelLoopback() {
+      const RTCPeer = window.RTCPeerConnection || window.webkitRTCPeerConnection;
+      if (typeof RTCPeer !== 'function') {
+        return { ok:false, error:'RTCPeerConnection is unavailable' };
+      }
+      let pc1 = null;
+      let pc2 = null;
+      let dc1 = null;
+      let dc2 = null;
+      const errors = [];
+      const closeAll = () => {
+        try { dc1 && dc1.close(); } catch(_) {}
+        try { dc2 && dc2.close(); } catch(_) {}
+        try { pc1 && pc1.close(); } catch(_) {}
+        try { pc2 && pc2.close(); } catch(_) {}
+      };
+      try {
+        pc1 = new RTCPeer({ iceServers: [] });
+        pc2 = new RTCPeer({ iceServers: [] });
+        const startedAt = performance.now();
+        const done = new Promise((resolve) => {
+          const timer = setTimeout(() => resolve({ ok:false, error:'local DataChannel loopback timeout', errors }), 6000);
+          const finish = (payload) => {
+            clearTimeout(timer);
+            resolve({ ...payload, elapsed_ms: Math.round(performance.now() - startedAt), errors });
+          };
+          pc1.onicecandidate = (event) => {
+            if (event.candidate) pc2.addIceCandidate(event.candidate).catch(err => errors.push(String(err && err.message || err)));
+          };
+          pc2.onicecandidate = (event) => {
+            if (event.candidate) pc1.addIceCandidate(event.candidate).catch(err => errors.push(String(err && err.message || err)));
+          };
+          pc1.onconnectionstatechange = () => {
+            if (['failed','closed'].includes(pc1.connectionState)) errors.push('pc1 connectionState=' + pc1.connectionState);
+          };
+          pc2.onconnectionstatechange = () => {
+            if (['failed','closed'].includes(pc2.connectionState)) errors.push('pc2 connectionState=' + pc2.connectionState);
+          };
+          pc2.ondatachannel = (event) => {
+            dc2 = event.channel;
+            dc2.binaryType = 'arraybuffer';
+            dc2.onmessage = (msg) => {
+              try { dc2.send('echo:' + String(msg.data)); }
+              catch(err) { finish({ ok:false, error:String(err && err.message || err) }); }
+            };
+          };
+          dc1 = pc1.createDataChannel('ec_p2p_diag', { ordered: true });
+          dc1.binaryType = 'arraybuffer';
+          dc1.onerror = (event) => errors.push(String((event && event.error && event.error.message) || 'DataChannel error'));
+          dc1.onopen = () => { dc1.send('ping'); };
+          dc1.onmessage = (event) => {
+            finish({ ok: String(event.data) === 'echo:ping', received: String(event.data), pc1_state: pc1.connectionState, pc2_state: pc2.connectionState });
+          };
+        });
+        const offer = await pc1.createOffer();
+        await pc1.setLocalDescription(offer);
+        await pc2.setRemoteDescription(offer);
+        const answer = await pc2.createAnswer();
+        await pc2.setLocalDescription(answer);
+        await pc1.setRemoteDescription(answer);
+        return await done;
+      } catch (err) {
+        return { ok:false, error:String(err && err.message || err), errors };
+      } finally {
+        closeAll();
+      }
+    }
+    async function runBrowserP2PDiagnostics() {
+      const RTCPeer = window.RTCPeerConnection || window.webkitRTCPeerConnection;
+      const rows = [];
+      const details = {
+        protocol: window.location.protocol,
+        hostname: window.location.hostname,
+        isSecureContext: !!window.isSecureContext,
+        userAgent: navigator.userAgent
+      };
+      rows.push(testlabResult('browser secure context for P2P files', !!window.isSecureContext, details));
+      rows.push(testlabResult(
+        'browser WebRTC APIs available',
+        typeof RTCPeer === 'function' && typeof window.RTCSessionDescription !== 'undefined',
+        { RTCPeerConnection: typeof RTCPeer, RTCSessionDescription: typeof window.RTCSessionDescription, RTCIceCandidate: typeof window.RTCIceCandidate }
+      ));
+      if (typeof RTCPeer === 'function') {
+        const loop = await runDataChannelLoopback();
+        rows.push(testlabResult('browser RTCDataChannel loopback', !!loop.ok, loop));
+      } else {
+        rows.push(testlabResult('browser RTCDataChannel loopback', false, { error:'RTCPeerConnection missing' }));
+      }
+      rows.push(testlabResult(
+        'PM direct file transfer eligibility',
+        !!window.isSecureContext && typeof RTCPeer === 'function',
+        {
+          eligible: !!window.isSecureContext && typeof RTCPeer === 'function',
+          note: 'Direct PM files need a secure browser context plus WebRTC. LAN HTTP usually fails this and should fall back to encrypted server upload.'
+        }
+      ));
+      return rows;
+    }
+    function mergeBrowserRows(data, browserRows) {
+      const rows = Array.isArray(browserRows) ? browserRows : [];
+      if (!rows.length) return data;
+      const merged = data || {};
+      merged.results = rows.concat(Array.isArray(merged.results) ? merged.results : []);
+      const addPassed = rows.filter(r => r && r.ok).length;
+      const addFailed = rows.filter(r => r && !r.ok).length;
+      const summary = merged.summary || {};
+      summary.passed = Number(summary.passed || 0) + addPassed;
+      summary.failed = Number(summary.failed || 0) + addFailed;
+      summary.skipped = Number(summary.skipped || 0);
+      merged.summary = summary;
+      merged.ok = !!merged.ok && addFailed === 0;
+      const coverage = Array.isArray(merged.coverage) ? merged.coverage.slice() : [];
+      if (!coverage.includes('p2p-browser')) coverage.unshift('p2p-browser');
+      merged.coverage = coverage;
+      return merged;
+    }
+    function mergeReleaseGateRows(data) {
+      const rows = collectBrowserReleaseGateRows();
+      const withoutOld = Array.isArray(data&&data.results) ? data.results.filter(r => String((r&&r.category)||'') !== 'browser-release-gate') : [];
+      const merged = {...(data || {}), results: withoutOld};
+      const addPassed = rows.filter(r => r && r.ok).length;
+      const addFailed = rows.filter(r => r && !r.ok).length;
+      const baseSummary = merged.summary || {};
+      const oldGate = Array.isArray(data&&data.results) ? data.results.filter(r => String((r&&r.category)||'') === 'browser-release-gate') : [];
+      const oldPassed = oldGate.filter(r => r && r.ok).length;
+      const oldFailed = oldGate.filter(r => r && !r.ok).length;
+      merged.results = rows.concat(withoutOld);
+      merged.summary = {
+        passed: Math.max(0, Number(baseSummary.passed || 0) - oldPassed) + addPassed,
+        failed: Math.max(0, Number(baseSummary.failed || 0) - oldFailed) + addFailed,
+        skipped: Number(baseSummary.skipped || 0)
+      };
+      merged.ok = !!merged.ok && addFailed === 0;
+      const coverage = Array.isArray(merged.coverage) ? merged.coverage.slice() : [];
+      if (!coverage.includes('browser-release-gate')) coverage.unshift('browser-release-gate');
+      merged.coverage = coverage;
+      return merged;
+    }
+    async function runP2POnly(){
+      const btn=document.getElementById('runP2PBtn');
+      const status=document.getElementById('statusLine');
+      btn.disabled=true;
+      status.textContent='Running browser WebRTC/DataChannel diagnostics…';
+      try{
+        const rows = await runBrowserP2PDiagnostics();
+        const data = summarizeRows(rows, 'browser');
+        renderAll(data);
+        status.textContent = data.ok ? 'Browser P2P diagnostics passed.' : 'Browser P2P diagnostics found a problem.';
+      }catch(err){
+        status.textContent='Browser P2P diagnostics failed before completion.';
+        document.getElementById('rawOut').textContent=String(err && err.stack || err);
+      }finally{
+        btn.disabled=false;
+      }
+    }
+    async function postJson(path, body){
+      const csrf = getCookie('csrf_access_token') || getCookie('csrf_refresh_token');
+      const headers={'Content-Type':'application/json'};
+      if(csrf) headers['X-CSRF-TOKEN']=csrf;
+      const resp=await fetch(path, {
+        method:'POST', credentials:'include',
+        headers,
+        referrer:window.location.href,
+        body:JSON.stringify(body||{})
+      });
+      const rawText=await resp.text();
+      let data=null;
+      try{ data=rawText?JSON.parse(rawText):null; }catch(_){}
+      return {resp, rawText, data};
+    }
+    async function runReadinessOnly(){
+      const btn=document.getElementById('runReadinessBtn');
+      const status=document.getElementById('statusLine');
+      btn.disabled=true;
+      status.textContent='Running read-only deployment/security/file/realtime readiness checks…';
+      try{
+        const basePath=window.location.pathname.replace(/\/+$/, '');
+        const {resp, rawText, data}=await postJson(basePath + '/readiness', {});
+        if(data) renderAll(data); else document.getElementById('rawOut').textContent=rawText||`HTTP ${resp.status} with empty body`;
+        status.textContent=resp.ok?'Readiness check finished.':`Readiness check finished with HTTP ${resp.status}.`;
+      }catch(err){
+        status.textContent='Readiness check failed before completion.';
+        document.getElementById('rawOut').textContent=String(err && err.stack || err);
+      }finally{
+        btn.disabled=false;
+      }
+    }
+    async function copyJson(){
+      const text=document.getElementById('rawOut').textContent||'';
+      try{ await navigator.clipboard.writeText(text); document.getElementById('statusLine').textContent='Raw JSON copied.'; }
+      catch(err){ document.getElementById('statusLine').textContent='Could not copy JSON.'; }
+    }
+    function downloadJson(){
+      const text=document.getElementById('rawOut').textContent||'{}';
+      const blob=new Blob([text],{type:'application/json'});
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);
+      a.download='echochat-admin-test-lab-results.json';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 0);
+    }
+    function findActiveAutosplitLoadId(data){
+      if(data && data.active_autosplit_load_id) return String(data.active_autosplit_load_id);
+      const rows=(data&&data.results)||[];
+      for(const row of rows){
+        const details=(row&&row.details)||{};
+        if(row && row.category === 'load-autosplit' && details.active_load_id) return String(details.active_load_id);
+      }
+      return '';
+    }
+    async function cleanupAutosplitLoad(){
+      const btn=document.getElementById('cleanupAutosplitBtn');
+      const status=document.getElementById('statusLine');
+      btn.disabled=true;
+      status.textContent='Cleaning up visible autosplit users…';
+      try{
+        const basePath=window.location.pathname.replace(/\/+$/, '');
+        const {resp, rawText, data}=await postJson(basePath + '/autosplit_cleanup', {load_id: activeAutosplitLoadId || 'latest'});
+        document.getElementById('rawOut').textContent = data ? JSON.stringify(data,null,2) : rawText || `HTTP ${resp.status} with empty body`;
+        if(data && data.ok){
+          activeAutosplitLoadId='';
+          status.textContent=`Autosplit cleanup finished. Removed ${data.users || 0} users and ${data.rooms || 0} rooms.`;
+        } else {
+          status.textContent=`Autosplit cleanup finished with HTTP ${resp.status}.`;
+        }
+      }catch(err){
+        status.textContent='Autosplit cleanup failed before completion.';
+        document.getElementById('rawOut').textContent=String(err && err.stack || err);
+      }finally{
+        btn.disabled=false;
+      }
+    }
+    async function runLiveUserFlow(){
+      const btn=document.getElementById('runLiveFlowBtn');
+      const status=document.getElementById('statusLine');
+      btn.disabled=true;
+      status.textContent='Running live normal-user flow: chat shell, join, message, switch, PM, and group…';
+      try{
+        const runUrl = window.location.pathname.replace(/\/+$/, '') + '/live_user_flow';
+        const {resp, rawText, data}=await postJson(runUrl, {
+          current_password:(document.getElementById('currentPassword').value || '').trim()
+        });
+        if(data) renderAll(data); else document.getElementById('rawOut').textContent=rawText||`HTTP ${resp.status} with empty body`;
+        if(resp.status === 428){
+          const msg=(data && (data.message || data.error || data.code)) || 'Recent admin password confirmation is required.';
+          status.textContent=`Live user flow needs admin confirmation: ${msg}`;
+        } else {
+          status.textContent=resp.ok?'Live user flow finished.':`Live user flow finished with HTTP ${resp.status}.`;
+        }
+      }catch(err){
+        status.textContent='Live user flow failed before completion.';
+        document.getElementById('rawOut').textContent=String(err && err.stack || err);
+      }finally{
+        btn.disabled=false;
+      }
+    }
+
+    async function runSuite(){
+      const btn=document.getElementById('runBtn');
+      const status=document.getElementById('statusLine');
+      btn.disabled=true;
+      const p2pBtn=document.getElementById('runP2PBtn');
+      if (p2pBtn) p2pBtn.disabled=true;
+      status.textContent='Running live admin/user/realtime checks…';
+      try{
+        let browserP2PRows = [];
+        if (document.getElementById('includeBrowserP2P').checked) {
+          status.textContent='Running browser WebRTC/DataChannel diagnostics…';
+          browserP2PRows = await runBrowserP2PDiagnostics();
+          status.textContent='Running live admin/user/realtime checks…';
+        }
+        const runUrl = window.location.pathname.replace(/\/+$/, '') + '/run';
+        const {resp, rawText, data: parsedData} = await postJson(runUrl, {
+          include_mutating_settings:document.getElementById('includeSettingsWrites').checked,
+          include_autosplit_load:document.getElementById('includeAutosplitLoad').checked,
+          autosplit_wait_for_admin:document.getElementById('waitAutosplitCleanup').checked,
+          autosplit_hold_seconds:document.getElementById('waitAutosplitCleanup').checked ? Number(document.getElementById('autosplitHoldSeconds').value || 300) : 0,
+          current_password:(document.getElementById('currentPassword').value || '').trim()
+        });
+        let data = parsedData;
+        document.getElementById('rawOut').textContent = data ? JSON.stringify(data,null,2) : rawText || `HTTP ${resp.status} with empty body`;
+        if (data) {
+          data = mergeBrowserRows(data, browserP2PRows);
+          data = mergeReleaseGateRows(data);
+          activeAutosplitLoadId = findActiveAutosplitLoadId(data);
+          renderAll(data);
+        }
+        if (resp.status === 428) {
+          const msg = (data && (data.message || data.error || data.code)) || 'Recent admin password confirmation is required.';
+          status.textContent = `Suite needs admin confirmation: ${msg}`;
+        } else {
+          if(activeAutosplitLoadId){
+            status.textContent = 'Autosplit users are joined and waiting. Go to Introductions now, then click Cleanup visible autosplit users.';
+          } else {
+            status.textContent = resp.ok ? 'Suite finished.' : `Suite finished with HTTP ${resp.status}.`;
+          }
+        }
+      }catch(err){
+        status.textContent='Run failed before completion.';
+        document.getElementById('rawOut').textContent=String(err && err.stack || err);
+      }finally{
+        btn.disabled=false;
+        if (p2pBtn) p2pBtn.disabled=false;
+      }
+    }
+    document.getElementById('runBtn').addEventListener('click', runSuite);
+    document.getElementById('runLiveFlowBtn').addEventListener('click', runLiveUserFlow);
+    document.getElementById('runP2PBtn').addEventListener('click', runP2POnly);
+    document.getElementById('cleanupAutosplitBtn').addEventListener('click', cleanupAutosplitLoad);
+    document.getElementById('runReadinessBtn').addEventListener('click', runReadinessOnly);
+    document.getElementById('copyJsonBtn').addEventListener('click', copyJson);
+    document.getElementById('downloadJsonBtn').addEventListener('click', downloadJson);
+    document.getElementById('saveBrowserGateBtn').addEventListener('click', saveBrowserReleaseGate);
+    document.querySelectorAll('.browserGateCheck').forEach(ch => ch.addEventListener('change', saveBrowserReleaseGate));
+    document.getElementById('categoryFilter').addEventListener('change', ()=>renderResults(lastData));
+    document.getElementById('resultSearch').addEventListener('input', ()=>renderResults(lastData));
+    loadBrowserReleaseGate();
+  </script>
+</body>
+</html>

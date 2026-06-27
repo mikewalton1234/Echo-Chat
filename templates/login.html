@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ server_name }} — Login</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/chat.css') }}?v={{ app_version }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}?v={{ app_version }}">
+</head>
+<body class="authPage loginPage">
+    <div class="authStage">
+        <div class="authBackdrop" aria-hidden="true">
+            <div class="authGrid"></div>
+            <div class="authGlow"></div>
+            <div class="authGlowAlt"></div>
+            <div class="authGlowWarm"></div>
+            <div class="authShimmer"></div>
+            <span class="authSprite s1"></span>
+            <span class="authSprite s2"></span>
+            <span class="authSprite s3"></span>
+            <span class="authSprite s4"></span>
+            <span class="authSprite s5"></span>
+            <span class="authSprite s6"></span>
+            <span class="authSprite s7"></span>
+            <span class="authSprite s8"></span>
+            <span class="authSprite s9"></span>
+            <span class="authSprite s10"></span>
+            <span class="authSprite s11"></span>
+            <span class="authSprite s12"></span>
+        </div>
+
+        {% if two_factor_pending %}
+        <div class="authStack">
+          <form method="POST" class="authCard authCardCompact authStack">
+              <div class="authServerName">{{ server_name }}</div>
+              <div class="authVersion">v{{ app_version }}</div>
+              <h2 class="authTitle">Text message verification</h2>
+              <p class="authSubtitle">Finish signing in with the code sent to your phone.</p>
+              <div id="loginMsg" class="authNotice" {% if not two_factor_hint %}style="display:none;"{% endif %}>{{ two_factor_hint }}</div>
+              <input type="hidden" name="csrf_token" value="{{ login_csrf_token or csrf_token() }}">
+              <input type="hidden" name="stage" value="2fa_sms">
+              <div class="authMuted">We sent a login code to <strong class="authStrong">{{ two_factor_phone_mask or 'your phone' }}</strong>.</div>
+              <input class="authField" type="text" name="two_factor_code" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" required>
+              <button class="authButton" type="submit">Verify and continue</button>
+              {% if error %}
+                  <p class="authError" style="margin:0;">{{ error }}</p>
+              {% endif %}
+              {% if prefill_username %}
+                <div class="authMuted" style="text-align:center;">Signing in as <strong class="authStrong">{{ prefill_username }}</strong></div>
+              {% endif %}
+          </form>
+          <div class="authButtonPanel">
+            <form method="POST" style="margin:0;">
+              <input type="hidden" name="csrf_token" value="{{ login_csrf_token or csrf_token() }}">
+              <input type="hidden" name="stage" value="2fa_resend">
+              <button class="authButton authButtonSecondary" type="submit" style="width:100%;">Resend code</button>
+            </form>
+            <form method="POST" style="margin:0;">
+              <input type="hidden" name="csrf_token" value="{{ login_csrf_token or csrf_token() }}">
+              <input type="hidden" name="stage" value="2fa_cancel">
+              <button class="authButton authButtonSecondary" type="submit" style="width:100%;">Start over</button>
+            </form>
+          </div>
+        </div>
+        {% else %}
+        <form method="POST" class="authCard authStack">
+            <div class="authServerName">{{ server_name }}</div>
+            <div class="authVersion">v{{ app_version }}</div>
+            <h2 class="authTitle">Login</h2>
+            <p class="authSubtitle">Sign in, then use Rooms / Chat / Hub from the phone navigation.</p>
+            <div id="loginMsg" class="authNotice" style="display:none;"></div>
+            <input type="hidden" name="csrf_token" value="{{ login_csrf_token or csrf_token() }}">
+            <input class="authField" type="text" name="username" placeholder="Username" value="{{ prefill_username or '' }}" required>
+            <input class="authField" type="password" name="password" placeholder="Password" required>
+            <p class="authMuted" style="margin:0; text-align:center;">Private messages become available automatically in this tab after login.</p>
+            <button class="authButton" type="submit">Login</button>
+            {% if error %}
+                <p class="authError" style="margin:0;">{{ error }}</p>
+            {% endif %}
+            <div class="authLinks">
+                <p><a href="{{ url_for('forgot_password') }}">Forgot password?</a></p>
+                <p>Don't have an account? <a href="{{ url_for('register') }}">Register here</a></p>
+            </div>
+        </form>
+        {% endif %}
+    </div>
+
+    <script nonce="{{ csp_nonce }}">
+      // Store the exact login password in sessionStorage so private messages
+      // become available automatically in this tab only. Do not trim whitespace; preserve the password exactly as typed.
+      (() => {
+        const dmUserToken = (username) => String(username || '')
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9_.@-]+/g, '_')
+          .replace(/^_+|_+$/g, '')
+          .slice(0, 96);
+        const dmPwdKeyFor = (username) => {
+          const token = dmUserToken(username);
+          return token ? `echochat_dm_pwd_v2:${token}` : '';
+        };
+        const clearAutoUnlockPassword = (username = '') => {
+          const scopedKey = dmPwdKeyFor(username);
+          if (scopedKey) {
+            sessionStorage.removeItem(scopedKey);
+            sessionStorage.removeItem(`${scopedKey}:set_at`);
+          }
+          sessionStorage.removeItem("echochat_dm_pwd");
+          sessionStorage.removeItem("echochat_dm_pwd_set_at");
+          sessionStorage.removeItem("echochat_dm_pwd_user");
+        };
+        const rememberAutoUnlockPassword = (username, password) => {
+          const scopedKey = dmPwdKeyFor(username);
+          if (!scopedKey) {
+            clearAutoUnlockPassword();
+            return;
+          }
+          sessionStorage.setItem(scopedKey, String(password));
+          sessionStorage.setItem(`${scopedKey}:set_at`, String(Date.now()));
+          sessionStorage.setItem("echochat_dm_pwd_user", dmUserToken(username));
+          // Remove the beta.265-and-earlier global key so one account cannot
+          // accidentally try to unlock another account's private-message key.
+          sessionStorage.removeItem("echochat_dm_pwd");
+          sessionStorage.removeItem("echochat_dm_pwd_set_at");
+        };
+
+        for (const form of Array.from(document.querySelectorAll("form"))) {
+          form.addEventListener("submit", (ev) => {
+            try {
+              const stageEl = form.querySelector('input[name="stage"]');
+              const clicked = ev?.submitter?.value || '';
+              const stage = clicked || (stageEl ? String(stageEl.value || '').trim() : 'password');
+
+              if (stage === '2fa_cancel') {
+                clearAutoUnlockPassword(sessionStorage.getItem("echochat_dm_pwd_user") || '');
+                return;
+              }
+              // During 2FA verification/resend, keep the password captured from the first login step.
+              if (stage && stage !== 'password') return;
+
+              const userEl = form.querySelector('input[name="username"]');
+              const pwdEl = form.querySelector('input[name="password"]');
+              if (userEl && String(userEl.value || '').trim() && pwdEl && pwdEl.value) {
+                // Password is kept in this tab for automatic DM/group crypto readiness after login.
+                rememberAutoUnlockPassword(userEl.value, pwdEl.value);
+              } else {
+                clearAutoUnlockPassword(userEl ? userEl.value : '');
+              }
+            } catch (e) {}
+          });
+        }
+      })();
+
+      (() => {
+        try {
+          const el = document.getElementById("loginMsg");
+          if (!el) return;
+          if (el.textContent && el.textContent.trim()) {
+            el.style.display = "block";
+            return;
+          }
+          const params = new URLSearchParams(window.location.search || "");
+          const publicMessage = (params.get("msg") || params.get("message") || "").trim();
+          const reason = (params.get("reason") || "").trim();
+          const ss = (sessionStorage.getItem("echochat_logout_reason") || "").trim();
+          const friendlyMessages = {
+            password_reset_complete: "Password reset complete. Please log in with your new password.",
+            login_form_expired: "The login page was refreshed after the server restarted or your old form expired. Please sign in again.",
+            idle_timeout: "You were signed out due to inactivity. Please log in again.",
+            session_revoked: "Your session ended. Please log in again.",
+            refresh_failed: "Your session could not be restored. Please log in again.",
+            auth_required: "Please log in again to continue.",
+            logged_out: "You have been logged out.",
+            user_logout: "You have been logged out."
+          };
+
+          if (publicMessage) {
+            el.style.display = "block";
+            el.textContent = friendlyMessages[publicMessage] || publicMessage;
+            try { sessionStorage.removeItem("echochat_logout_reason"); } catch (e) {}
+            return;
+          }
+
+          const signOutReason = reason || ss;
+          if (signOutReason) {
+            el.style.display = "block";
+            const cleanReason = friendlyMessages[signOutReason] || signOutReason.replace(/_/g, " ");
+            const strong = document.createElement('strong');
+            strong.textContent = 'Notice:';
+            el.replaceChildren(strong, document.createTextNode(` ${cleanReason}`));
+            try { sessionStorage.removeItem("echochat_logout_reason"); } catch (e) {}
+          }
+        } catch (e) {}
+      })();
+    </script>
+</body>
+</html>

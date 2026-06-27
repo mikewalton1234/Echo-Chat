@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>{{ server_name }} · WebRTC Diagnostics</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="/static/css/chat.css?v={{ app_version }}" />
+  <style>
+    body{margin:0;background:#eef3fb;color:#122033;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+    .diagShell{max-width:1180px;margin:0 auto;padding:22px;}
+    .diagHero{background:linear-gradient(135deg,#fff,#eaf2ff);border:1px solid rgba(15,23,42,.12);border-radius:18px;padding:20px;box-shadow:0 10px 28px rgba(15,23,42,.08);}
+    .diagHero h1{margin:0 0 6px;font-size:28px;}
+    .diagHero p{margin:0;color:#526174;line-height:1.45;}
+    .diagActions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px;align-items:center;}
+    .diagBtn{border:1px solid rgba(15,23,42,.18);background:#fff;border-radius:999px;padding:9px 14px;font-weight:700;cursor:pointer;}
+    .diagBtn.primary{background:#2563eb;color:#fff;border-color:#1d4ed8;}
+    .diagBtn.danger{background:#fff1f2;color:#be123c;border-color:#fecdd3;}
+    .diagCheck{display:inline-flex;gap:6px;align-items:center;color:#42526a;font-size:13px;}
+    .diagGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:14px;}
+    .diagCard{background:#fff;border:1px solid rgba(15,23,42,.10);border-radius:16px;padding:14px;box-shadow:0 6px 18px rgba(15,23,42,.05);}
+    .diagCard h2{font-size:15px;margin:0 0 8px;}
+    .diagStatus{font-size:24px;font-weight:800;margin-top:2px;}
+    .diagHint{color:#64748b;font-size:12px;line-height:1.35;margin-top:4px;}
+    .diagPass{color:#047857}.diagWarn{color:#b45309}.diagFail{color:#b91c1c}.diagInfo{color:#2563eb}
+    .diagPanels{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;}
+    .diagPanel{background:#fff;border:1px solid rgba(15,23,42,.10);border-radius:16px;padding:14px;box-shadow:0 6px 18px rgba(15,23,42,.05);}
+    .diagPanel h2{font-size:18px;margin:0 0 10px;}
+    .diagRows{display:flex;flex-direction:column;gap:8px;}
+    .diagRow{display:grid;grid-template-columns:180px 90px 1fr;gap:10px;align-items:start;border-bottom:1px solid rgba(15,23,42,.08);padding-bottom:8px;}
+    .diagName{font-weight:700}.diagLevel{font-weight:800;text-transform:uppercase;font-size:12px}.diagDetail{color:#344256;line-height:1.35;word-break:break-word;}
+    .diagVideo{width:100%;max-height:260px;background:#0f172a;border-radius:14px;margin-top:10px;display:none;}
+    pre.diagJson{white-space:pre-wrap;word-break:break-word;background:#0f172a;color:#dbeafe;border-radius:12px;padding:12px;max-height:360px;overflow:auto;font-size:12px;}
+    @media(max-width:900px){.diagGrid{grid-template-columns:1fr 1fr}.diagPanels{grid-template-columns:1fr}.diagRow{grid-template-columns:1fr}.diagShell{padding:12px}}
+  </style>
+</head>
+<body>
+  <main class="diagShell">
+    <section class="diagHero">
+      <h1>WebRTC Diagnostics</h1>
+      <p>Run this in the same browser you use for Echo-Chat. It checks secure context, camera/microphone permissions, configured STUN/TURN servers, ICE connectivity, selected candidate type, and camera capture errors.</p>
+      <div class="diagActions">
+        <button id="diagRun" class="diagBtn primary" type="button">Run diagnostics</button>
+        <button id="diagStop" class="diagBtn danger" type="button">Stop camera/mic</button>
+        <button id="diagCopy" class="diagBtn" type="button">Copy report JSON</button>
+        <a class="diagBtn" href="/chat">Back to chat</a>
+        <label class="diagCheck"><input id="diagMic" type="checkbox" /> include microphone test</label>
+        <label class="diagCheck"><input id="diagRelay" type="checkbox" checked /> test TURN relay when configured</label>
+      </div>
+    </section>
+
+    <section class="diagGrid" aria-live="polite">
+      <div class="diagCard"><h2>Browser</h2><div id="sumBrowser" class="diagStatus diagInfo">Ready</div><div id="sumBrowserHint" class="diagHint">Not tested yet.</div></div>
+      <div class="diagCard"><h2>Camera</h2><div id="sumCamera" class="diagStatus diagInfo">Ready</div><div id="sumCameraHint" class="diagHint">Click Run diagnostics.</div></div>
+      <div class="diagCard"><h2>ICE path</h2><div id="sumIce" class="diagStatus diagInfo">Ready</div><div id="sumIceHint" class="diagHint">No selected candidate yet.</div></div>
+      <div class="diagCard"><h2>TURN relay</h2><div id="sumRelay" class="diagStatus diagInfo">Ready</div><div id="sumRelayHint" class="diagHint">Skipped unless TURN exists.</div></div>
+    </section>
+
+    <section class="diagPanels">
+      <div class="diagPanel">
+        <h2>Checks</h2>
+        <div id="diagRows" class="diagRows"></div>
+        <video id="diagPreview" class="diagVideo" autoplay muted playsinline></video>
+      </div>
+      <div class="diagPanel">
+        <h2>Report JSON</h2>
+        <pre id="diagJson" class="diagJson">{}</pre>
+      </div>
+    </section>
+  </main>
+
+  <script nonce="{{ csp_nonce }}">
+    window.ECHOCHAT_WEBRTC_DIAG = {{ diag_config|tojson }};
+  </script>
+  <script nonce="{{ csp_nonce }}">
+  (function(){
+    const cfg = window.ECHOCHAT_WEBRTC_DIAG || {};
+    const report = { started_at: null, finished_at: null, user: cfg.username || '', app_version: cfg.app_version || '', checks: [], config: cfg.safe_config || {}, results: {} };
+    const rowsEl = document.getElementById('diagRows');
+    const jsonEl = document.getElementById('diagJson');
+    const preview = document.getElementById('diagPreview');
+    const streams = [];
+    const $ = (id) => document.getElementById(id);
+    function setSummary(id, level, text, hint){ const a=$(id); const b=$(id+'Hint'); if(a){a.className='diagStatus diag'+cap(level); a.textContent=text;} if(b)b.textContent=hint||''; }
+    function cap(s){ return String(s||'info').charAt(0).toUpperCase()+String(s||'info').slice(1); }
+    function add(name, level, detail, data){ const row={name,level,detail,data:data||null,ts:new Date().toISOString()}; report.checks.push(row); render(); return row; }
+    function render(){ rowsEl.innerHTML=''; for(const r of report.checks){ const el=document.createElement('div'); el.className='diagRow'; const n=document.createElement('div'); n.className='diagName'; n.textContent=r.name; const l=document.createElement('div'); l.className='diagLevel diag'+cap(r.level); l.textContent=r.level; const d=document.createElement('div'); d.className='diagDetail'; d.textContent=r.detail || ''; el.append(n,l,d); rowsEl.appendChild(el); } jsonEl.textContent=JSON.stringify(report,null,2); }
+    function stopStreams(){ streams.splice(0).forEach(s=>{ try{s.getTracks().forEach(t=>t.stop())}catch{} }); if(preview){ preview.srcObject=null; preview.style.display='none'; } add('media cleanup','info','Camera/microphone tracks stopped.'); }
+    function secureContextOk(){ const h=String(location.hostname||'').toLowerCase(); return window.isSecureContext || h==='localhost' || h==='127.0.0.1' || h==='::1' || h.endsWith('.localhost'); }
+    async function permissionState(name){ try{ if(!navigator.permissions||!navigator.permissions.query) return 'unknown'; const p=await navigator.permissions.query({name}); return p.state || 'unknown'; }catch{return 'unknown';} }
+    function ppAllows(feature){ try{ const pp=document.permissionsPolicy || document.featurePolicy; if(pp && pp.allowsFeature) return pp.allowsFeature(feature); }catch{} return null; }
+    function mediaErrorText(err){ const name=err && err.name ? err.name : 'MediaError'; if(name==='NotAllowedError'||name==='PermissionDeniedError') return 'Permission denied by browser or OS.'; if(name==='NotFoundError'||name==='DevicesNotFoundError') return 'No matching device found.'; if(name==='NotReadableError'||name==='TrackStartError') return 'Device is busy, blocked, or failed to start.'; if(name==='OverconstrainedError'||name==='ConstraintNotSatisfiedError') return 'Requested constraints are not supported by this device.'; if(name==='SecurityError') return 'Blocked by browser security policy.'; return (err && err.message) ? err.message : name; }
+    async function wait(ms){ return new Promise(r=>setTimeout(r,ms)); }
+    function hasTurn(servers){ return (servers||[]).some(s=>{ const u=s&&s.urls; const arr=Array.isArray(u)?u:[u]; return arr.some(x=>String(x||'').toLowerCase().startsWith('turn:')||String(x||'').toLowerCase().startsWith('turns:')); }); }
+    function diagIceServers(kind){ const runtime=cfg.runtime_ice||{}; const safe=cfg.safe_config||{}; const key=kind==='p2p'?'p2p_ice_servers':'voice_ice_servers'; const list=Array.isArray(runtime[key])?runtime[key]:safe[key]; return Array.isArray(list)?list:[]; }
+    function pcConfig(servers, relayOnly){ return { iceServers: servers||[], bundlePolicy:'max-bundle', rtcpMuxPolicy:'require', iceCandidatePoolSize:2, ...(relayOnly?{iceTransportPolicy:'relay'}:{}) }; }
+    async function selectedPair(pc){ const stats=await pc.getStats(); let pair=null, local=null, remote=null; stats.forEach(st=>{ if(st.type==='transport'&&st.selectedCandidatePairId){ pair=stats.get(st.selectedCandidatePairId)||pair; } }); stats.forEach(st=>{ if(st.type==='candidate-pair'&&(st.selected||st.nominated||st.state==='succeeded')) pair=pair||st; }); if(pair){ local=stats.get(pair.localCandidateId)||null; remote=stats.get(pair.remoteCandidateId)||null; } return { pair: pair?Object.fromEntries(Object.entries(pair)):null, local: local?Object.fromEntries(Object.entries(local)):null, remote: remote?Object.fromEntries(Object.entries(remote)):null, localType: local && local.candidateType || '', remoteType: remote && remote.candidateType || '' }; }
+    async function loopbackIce(label, servers, relayOnly){
+      const pc1=new RTCPeerConnection(pcConfig(servers, relayOnly));
+      const pc2=new RTCPeerConnection(pcConfig(servers, relayOnly));
+      const events=[]; let opened=false;
+      try{
+        pc1.onicecandidate=e=>{ if(e.candidate) pc2.addIceCandidate(e.candidate).catch(()=>{}); };
+        pc2.onicecandidate=e=>{ if(e.candidate) pc1.addIceCandidate(e.candidate).catch(()=>{}); };
+        pc1.oniceconnectionstatechange=()=>events.push(['pc1.ice',pc1.iceConnectionState,Date.now()]);
+        pc2.oniceconnectionstatechange=()=>events.push(['pc2.ice',pc2.iceConnectionState,Date.now()]);
+        const dc=pc1.createDataChannel('echochat-diagnostics');
+        dc.onopen=()=>{ opened=true; try{dc.send('ping')}catch{}; };
+        pc2.ondatachannel=e=>{ e.channel.onmessage=()=>{}; };
+        const offer=await pc1.createOffer(); await pc1.setLocalDescription(offer); await pc2.setRemoteDescription(offer);
+        const answer=await pc2.createAnswer(); await pc2.setLocalDescription(answer); await pc1.setRemoteDescription(answer);
+        const start=Date.now();
+        while(Date.now()-start<8000){ if(opened || pc1.connectionState==='connected' || pc1.iceConnectionState==='connected' || pc1.iceConnectionState==='completed') break; if(pc1.connectionState==='failed'||pc2.connectionState==='failed') break; await wait(150); }
+        await wait(250);
+        const sel=await selectedPair(pc1).catch(()=>({}));
+        const ok=opened || pc1.connectionState==='connected' || pc1.iceConnectionState==='connected' || pc1.iceConnectionState==='completed';
+        return { ok, label, relayOnly:!!relayOnly, pc1_connection:pc1.connectionState, pc1_ice:pc1.iceConnectionState, pc2_connection:pc2.connectionState, pc2_ice:pc2.iceConnectionState, selected:sel, events };
+      } finally { try{pc1.close()}catch{}; try{pc2.close()}catch{}; }
+    }
+    async function run(){
+      stopStreams(); report.started_at=new Date().toISOString(); report.finished_at=null; report.checks=[]; report.results={}; render();
+      const browserOk = !!(window.RTCPeerConnection && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && secureContextOk());
+      add('secure context', secureContextOk()?'pass':'fail', secureContextOk()?'HTTPS/localhost secure context is OK.':'Camera/microphone are blocked on plain HTTP unless using localhost.');
+      add('RTCPeerConnection', window.RTCPeerConnection?'pass':'fail', window.RTCPeerConnection?'Browser supports WebRTC peer connections.':'Browser does not support RTCPeerConnection.');
+      add('getUserMedia', (navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)?'pass':'fail', (navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)?'Camera/microphone capture API is available.':'MediaDevices.getUserMedia is unavailable.');
+      const camPolicy=ppAllows('camera'), micPolicy=ppAllows('microphone');
+      add('permissions policy', (camPolicy===false||micPolicy===false)?'fail':'pass', `camera=${camPolicy===null?'unknown':camPolicy}, microphone=${micPolicy===null?'unknown':micPolicy}`);
+      add('server media mode', cfg.safe_config?.features?.webcam===false?'warn':'pass', `${cfg.safe_config?.av_label || 'Echo media'} · webcam=${cfg.safe_config?.features?.webcam!==false}`);
+      add('ICE configuration', cfg.safe_config?.ice_summary?.turn_configured?'pass':'warn', cfg.safe_config?.ice_summary?.recommendation || 'No ICE summary available.', cfg.safe_config?.ice_summary||{});
+      add('ICE servers privacy', 'pass', 'TURN credentials are used only for the browser connectivity test and are omitted from copied report JSON.');
+      setSummary('sumBrowser', browserOk?'pass':'fail', browserOk?'OK':'Blocked', browserOk?'Browser basics are available.':'Fix HTTPS/browser WebRTC support first.');
+
+      const camPerm=await permissionState('camera');
+      const micPerm=await permissionState('microphone');
+      add('permission state', 'info', `camera=${camPerm}, microphone=${micPerm}`);
+      try{
+        const stream=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:640},height:{ideal:360},frameRate:{ideal:18}}, audio:false});
+        streams.push(stream); preview.srcObject=stream; preview.style.display='block';
+        const track=stream.getVideoTracks()[0]; const settings=track?track.getSettings():{};
+        report.results.camera_settings=settings;
+        add('camera capture','pass',`Camera opened: ${settings.width||'?'}x${settings.height||'?'} @ ${settings.frameRate||'?'}fps`, settings);
+        setSummary('sumCamera','pass','OK',`Camera opened ${settings.width||'?'}x${settings.height||'?'}.`);
+      }catch(err){
+        const msg=mediaErrorText(err); report.results.camera_error={name:err&&err.name,message:err&&err.message,explain:msg}; add('camera capture','fail',msg,report.results.camera_error); setSummary('sumCamera','fail','Failed',msg);
+      }
+      if($('diagMic').checked){
+        try{ const s=await navigator.mediaDevices.getUserMedia({video:false,audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}}); streams.push(s); const t=s.getAudioTracks()[0]; add('microphone capture','pass',`Microphone opened: ${(t&&t.label)||'device label hidden'}`, t?t.getSettings():{}); }catch(err){ add('microphone capture','fail',mediaErrorText(err),{name:err&&err.name,message:err&&err.message}); }
+      }
+      try{
+        const normal=await loopbackIce('normal ICE', diagIceServers('voice'), false); report.results.normal_ice=normal;
+        const type=normal.selected?.localType || normal.selected?.remoteType || 'unknown';
+        add('ICE loopback', normal.ok?'pass':'fail', `state=${normal.pc1_connection}/${normal.pc1_ice}; selected candidate=${type}`, normal);
+        setSummary('sumIce', normal.ok?'pass':'fail', normal.ok?'OK':'Failed', `Selected candidate: ${type}`);
+      }catch(err){ add('ICE loopback','fail',err&&err.message?err.message:String(err)); setSummary('sumIce','fail','Failed',err&&err.message?err.message:String(err)); }
+      const shouldRelay=$('diagRelay').checked;
+      const relayReady=hasTurn(diagIceServers('voice'));
+      if(shouldRelay && relayReady){
+        try{ const relay=await loopbackIce('TURN relay-only', diagIceServers('voice'), true); report.results.relay_ice=relay; const type=relay.selected?.localType || relay.selected?.remoteType || 'unknown'; add('TURN relay-only', relay.ok?'pass':'fail', `state=${relay.pc1_connection}/${relay.pc1_ice}; selected candidate=${type}`, relay); setSummary('sumRelay', relay.ok?'pass':'fail', relay.ok?'OK':'Failed', `Selected candidate: ${type}`); }catch(err){ add('TURN relay-only','fail',err&&err.message?err.message:String(err)); setSummary('sumRelay','fail','Failed',err&&err.message?err.message:String(err)); }
+      } else {
+        add('TURN relay-only', relayReady?'info':'warn', relayReady?'Skipped by checkbox.':'No TURN server configured; direct/STUN may work on LAN but can fail on cellular/strict NAT.');
+        setSummary('sumRelay', relayReady?'info':'warn', relayReady?'Skipped':'No TURN', relayReady?'Relay test skipped.':'Add TURN for real internet testing.');
+      }
+      report.finished_at=new Date().toISOString(); render();
+    }
+    $('diagRun').addEventListener('click',()=>run().catch(e=>{ add('diagnostics fatal','fail',e&&e.message?e.message:String(e)); render(); }));
+    $('diagStop').addEventListener('click',stopStreams);
+    $('diagCopy').addEventListener('click',async()=>{ try{ await navigator.clipboard.writeText(JSON.stringify(report,null,2)); add('copy report','pass','Report JSON copied.'); }catch{ add('copy report','fail','Clipboard copy failed.'); } });
+    window.addEventListener('beforeunload',stopStreams);
+    render();
+  })();
+  </script>
+</body>
+</html>

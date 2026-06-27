@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ server_name }} — Log out</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/chat.css') }}?v={{ app_version }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}?v={{ app_version }}">
+</head>
+<body class="authPage logoutPage">
+    <div class="authStage">
+        <div class="authBackdrop" aria-hidden="true">
+            <div class="authGrid"></div>
+            <div class="authGlow"></div>
+            <div class="authGlowAlt"></div>
+            <div class="authGlowWarm"></div>
+            <div class="authShimmer"></div>
+            <span class="authSprite s1"></span>
+            <span class="authSprite s2"></span>
+            <span class="authSprite s3"></span>
+            <span class="authSprite s4"></span>
+            <span class="authSprite s5"></span>
+            <span class="authSprite s6"></span>
+            <span class="authSprite s7"></span>
+            <span class="authSprite s8"></span>
+            <span class="authSprite s9"></span>
+            <span class="authSprite s10"></span>
+            <span class="authSprite s11"></span>
+            <span class="authSprite s12"></span>
+        </div>
+
+        <form id="logoutForm" method="POST" action="{{ url_for('logout') }}?redirect=1" class="authCard authStack">
+            <div class="authServerName">{{ server_name }}</div>
+            <div class="authVersion">v{{ app_version }}</div>
+            <h2 class="authTitle">Log out?</h2>
+            <p class="authSubtitle">This will clear this browser tab's Echo-Chat session and return you to login.</p>
+            {% if error %}
+                <p class="authError" style="margin:0;">{{ error }}</p>
+            {% endif %}
+            {% if logout_csrf_token or not csrf_required %}
+                <input type="hidden" name="csrf_token" value="{{ logout_csrf_token }}">
+                <button class="authButton" type="submit">Log out</button>
+            {% else %}
+                <p class="authNotice" style="display:block; margin:0;">This browser does not have an active logout token. You may already be signed out.</p>
+            {% endif %}
+            <div class="authLinks">
+                <p><a href="{{ url_for('chat_page') }}">Stay signed in</a></p>
+                <p><a href="{{ url_for('login') }}">Go to login</a></p>
+            </div>
+        </form>
+    </div>
+
+    <script nonce="{{ csp_nonce }}">
+      (() => {
+        const form = document.getElementById('logoutForm');
+        if (!form) return;
+        const tokenEl = form.querySelector('input[name="csrf_token"]');
+        form.addEventListener('submit', async (ev) => {
+          try {
+            const token = tokenEl ? String(tokenEl.value || '').trim() : '';
+            if (!token) return;
+            ev.preventDefault();
+            const headers = { 'X-CSRF-TOKEN': token };
+            const resp = await fetch(form.action, { method: 'POST', credentials: 'include', headers });
+            if (resp.ok || resp.redirected) {
+              window.location.href = '/login?reason=logged_out';
+              return;
+            }
+          } catch (e) {}
+          try { form.submit(); } catch (e) { window.location.href = '/login?reason=logged_out'; }
+        });
+      })();
+    </script>
+</body>
+</html>

@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>{{ server_name }} — Register</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}?v={{ app_version }}">
+</head>
+<body class="authPage registerPage">
+  <div class="authStage">
+    <div class="authBackdrop" aria-hidden="true">
+      <div class="authGrid"></div>
+      <div class="authGlow"></div>
+      <div class="authGlowAlt"></div>
+      <div class="authGlowWarm"></div>
+      <div class="authShimmer"></div>
+      <span class="authSprite s1"></span>
+      <span class="authSprite s2"></span>
+      <span class="authSprite s3"></span>
+      <span class="authSprite s4"></span>
+      <span class="authSprite s5"></span>
+      <span class="authSprite s6"></span>
+      <span class="authSprite s7"></span>
+      <span class="authSprite s8"></span>
+      <span class="authSprite s9"></span>
+      <span class="authSprite s10"></span>
+      <span class="authSprite s11"></span>
+      <span class="authSprite s12"></span>
+    </div>
+
+    <form method="POST" action="/register" class="authCard authRegisterCard authStack">
+      <div class="authServerName">{{ server_name }}</div>
+      <div class="authVersion">v{{ app_version }}</div>
+      <h2 class="authTitle">Create account</h2>
+      <p class="authSubtitle">Phone-friendly signup split into clear sections: identity, recovery, age, and password.</p>
+
+      {% if error %}
+        <p class="authError" style="margin:0;">{{ error }}</p>
+      {% endif %}
+
+      <input type="hidden" name="csrf_token" value="{{ register_csrf_token or csrf_token() }}">
+
+      <section class="authFormSection" aria-label="Identity">
+        <div class="authFormSectionTitle">1. Identity</div>
+        <input class="authField" name="username" value="{{ register_values.username|default('') }}" placeholder="Username" autocomplete="username" minlength="{{ username_min_length or 3 }}" maxlength="{{ username_max_length or 24 }}" pattern="{{ username_html_pattern|default('[A-Za-z0-9](?:[A-Za-z0-9._-]{1,22}[A-Za-z0-9])') }}" title="{{ username_title|default('3-24 characters. Letters, numbers, dot, underscore, and hyphen only. Must start and end with a letter or number. Do not repeat separators.') }}" aria-describedby="usernameAvailability" data-username-availability-input="1" required>
+        <div id="usernameAvailability" class="usernameAvailabilityPanel" data-username-availability-root="1" data-username-input="input[name='username']" data-username-url="/api/username_available" data-username-min="{{ username_min_length or 3 }}" data-username-max="{{ username_max_length or 24 }}" aria-live="polite">
+          <span class="usernameAvailabilityDot" aria-hidden="true"></span>
+          <span class="usernameAvailabilityText">Enter a username to check availability.</span>
+        </div>
+        <input class="authField" name="email" type="email" value="{{ register_values.email|default('') }}" placeholder="Email" autocomplete="email" required>
+        <input class="authField" name="phone" type="tel" value="{{ register_values.phone|default('') }}" placeholder="Phone (optional)" autocomplete="tel">
+      </section>
+
+      <section class="authFormSection" aria-label="Recovery PIN">
+        <div class="authFormSectionTitle">2. Recovery PIN</div>
+        <p class="authHint">Use 4–8 digits. You will need this if you reset your password.</p>
+        <div class="authRow authMobileTwoCol">
+          <input class="authField" name="recovery_pin" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" placeholder="Recovery PIN" autocomplete="off" required>
+          <input class="authField" name="recovery_pin_confirm" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" placeholder="Confirm PIN" autocomplete="off" required>
+        </div>
+      </section>
+
+      <section class="authFormSection" aria-label="Age and password">
+        <div class="authFormSectionTitle">3. Age & password</div>
+        <input class="authField" name="age" type="number" value="{{ register_values.age|default('') }}" placeholder="Age" inputmode="numeric" required>
+        <p class="authHint">{{ password_policy or 'Use a long passphrase. Spaces and symbols are allowed; uppercase/special characters are not forced.' }}</p>
+        <input class="authField" name="password" type="password" placeholder="Password / passphrase" autocomplete="new-password" minlength="{{ password_min_length or 15 }}" maxlength="{{ password_max_length or 128 }}" required>
+        <input class="authField" name="confirm" type="password" placeholder="Confirm password" autocomplete="new-password" minlength="{{ password_min_length or 15 }}" maxlength="{{ password_max_length or 128 }}" required>
+        <div class="passwordStrengthPanel" data-password-meter-root="1" data-password-input="input[name='password']" data-confirm-input="input[name='confirm']" data-password-username-source="input[name='username']" data-password-email-source="input[name='email']" data-password-server-name="{{ server_name|default('') }}" data-password-min="{{ password_min_length or 15 }}" data-password-max="{{ password_max_length or 128 }}" data-password-recommended="{{ password_recommended_length|default(20) }}" data-password-common='{{ password_common_weak|default([])|tojson }}'>
+          <div class="passwordStrengthTop">
+            <span>Password strength</span>
+            <strong class="passwordStrengthStatus">Start typing</strong>
+          </div>
+          <div class="passwordStrengthTrack" aria-hidden="true"><span class="passwordStrengthFill"></span></div>
+          <ul class="passwordRuleList" role="group" aria-label="Password checklist">
+            <li data-password-rule="length" role="checkbox" aria-checked="false"><span class="passwordRuleMark">•</span> At least {{ password_min_length or 15 }} characters</li>
+            <li data-password-rule="recommended" role="checkbox" aria-checked="false"><span class="passwordRuleMark">•</span> {{ password_recommended_length|default(20) }}+ characters recommended</li>
+            <li data-password-rule="no-context" role="checkbox" aria-checked="false"><span class="passwordRuleMark">•</span> Does not contain your username, email name, or server name</li>
+            <li data-password-rule="not-common" role="checkbox" aria-checked="false"><span class="passwordRuleMark">•</span> Not common or repetitive</li>
+            <li data-password-rule="allowed-chars" role="checkbox" aria-checked="false"><span class="passwordRuleMark">•</span> Spaces and symbols allowed; no hidden control characters; max {{ password_max_length|default(128) }} characters</li>
+            <li data-password-rule="match" role="checkbox" aria-checked="false"><span class="passwordRuleMark">•</span> Confirmation matches</li>
+          </ul>
+          <p class="passwordStrengthNote">Capital letters, numbers, and symbols can help, but this server does not force them. A longer memorable passphrase is the main goal.</p>
+          <span class="passwordStrengthLive srOnly" aria-live="polite">Password strength checklist ready.</span>
+        </div>
+      </section>
+
+      <button class="authButton" type="submit">Sign Up</button>
+
+      <div class="authLinks authInlineLinks">
+        <p>Already have an account? <a href="/login">Log in</a></p>
+      </div>
+    </form>
+  </div>
+  <script src="{{ url_for('static', filename='js/auth_password_meter.js') }}?v={{ app_version|default('') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/auth_username_availability.js') }}?v={{ app_version|default('') }}" defer></script>
+</body>
+</html>

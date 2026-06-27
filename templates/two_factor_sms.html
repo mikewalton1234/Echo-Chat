@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>{{ server_name }} — SMS 2FA</title>
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/chat.css') }}">
+  <style>
+    body { display:flex; align-items:center; justify-content:center; min-height:100vh; background:#eef0f5; }
+    .card { width:min(420px, 92vw); background:#fff; border-radius:12px; padding:24px; box-shadow:0 10px 25px rgba(0,0,0,0.12); }
+    form { display:flex; flex-direction:column; gap:12px; }
+    input, button { padding:10px; font-size:1em; }
+    .notice { padding:10px; border-radius:8px; background:#eef8ff; border:1px solid #cfe7ff; }
+    .warning { padding:10px; border-radius:8px; background:#fff3cd; border:1px solid #ffeeba; color:#5b4a00; }
+    .muted { opacity:0.8; font-size:0.95em; }
+    .row { display:flex; gap:10px; }
+    .row > * { flex:1; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div style="font-size:0.95em;font-weight:700;text-align:center;opacity:0.75;margin-bottom:4px;">{{ server_name }}</div>
+    <h2 style="margin-top:0;">SMS two-factor authentication</h2>
+    <div class="muted" style="margin-top:-8px;margin-bottom:12px;">Build {{ app_version }}</div>
+
+    {% if message %}<div class="notice">{{ message }}</div>{% endif %}
+    {% if error %}<div class="warning">{{ error }}</div>{% endif %}
+
+    {% if not twilio_ready %}
+      <div class="warning">SMS 2FA is enabled in the UI, but Twilio Verify is not fully configured on this server yet. Leave account-level SMS 2FA disabled until Twilio is ready.</div>
+    {% endif %}
+
+    <div class="muted">
+      Default state: <strong>{% if enabled %}enabled for your account{% else %}disabled for your account{% endif %}</strong>.
+      To use SMS 2FA, enter your phone number in international format like <code>+15551234567</code>. Pending setup codes expire after {{ two_factor_timeout_seconds }} seconds.
+    </div>
+
+    <hr>
+
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ enable_2fa_csrf_token }}">
+      <input type="hidden" name="action" value="send">
+      <input name="phone" type="tel" autocomplete="tel" inputmode="tel" placeholder="Phone number (+15551234567)" value="{{ saved_phone or '' }}">
+      <input name="current_password" type="password" autocomplete="current-password" placeholder="Current password" required>
+      <button type="submit">Send setup code</button>
+    </form>
+
+    {% if pending_active %}
+      <hr>
+      <form method="POST">
+        <input type="hidden" name="csrf_token" value="{{ enable_2fa_csrf_token }}">
+        <input type="hidden" name="action" value="verify">
+        <div class="muted">Pending verification for <strong>{{ pending_phone_mask }}</strong></div>
+        <input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{4,10}" maxlength="10" placeholder="Enter texted code" required>
+        <button type="submit">Verify and enable</button>
+      </form>
+      <form method="POST" style="margin-top:10px;">
+        <input type="hidden" name="csrf_token" value="{{ enable_2fa_csrf_token }}">
+        <input type="hidden" name="action" value="resend">
+        <button type="submit">Resend code</button>
+      </form>
+    {% endif %}
+
+    {% if enabled %}
+      <hr>
+      <form method="POST">
+        <input type="hidden" name="csrf_token" value="{{ enable_2fa_csrf_token }}">
+        <input type="hidden" name="action" value="disable">
+        <div class="muted">Current saved phone: <strong>{{ saved_phone or 'not set' }}</strong></div>
+        <input name="current_password" type="password" autocomplete="current-password" placeholder="Current password to disable 2FA" required>
+        <button type="submit">Disable SMS 2FA</button>
+      </form>
+    {% endif %}
+
+    <p style="margin-top:16px;"><a href="/account/security">Back to account security</a> · <a href="/chat">Back to chat</a></p>
+  </div>
+</body>
+</html>
