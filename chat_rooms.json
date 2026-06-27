@@ -1,0 +1,2400 @@
+{
+  "version": 3,
+  "categories": [
+    {
+      "name": "General",
+      "subcategories": [
+        {
+          "name": "Main",
+          "rooms": [
+            "Lobby",
+            "Random",
+            "Support",
+            "Introductions"
+          ]
+        },
+        {
+          "name": "Social",
+          "rooms": [
+            "Friends Hangout",
+            "Music Chat",
+            "Movies & TV",
+            "Books",
+            "Memes",
+            "Late Night Chat"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Community",
+      "subcategories": [
+        {
+          "name": "Identity & Support",
+          "rooms": [
+            "Gay Chat",
+            "Lesbian Lounge",
+            "Bi Hangout",
+            "Coming Out Support",
+            "Friendship Circle"
+          ]
+        },
+        {
+          "name": "Daily Life",
+          "rooms": [
+            "Life Talk",
+            "Advice Corner",
+            "Relationships",
+            "Family & Parenting",
+            "College Chat"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Tech",
+      "subcategories": [
+        {
+          "name": "Computers",
+          "rooms": [
+            "Linux",
+            "Windows",
+            "Hardware",
+            "Networking"
+          ]
+        },
+        {
+          "name": "Programming",
+          "rooms": [
+            "Python",
+            "JavaScript",
+            "Web Dev",
+            "Databases",
+            "DevOps",
+            "Cybersecurity"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Gaming",
+      "subcategories": [
+        {
+          "name": "PC",
+          "rooms": [
+            "Steam",
+            "MMO",
+            "Indie Games",
+            "Co-op",
+            "Strategy Games"
+          ]
+        },
+        {
+          "name": "Console",
+          "rooms": [
+            "PlayStation",
+            "Xbox",
+            "Nintendo",
+            "Retro Gaming"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Regional",
+      "subcategories": [
+        {
+          "name": "USA",
+          "rooms": [
+            "Northeast",
+            "Midwest",
+            "South",
+            "West"
+          ]
+        },
+        {
+          "name": "World",
+          "rooms": [
+            "Europe",
+            "Asia",
+            "Americas",
+            "Oceania"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Entertainment",
+      "subcategories": [
+        {
+          "name": "Fandom",
+          "rooms": [
+            "Anime & Cartoons",
+            "Sci-Fi & Fantasy",
+            "Comics & Manga",
+            "Wrestling"
+          ]
+        },
+        {
+          "name": "Creative",
+          "rooms": [
+            "Art Share",
+            "Photography",
+            "Writing Club",
+            "Content Creators"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Politics & News",
+      "subcategories": [
+        {
+          "name": "Government",
+          "rooms": [
+            "US Politics",
+            "State & Local Politics",
+            "World Politics",
+            "Policy Debate"
+          ]
+        },
+        {
+          "name": "Current Events",
+          "rooms": [
+            {
+              "name": "Breaking News",
+              "description": "Breaking news, news radio, and current event discussion.",
+              "tags": [
+                "News",
+                "Talk",
+                "Live"
+              ],
+              "features": [
+                "shared_links",
+                "room_radio"
+              ],
+              "topic": "Breaking news, news radio, and current event discussion.",
+              "stations": [
+                {
+                  "label": "Fox News Radio",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/fox-news-radio-8627/",
+                  "embed_url": "https://www.iheart.com/live/fox-news-radio-8627/?embed=true"
+                },
+                {
+                  "label": "iHeartRadio 24/7 News",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheartradio-247-news-6043/",
+                  "embed_url": "https://www.iheart.com/live/iheartradio-247-news-6043/?embed=true"
+                },
+                {
+                  "label": "93 WIBC Indianapolis",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/93-wibc-6057/",
+                  "embed_url": "https://www.iheart.com/live/93-wibc-6057/?embed=true"
+                },
+                {
+                  "label": "710 WOR",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/710-wor-5874/",
+                  "embed_url": "https://www.iheart.com/live/710-wor-5874/?embed=true"
+                },
+                {
+                  "label": "NewsTalk 1130 / 103.5",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/newstalk-1130-1035-1213/",
+                  "embed_url": "https://www.iheart.com/live/newstalk-1130-1035-1213/?embed=true"
+                },
+                {
+                  "label": "Bloomberg 1130",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/bloomberg-1130-6286/",
+                  "embed_url": "https://www.iheart.com/live/bloomberg-1130-6286/?embed=true"
+                }
+              ]
+            },
+            "Economy & Markets",
+            "Law & Crime",
+            "History Debate"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Files & Projects",
+      "subcategories": [
+        {
+          "name": "Legal Sharing",
+          "rooms": [
+            "General File Share",
+            "Project Assets",
+            "Templates & Docs",
+            "Script Share"
+          ]
+        },
+        {
+          "name": "Collaboration",
+          "rooms": [
+            "Open Source",
+            "Build Help",
+            "Modding",
+            "Marketplace"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Work & Money",
+      "subcategories": [
+        {
+          "name": "Careers",
+          "rooms": [
+            "Jobs & Careers",
+            "Interview Prep",
+            "Remote Work",
+            "Workplace Stories"
+          ]
+        },
+        {
+          "name": "Business",
+          "rooms": [
+            "Small Business",
+            "Side Hustles",
+            "Sales & Marketing",
+            "Investing Basics"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Sports & Outdoors",
+      "subcategories": [
+        {
+          "name": "Sports",
+          "rooms": [
+            {
+              "name": "Sports Talk",
+              "description": "Sports talk, live radio, scores, and game-day discussion.",
+              "tags": [
+                "Sports",
+                "Radio",
+                "Talk"
+              ],
+              "features": [
+                "shared_links",
+                "room_radio"
+              ],
+              "topic": "Sports talk, live radio, scores, and game-day discussion.",
+              "stations": [
+                {
+                  "label": "Fox Sports Radio",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/fox-sports-radio-4732/",
+                  "embed_url": "https://www.iheart.com/live/fox-sports-radio-4732/?embed=true"
+                },
+                {
+                  "label": "ESPN Radio",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/espn-radio-7903/",
+                  "embed_url": "https://www.iheart.com/live/espn-radio-7903/?embed=true"
+                },
+                {
+                  "label": "Fox Sports 1260",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/fox-sports-1260-905/",
+                  "embed_url": "https://www.iheart.com/live/fox-sports-1260-905/?embed=true"
+                },
+                {
+                  "label": "97.1 The Ticket",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/971-the-ticket-10827/",
+                  "embed_url": "https://www.iheart.com/live/971-the-ticket-10827/?embed=true"
+                },
+                {
+                  "label": "93.9 The Ville",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/939-the-ville-6792/",
+                  "embed_url": "https://www.iheart.com/live/939-the-ville-6792/?embed=true"
+                }
+              ]
+            },
+            "NFL",
+            "NBA",
+            "MLB",
+            "Fantasy Sports"
+          ]
+        },
+        {
+          "name": "Outdoors",
+          "rooms": [
+            "Fishing & Hunting",
+            "Camping & Hiking",
+            "Motors & Garage",
+            "Weather Watch"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Dating & Relationships",
+      "subcategories": [
+        {
+          "name": "Singles",
+          "rooms": [
+            "Singles Lounge",
+            "Dating Advice",
+            "First Dates",
+            "Online Dating",
+            "Long Distance"
+          ]
+        },
+        {
+          "name": "Relationship Life",
+          "rooms": [
+            "Relationship Advice",
+            "Married Life",
+            "Breakups & Healing",
+            "Love Languages",
+            "Parenting Together"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Faith & Philosophy",
+      "subcategories": [
+        {
+          "name": "Faith",
+          "rooms": [
+            "Christianity",
+            "Bible Study",
+            "Prayer Requests",
+            {
+              "name": "General Faith",
+              "description": "Faith-based talk, inspirational radio, gospel, and respectful discussion.",
+              "tags": [
+                "Faith",
+                "Gospel",
+                "Radio"
+              ],
+              "features": [
+                "shared_links",
+                "room_radio"
+              ],
+              "topic": "Faith-based talk, inspirational radio, gospel, and respectful discussion.",
+              "stations": [
+                {
+                  "label": "Hallelujah",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/hallelujah-7005/",
+                  "embed_url": "https://www.iheart.com/live/hallelujah-7005/?embed=true"
+                },
+                {
+                  "label": "Christian Top 20",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/christian-top-20-4978/",
+                  "embed_url": "https://www.iheart.com/live/christian-top-20-4978/?embed=true"
+                },
+                {
+                  "label": "Up!",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/up-7203/",
+                  "embed_url": "https://www.iheart.com/live/up-7203/?embed=true"
+                },
+                {
+                  "label": "Real Southern Gospel Radio",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/real-southern-gospel-radio-9257/",
+                  "embed_url": "https://www.iheart.com/live/real-southern-gospel-radio-9257/?embed=true"
+                },
+                {
+                  "label": "Inspiration 1390 WGRB",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/inspiration-1390-wgrb-845/",
+                  "embed_url": "https://www.iheart.com/live/inspiration-1390-wgrb-845/?embed=true"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Ideas",
+          "rooms": [
+            "Philosophy Lounge",
+            "Atheist & Agnostic",
+            "Ethics Debate",
+            "World Religions"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Local & Meetups",
+      "subcategories": [
+        {
+          "name": "Meet New People",
+          "rooms": [
+            "Midwest Meetups",
+            "Southern Meetups",
+            "City Meetups",
+            "Travel Buddies"
+          ]
+        },
+        {
+          "name": "Local Life",
+          "rooms": [
+            "Foodie Meetups",
+            "Cars & Cruising",
+            "Event Planning",
+            "Weekend Plans"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Age Lounges",
+      "subcategories": [
+        {
+          "name": "Adult Groups",
+          "rooms": [
+            "18-24 Lounge",
+            "25-34 Lounge",
+            "35-44 Lounge",
+            "45-54 Lounge",
+            "55+ Lounge"
+          ]
+        },
+        {
+          "name": "Generations",
+          "rooms": [
+            "Gen Z Chat",
+            "Millennials",
+            "Gen X",
+            "Boomers"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Health & Fitness",
+      "subcategories": [
+        {
+          "name": "Wellness",
+          "rooms": [
+            "Weight Loss",
+            "Gym Talk",
+            "Walking Club",
+            "Nutrition"
+          ]
+        },
+        {
+          "name": "Lifestyle",
+          "rooms": [
+            "Home Cooking",
+            "Gardening",
+            "Pets",
+            "DIY & Home Repair"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "File Sharing",
+      "subcategories": [
+        {
+          "name": "Video Sharing",
+          "rooms": [
+            {
+              "name": "Movies",
+              "description": "Lawful movie-share room for trailers, public-domain films, owned media links, and watch-night planning.",
+              "tags": [
+                "Movies",
+                "Links",
+                "Watch"
+              ],
+              "features": [
+                "video_share",
+                "shared_links",
+                "watch_party"
+              ],
+              "topic": "Share lawful movie links, discuss releases, and queue group watch ideas without flooding the main lobby."
+            },
+            {
+              "name": "TV",
+              "description": "TV episodes, series discussions, season watchlists, and legal streaming links.",
+              "tags": [
+                "TV",
+                "Series",
+                "Links"
+              ],
+              "features": [
+                "video_share",
+                "shared_links",
+                "watch_party"
+              ],
+              "topic": "Room for show recommendations, episode drops, clip links, and self-hosted TV library talk."
+            },
+            {
+              "name": "Anime",
+              "description": "Anime and animation sharing room for clips, playlists, self-hosted libraries, and episode chat.",
+              "tags": [
+                "Anime",
+                "Animation",
+                "Watch"
+              ],
+              "features": [
+                "video_share",
+                "shared_links",
+                "watch_party"
+              ],
+              "topic": "Focused on anime, animation, openings, clips, legal watch links, and collection organization."
+            },
+            {
+              "name": "Documentaries",
+              "description": "Documentaries, interviews, educational series, and archival film discussion.",
+              "tags": [
+                "Docs",
+                "Archive",
+                "Watch"
+              ],
+              "features": [
+                "video_share",
+                "shared_links",
+                "watch_party"
+              ],
+              "topic": "For documentaries, lecture films, and research-friendly video collections."
+            },
+            {
+              "name": "Music Videos & Concerts",
+              "description": "Concert films, music videos, live sessions, and performance streams.",
+              "tags": [
+                "Music",
+                "Concerts",
+                "Video"
+              ],
+              "features": [
+                "video_share",
+                "music_share",
+                "shared_links",
+                "watch_party",
+                "room_radio"
+              ],
+              "topic": "Share music videos, concert links, live sessions, and playlist-friendly visual music content.",
+              "stations": [
+                {
+                  "label": "Jingle Ball Radio",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/jingle-ball-radio-9165/",
+                  "embed_url": "https://www.iheart.com/live/jingle-ball-radio-9165/?embed=true"
+                },
+                {
+                  "label": "Z100 New York",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/z100-1469/",
+                  "embed_url": "https://www.iheart.com/live/z100-1469/?embed=true"
+                },
+                {
+                  "label": "102.7 KIIS-FM",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/1027-kiis-fm-185/",
+                  "embed_url": "https://www.iheart.com/live/1027-kiis-fm-185/?embed=true"
+                },
+                {
+                  "label": "Q104.3 New York Rock",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/q1043-1465/",
+                  "embed_url": "https://www.iheart.com/live/q1043-1465/?embed=true"
+                },
+                {
+                  "label": "Power 105.1",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/power-1051-1481/",
+                  "embed_url": "https://www.iheart.com/live/power-1051-1481/?embed=true"
+                },
+                {
+                  "label": "Big Classic Hits",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/big-classic-hits-4455/",
+                  "embed_url": "https://www.iheart.com/live/big-classic-hits-4455/?embed=true"
+                },
+                {
+                  "label": "Mix Nation",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/mix-nation-4776/",
+                  "embed_url": "https://www.iheart.com/live/mix-nation-4776/?embed=true"
+                },
+                {
+                  "label": "Rihanna Radio",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/artist/rihanna-34742/",
+                  "embed_url": "https://www.iheart.com/artist/rihanna-34742/?embed=true"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Reading & Archive",
+          "rooms": [
+            {
+              "name": "Books",
+              "description": "Books, ebooks, reading lists, public-domain finds, and book club picks.",
+              "tags": [
+                "Books",
+                "Reading",
+                "Library"
+              ],
+              "features": [
+                "file_share",
+                "shared_links"
+              ],
+              "topic": "Trade reading recommendations, public-domain links, owned-library organization tips, and discussion threads."
+            },
+            {
+              "name": "Comics & Manga",
+              "description": "Graphic novels, comics, manga collections, and reading trackers.",
+              "tags": [
+                "Comics",
+                "Manga",
+                "Reading"
+              ],
+              "features": [
+                "file_share",
+                "shared_links"
+              ],
+              "topic": "For comic readers, manga shelves, scan organization, and lawful recommendation lists."
+            },
+            {
+              "name": "Magazines & Manuals",
+              "description": "Manuals, guides, magazines, zines, and reference collections.",
+              "tags": [
+                "Guides",
+                "Manuals",
+                "Archive"
+              ],
+              "features": [
+                "file_share",
+                "shared_links"
+              ],
+              "topic": "Reference-heavy room for magazines, manuals, how-to PDFs, and archival scans."
+            },
+            {
+              "name": "Preservation & Shareware",
+              "description": "Legacy software and media preservation, shareware history, and restoration talk.",
+              "tags": [
+                "Preservation",
+                "Shareware",
+                "Retro"
+              ],
+              "features": [
+                "file_share",
+                "shared_links"
+              ],
+              "topic": "Preservation-focused room for legacy media, shareware, demos, backups, and archival context."
+            }
+          ]
+        },
+        {
+          "name": "Games & Software",
+          "rooms": [
+            {
+              "name": "PC Games",
+              "description": "PC game installers you are authorized to share, patches, launchers, and collection talk.",
+              "tags": [
+                "PC Games",
+                "Mods",
+                "Files"
+              ],
+              "features": [
+                "file_share",
+                "shared_links"
+              ],
+              "topic": "Share lawful PC game files, patches, launcher links, and room-friendly multiplayer recommendations."
+            },
+            {
+              "name": "Retro & Homebrew",
+              "description": "Retro titles, legal ROM-hack discussion, homebrew, and preservation resources.",
+              "tags": [
+                "Retro",
+                "Homebrew",
+                "Archive"
+              ],
+              "features": [
+                "file_share",
+                "shared_links"
+              ],
+              "topic": "Homebrew and retro preservation room for fan projects, ports, and legal collection management."
+            },
+            {
+              "name": "Linux Software",
+              "description": "Linux packages, AppImages, Flatpaks, source builds, ISOs, and utilities.",
+              "tags": [
+                "Linux",
+                "FOSS",
+                "Utilities"
+              ],
+              "features": [
+                "file_share",
+                "shared_links"
+              ],
+              "topic": "Room for Linux tools, packages, self-hosted stacks, and free-software distribution links."
+            },
+            {
+              "name": "Windows Software",
+              "description": "Windows freeware, shareware, drivers, portable apps, and system tools.",
+              "tags": [
+                "Windows",
+                "Utilities",
+                "Freeware"
+              ],
+              "features": [
+                "file_share",
+                "shared_links"
+              ],
+              "topic": "Discuss and share lawful Windows software, portable tools, drivers, and installers you are allowed to redistribute."
+            },
+            {
+              "name": "Free & Open Source Software",
+              "description": "Open-source apps, free software projects, source drops, and repo-based sharing.",
+              "tags": [
+                "Open Source",
+                "Free Software",
+                "Code"
+              ],
+              "features": [
+                "file_share",
+                "shared_links"
+              ],
+              "topic": "Focused on FOSS packages, code-hosted releases, mirrors, and collaborative project discovery."
+            },
+            {
+              "name": "Self-Hosting & Media Servers",
+              "description": "Jellyfin, Owncast, PeerTube, NAS libraries, and media-room infrastructure.",
+              "tags": [
+                "Self-hosted",
+                "Jellyfin",
+                "Owncast"
+              ],
+              "features": [
+                "shared_links",
+                "watch_party"
+              ],
+              "topic": "For self-hosted media stacks, server libraries, sync playback, and streaming room setup."
+            }
+          ]
+        },
+        {
+          "name": "Requests & Metadata",
+          "rooms": [
+            {
+              "name": "Requests & Finders",
+              "description": "Ask for recommendations, missing files, metadata, subtitles, or better sources.",
+              "tags": [
+                "Requests",
+                "Finders",
+                "Help"
+              ],
+              "features": [
+                "shared_links"
+              ],
+              "topic": "Use this room for search requests, mirror hunts, and finding the right legal source without spamming other rooms."
+            },
+            {
+              "name": "Posters Subtitles & Metadata",
+              "description": "Poster art, subtitles, naming rules, and media metadata cleanup.",
+              "tags": [
+                "Metadata",
+                "Subtitles",
+                "Posters"
+              ],
+              "features": [
+                "file_share",
+                "shared_links"
+              ],
+              "topic": "Tidy up media libraries with subtitle packs, posters, naming conventions, and metadata helpers."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Music Rooms",
+      "subcategories": [
+        {
+          "name": "Listening Rooms",
+          "rooms": [
+            {
+              "name": "Live Radio Lounge",
+              "description": "Shared radio room for free live stations and chat-friendly listening.",
+              "tags": [
+                "Music",
+                "Radio",
+                "Live"
+              ],
+              "features": [
+                "music_room",
+                "room_radio",
+                "shared_links"
+              ],
+              "topic": "Switch between supported radio or artist streams and chat while everyone listens in the same room.",
+              "stations": [
+                {
+                  "label": "93 WIBC Indianapolis",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/93-wibc-6057/",
+                  "embed_url": "https://www.iheart.com/live/93-wibc-6057/?embed=true"
+                },
+                {
+                  "label": "Q95 Indianapolis",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/q95-901/",
+                  "embed_url": "https://www.iheart.com/live/q95-901/?embed=true"
+                },
+                {
+                  "label": "Country 97.1 Hank FM",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/country-971-hank-fm-6058/",
+                  "embed_url": "https://www.iheart.com/live/country-971-hank-fm-6058/?embed=true"
+                },
+                {
+                  "label": "Real 98.3 Indianapolis",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/real-983-6944/",
+                  "embed_url": "https://www.iheart.com/live/real-983-6944/?embed=true"
+                },
+                {
+                  "label": "Fox Sports Radio",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/fox-sports-radio-4732/",
+                  "embed_url": "https://www.iheart.com/live/fox-sports-radio-4732/?embed=true"
+                },
+                {
+                  "label": "iHeart Comedy",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart-comedy-4902/",
+                  "embed_url": "https://www.iheart.com/live/iheart-comedy-4902/?embed=true"
+                },
+                {
+                  "label": "Hallelujah",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/hallelujah-7005/",
+                  "embed_url": "https://www.iheart.com/live/hallelujah-7005/?embed=true"
+                },
+                {
+                  "label": "Z100 New York",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/z100-1469/",
+                  "embed_url": "https://www.iheart.com/live/z100-1469/?embed=true"
+                },
+                {
+                  "label": "102.7 KIIS-FM",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/1027-kiis-fm-185/",
+                  "embed_url": "https://www.iheart.com/live/1027-kiis-fm-185/?embed=true"
+                },
+                {
+                  "label": "103.5 KTU",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/1035-ktu-1473/",
+                  "embed_url": "https://www.iheart.com/live/1035-ktu-1473/?embed=true"
+                },
+                {
+                  "label": "Q104.3 New York Rock",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/q1043-1465/",
+                  "embed_url": "https://www.iheart.com/live/q1043-1465/?embed=true"
+                },
+                {
+                  "label": "Power 105.1",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/power-1051-1481/",
+                  "embed_url": "https://www.iheart.com/live/power-1051-1481/?embed=true"
+                },
+                {
+                  "label": "Big Classic Hits",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/big-classic-hits-4455/",
+                  "embed_url": "https://www.iheart.com/live/big-classic-hits-4455/?embed=true"
+                },
+                {
+                  "label": "iHeart80s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart80s-5060/",
+                  "embed_url": "https://www.iheart.com/live/iheart80s-5060/?embed=true"
+                },
+                {
+                  "label": "iHeart90s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart90s-6834/",
+                  "embed_url": "https://www.iheart.com/live/iheart90s-6834/?embed=true"
+                },
+                {
+                  "label": "iHeart2000s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart2000s-6850/",
+                  "embed_url": "https://www.iheart.com/live/iheart2000s-6850/?embed=true"
+                }
+              ]
+            },
+            {
+              "name": "Listening Party",
+              "description": "Room for queued listening sessions, album runs, and synchronized radio picks.",
+              "tags": [
+                "Party",
+                "Albums",
+                "Shared"
+              ],
+              "features": [
+                "music_room",
+                "room_radio",
+                "shared_links"
+              ],
+              "topic": "Great for album nights, hosted listening sessions, and shared station switches inside the room.",
+              "stations": [
+                {
+                  "label": "iHeart Pop HITS",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart-pop-hits-8830/",
+                  "embed_url": "https://www.iheart.com/live/iheart-pop-hits-8830/?embed=true"
+                },
+                {
+                  "label": "Z100 New York",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/z100-1469/",
+                  "embed_url": "https://www.iheart.com/live/z100-1469/?embed=true"
+                },
+                {
+                  "label": "102.7 KIIS-FM",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/1027-kiis-fm-185/",
+                  "embed_url": "https://www.iheart.com/live/1027-kiis-fm-185/?embed=true"
+                },
+                {
+                  "label": "103.5 KTU",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/1035-ktu-1473/",
+                  "embed_url": "https://www.iheart.com/live/1035-ktu-1473/?embed=true"
+                },
+                {
+                  "label": "Mix Nation",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/mix-nation-4776/",
+                  "embed_url": "https://www.iheart.com/live/mix-nation-4776/?embed=true"
+                },
+                {
+                  "label": "KIIS Dance",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheartdance-6941/",
+                  "embed_url": "https://www.iheart.com/live/iheartdance-6941/?embed=true"
+                },
+                {
+                  "label": "Power 105.1",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/power-1051-1481/",
+                  "embed_url": "https://www.iheart.com/live/power-1051-1481/?embed=true"
+                },
+                {
+                  "label": "Real 98.3 Indianapolis",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/real-983-6944/",
+                  "embed_url": "https://www.iheart.com/live/real-983-6944/?embed=true"
+                },
+                {
+                  "label": "Q95 Indianapolis",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/q95-901/",
+                  "embed_url": "https://www.iheart.com/live/q95-901/?embed=true"
+                },
+                {
+                  "label": "Big Classic Hits",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/big-classic-hits-4455/",
+                  "embed_url": "https://www.iheart.com/live/big-classic-hits-4455/?embed=true"
+                },
+                {
+                  "label": "iHeart90s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart90s-6834/",
+                  "embed_url": "https://www.iheart.com/live/iheart90s-6834/?embed=true"
+                },
+                {
+                  "label": "iHeart2000s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart2000s-6850/",
+                  "embed_url": "https://www.iheart.com/live/iheart2000s-6850/?embed=true"
+                }
+              ]
+            },
+            {
+              "name": "Album Club",
+              "description": "Room for full-album chat, track-by-track breakdowns, and shared listening picks.",
+              "tags": [
+                "Albums",
+                "Reviews",
+                "Music"
+              ],
+              "features": [
+                "music_room",
+                "room_radio",
+                "shared_links"
+              ],
+              "topic": "Use this room to work through albums together, swap live radio picks, and keep the conversation focused.",
+              "stations": [
+                {
+                  "label": "Classic Rock",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/classic-rock-4426/",
+                  "embed_url": "https://www.iheart.com/live/classic-rock-4426/?embed=true"
+                },
+                {
+                  "label": "Q104.3 New York Rock",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/q1043-1465/",
+                  "embed_url": "https://www.iheart.com/live/q1043-1465/?embed=true"
+                },
+                {
+                  "label": "Big Classic Hits",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/big-classic-hits-4455/",
+                  "embed_url": "https://www.iheart.com/live/big-classic-hits-4455/?embed=true"
+                },
+                {
+                  "label": "iHeart80s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart80s-5060/",
+                  "embed_url": "https://www.iheart.com/live/iheart80s-5060/?embed=true"
+                },
+                {
+                  "label": "iHeart90s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart90s-6834/",
+                  "embed_url": "https://www.iheart.com/live/iheart90s-6834/?embed=true"
+                },
+                {
+                  "label": "iHeart2000s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart2000s-6850/",
+                  "embed_url": "https://www.iheart.com/live/iheart2000s-6850/?embed=true"
+                },
+                {
+                  "label": "Smooth Jazz",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/smooth-jazz-4242/",
+                  "embed_url": "https://www.iheart.com/live/smooth-jazz-4242/?embed=true"
+                },
+                {
+                  "label": "iHeartCountry Classics",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheartcountry-classics-4435/",
+                  "embed_url": "https://www.iheart.com/live/iheartcountry-classics-4435/?embed=true"
+                },
+                {
+                  "label": "Rihanna Radio",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/artist/rihanna-34742/",
+                  "embed_url": "https://www.iheart.com/artist/rihanna-34742/?embed=true"
+                },
+                {
+                  "label": "Z100 New York",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/z100-1469/",
+                  "embed_url": "https://www.iheart.com/live/z100-1469/?embed=true"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Genre Listening",
+          "rooms": [
+            {
+              "name": "Country Room",
+              "description": "Genre room for country fans with shared iHeart country stations and room-wide skip voting.",
+              "tags": [
+                "Country",
+                "Listening",
+                "Radio"
+              ],
+              "features": [
+                "music_room",
+                "room_radio",
+                "shared_links"
+              ],
+              "topic": "Join for modern country, classic country radio energy, tailgate playlists, and room-synced station changes.",
+              "stations": [
+                {
+                  "label": "iHeartCountry",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheartcountry-4418/",
+                  "embed_url": "https://www.iheart.com/live/iheartcountry-4418/?embed=true"
+                },
+                {
+                  "label": "Country 97.1 Hank FM",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/country-971-hank-fm-6058/",
+                  "embed_url": "https://www.iheart.com/live/country-971-hank-fm-6058/?embed=true"
+                },
+                {
+                  "label": "Pure Country 101",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/pure-country-101-7517/",
+                  "embed_url": "https://www.iheart.com/live/pure-country-101-7517/?embed=true"
+                },
+                {
+                  "label": "Country 92.5",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/country-925-445/",
+                  "embed_url": "https://www.iheart.com/live/country-925-445/?embed=true"
+                },
+                {
+                  "label": "iHeartCountry 80s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheartcountry-80s-6836/",
+                  "embed_url": "https://www.iheart.com/live/iheartcountry-80s-6836/?embed=true"
+                },
+                {
+                  "label": "iHeartCountry Classics",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheartcountry-classics-4435/",
+                  "embed_url": "https://www.iheart.com/live/iheartcountry-classics-4435/?embed=true"
+                },
+                {
+                  "label": "B100 South Bend",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/b100-5768/",
+                  "embed_url": "https://www.iheart.com/live/b100-5768/?embed=true"
+                },
+                {
+                  "label": "The BIG 98",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/the-big-98-2157/",
+                  "embed_url": "https://www.iheart.com/live/the-big-98-2157/?embed=true"
+                }
+              ]
+            },
+            {
+              "name": "Pop Hits Room",
+              "description": "Shared pop listening room for current hit stations, chart talk, and group skip voting.",
+              "tags": [
+                "Pop",
+                "Hits",
+                "Listening"
+              ],
+              "features": [
+                "music_room",
+                "room_radio",
+                "shared_links"
+              ],
+              "topic": "Built for chart watchers, pop fans, and fast-moving hit radio listening sessions.",
+              "stations": [
+                {
+                  "label": "iHeart Pop HITS",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart-pop-hits-8830/",
+                  "embed_url": "https://www.iheart.com/live/iheart-pop-hits-8830/?embed=true"
+                },
+                {
+                  "label": "Z100 New York",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/z100-1469/",
+                  "embed_url": "https://www.iheart.com/live/z100-1469/?embed=true"
+                },
+                {
+                  "label": "102.7 KIIS-FM",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/1027-kiis-fm-185/",
+                  "embed_url": "https://www.iheart.com/live/1027-kiis-fm-185/?embed=true"
+                },
+                {
+                  "label": "103.5 KTU",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/1035-ktu-1473/",
+                  "embed_url": "https://www.iheart.com/live/1035-ktu-1473/?embed=true"
+                },
+                {
+                  "label": "Hits 106.1",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/hits-1061-4257/",
+                  "embed_url": "https://www.iheart.com/live/hits-1061-4257/?embed=true"
+                },
+                {
+                  "label": "103 X",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/103-x-6862/",
+                  "embed_url": "https://www.iheart.com/live/103-x-6862/?embed=true"
+                },
+                {
+                  "label": "Big Classic Hits",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/big-classic-hits-4455/",
+                  "embed_url": "https://www.iheart.com/live/big-classic-hits-4455/?embed=true"
+                },
+                {
+                  "label": "iHeart90s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart90s-6834/",
+                  "embed_url": "https://www.iheart.com/live/iheart90s-6834/?embed=true"
+                },
+                {
+                  "label": "iHeart2000s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart2000s-6850/",
+                  "embed_url": "https://www.iheart.com/live/iheart2000s-6850/?embed=true"
+                },
+                {
+                  "label": "iHeart2010s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart2010s-8478/",
+                  "embed_url": "https://www.iheart.com/live/iheart2010s-8478/?embed=true"
+                }
+              ]
+            },
+            {
+              "name": "Rock & Alt Room",
+              "description": "Rock-forward listening room for classic rock, pop-rock, alt energy, and shared station switching.",
+              "tags": [
+                "Rock",
+                "Alt",
+                "Listening"
+              ],
+              "features": [
+                "music_room",
+                "room_radio",
+                "shared_links"
+              ],
+              "topic": "Switch between classic rock and rock-leaning stations while the whole room stays on the same source.",
+              "stations": [
+                {
+                  "label": "Classic Rock",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/classic-rock-4426/",
+                  "embed_url": "https://www.iheart.com/live/classic-rock-4426/?embed=true"
+                },
+                {
+                  "label": "Classic Rock Live",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/classic-rock-live-10715/",
+                  "embed_url": "https://www.iheart.com/live/classic-rock-live-10715/?embed=true"
+                },
+                {
+                  "label": "Q95 Indianapolis",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/q95-901/",
+                  "embed_url": "https://www.iheart.com/live/q95-901/?embed=true"
+                },
+                {
+                  "label": "Q104.3 New York Rock",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/q1043-1465/",
+                  "embed_url": "https://www.iheart.com/live/q1043-1465/?embed=true"
+                },
+                {
+                  "label": "iHeart Pop Rocks",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart-pop-rocks-8842/",
+                  "embed_url": "https://www.iheart.com/live/iheart-pop-rocks-8842/?embed=true"
+                },
+                {
+                  "label": "99.3 The Fox Rocks",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/993-the-fox-rocks-3524/",
+                  "embed_url": "https://www.iheart.com/live/993-the-fox-rocks-3524/?embed=true"
+                },
+                {
+                  "label": "103.9 The Bear",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/1039-the-bear-9306/",
+                  "embed_url": "https://www.iheart.com/live/1039-the-bear-9306/?embed=true"
+                }
+              ]
+            },
+            {
+              "name": "Hip-Hop & R&B Room",
+              "description": "Shared hip-hop and R&B room for beats, throwbacks, and live station rotation.",
+              "tags": [
+                "Hip-Hop",
+                "R&B",
+                "Listening"
+              ],
+              "features": [
+                "music_room",
+                "room_radio",
+                "shared_links"
+              ],
+              "topic": "Use this room for hip-hop, R&B, throwbacks, and chat-native /skip voting.",
+              "stations": [
+                {
+                  "label": "Hip Hop Beats",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/hip-hop-beats-4429/",
+                  "embed_url": "https://www.iheart.com/live/hip-hop-beats-4429/?embed=true"
+                },
+                {
+                  "label": "Power 105.1",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/power-1051-1481/",
+                  "embed_url": "https://www.iheart.com/live/power-1051-1481/?embed=true"
+                },
+                {
+                  "label": "Real 92.3",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/real-923-181/",
+                  "embed_url": "https://www.iheart.com/live/real-923-181/?embed=true"
+                },
+                {
+                  "label": "Real 98.3 Indianapolis",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/real-983-6944/",
+                  "embed_url": "https://www.iheart.com/live/real-983-6944/?embed=true"
+                },
+                {
+                  "label": "Power 99",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/power-99-2009/",
+                  "embed_url": "https://www.iheart.com/live/power-99-2009/?embed=true"
+                },
+                {
+                  "label": "97.9 WJLB",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/979-wjlb-1141/",
+                  "embed_url": "https://www.iheart.com/live/979-wjlb-1141/?embed=true"
+                },
+                {
+                  "label": "103.5 The Beat",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/1035-the-beat-581/",
+                  "embed_url": "https://www.iheart.com/live/1035-the-beat-581/?embed=true"
+                },
+                {
+                  "label": "103 JAMZ",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/103-jamz-2453/",
+                  "embed_url": "https://www.iheart.com/live/103-jamz-2453/?embed=true"
+                },
+                {
+                  "label": "JAM'N 95.7",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/jamn-957-261/",
+                  "embed_url": "https://www.iheart.com/live/jamn-957-261/?embed=true"
+                },
+                {
+                  "label": "Q93",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/q93-1037/",
+                  "embed_url": "https://www.iheart.com/live/q93-1037/?embed=true"
+                }
+              ]
+            },
+            {
+              "name": "Dance & EDM Room",
+              "description": "Dancefloor-oriented room for remixes, club energy, workout mixes, and party listening.",
+              "tags": [
+                "Dance",
+                "EDM",
+                "Party"
+              ],
+              "features": [
+                "music_room",
+                "room_radio",
+                "shared_links"
+              ],
+              "topic": "Great for remixes, workout sessions, party rooms, and nonstop dance-focused station swaps.",
+              "stations": [
+                {
+                  "label": "Mix Nation",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/mix-nation-4776/",
+                  "embed_url": "https://www.iheart.com/live/mix-nation-4776/?embed=true"
+                },
+                {
+                  "label": "Forever Disco",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/6755/",
+                  "embed_url": "https://www.iheart.com/live/6755/?embed=true"
+                },
+                {
+                  "label": "KIIS Dance",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheartdance-6941/",
+                  "embed_url": "https://www.iheart.com/live/iheartdance-6941/?embed=true"
+                },
+                {
+                  "label": "103.5 KTU",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/1035-ktu-1473/",
+                  "embed_url": "https://www.iheart.com/live/1035-ktu-1473/?embed=true"
+                },
+                {
+                  "label": "Fitness Music",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/fitness-music-8180/",
+                  "embed_url": "https://www.iheart.com/live/fitness-music-8180/?embed=true"
+                },
+                {
+                  "label": "K-Pop Radio",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/k-pop-radio-9003/",
+                  "embed_url": "https://www.iheart.com/live/k-pop-radio-9003/?embed=true"
+                },
+                {
+                  "label": "iHeart Pop HITS",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart-pop-hits-8830/",
+                  "embed_url": "https://www.iheart.com/live/iheart-pop-hits-8830/?embed=true"
+                }
+              ]
+            },
+            {
+              "name": "Smooth Jazz Room",
+              "description": "Low-key jazz room for background listening, focus sessions, and chill room audio.",
+              "tags": [
+                "Jazz",
+                "Chill",
+                "Listening"
+              ],
+              "features": [
+                "music_room",
+                "room_radio",
+                "shared_links"
+              ],
+              "topic": "Relaxed room for jazz, mellow evening listening, and soft room audio during chat.",
+              "stations": [
+                {
+                  "label": "Smooth Jazz",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/smooth-jazz-4242/",
+                  "embed_url": "https://www.iheart.com/live/smooth-jazz-4242/?embed=true"
+                },
+                {
+                  "label": "Smooth Jazz Network",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/smooth-jazz-network-9417/",
+                  "embed_url": "https://www.iheart.com/live/smooth-jazz-network-9417/?embed=true"
+                },
+                {
+                  "label": "Jazz 90.1",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/jazz-901-10096/",
+                  "embed_url": "https://www.iheart.com/live/jazz-901-10096/?embed=true"
+                },
+                {
+                  "label": "106.7 Lite FM",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/1067-lite-fm-1477/",
+                  "embed_url": "https://www.iheart.com/live/1067-lite-fm-1477/?embed=true"
+                },
+                {
+                  "label": "Big Classic Hits",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/big-classic-hits-4455/",
+                  "embed_url": "https://www.iheart.com/live/big-classic-hits-4455/?embed=true"
+                }
+              ]
+            },
+            {
+              "name": "80s Flashback Room",
+              "description": "Decades room for 80s hits, big choruses, classic radio nostalgia, and shared station switching.",
+              "tags": [
+                "80s",
+                "Flashback",
+                "Nostalgia"
+              ],
+              "features": [
+                "music_room",
+                "room_radio",
+                "shared_links"
+              ],
+              "topic": "Throwback room for 80s pop, new wave, and nostalgic radio sessions with synced room playback.",
+              "stations": [
+                {
+                  "label": "iHeart80s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart80s-5060/",
+                  "embed_url": "https://www.iheart.com/live/iheart80s-5060/?embed=true"
+                },
+                {
+                  "label": "FAST iHeart80s Radio",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/fast-iheart80s-radio-9010/",
+                  "embed_url": "https://www.iheart.com/live/fast-iheart80s-radio-9010/?embed=true"
+                },
+                {
+                  "label": "Big Classic Hits",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/big-classic-hits-4455/",
+                  "embed_url": "https://www.iheart.com/live/big-classic-hits-4455/?embed=true"
+                },
+                {
+                  "label": "Classic Rock",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/classic-rock-4426/",
+                  "embed_url": "https://www.iheart.com/live/classic-rock-4426/?embed=true"
+                },
+                {
+                  "label": "Q95 Indianapolis",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/q95-901/",
+                  "embed_url": "https://www.iheart.com/live/q95-901/?embed=true"
+                },
+                {
+                  "label": "iHeart90s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart90s-6834/",
+                  "embed_url": "https://www.iheart.com/live/iheart90s-6834/?embed=true"
+                },
+                {
+                  "label": "iHeart2000s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart2000s-6850/",
+                  "embed_url": "https://www.iheart.com/live/iheart2000s-6850/?embed=true"
+                }
+              ]
+            },
+            {
+              "name": "Oldies & Classic Hits Room",
+              "description": "Decades, oldies, classic hits, and throwback radio for nostalgic listening.",
+              "tags": [
+                "Oldies",
+                "Classic Hits",
+                "Decades"
+              ],
+              "features": [
+                "music_room",
+                "room_radio"
+              ],
+              "topic": "Use this room for classic hits, oldies, and decade-based radio sessions.",
+              "stations": [
+                {
+                  "label": "Big Classic Hits",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/big-classic-hits-4455/",
+                  "embed_url": "https://www.iheart.com/live/big-classic-hits-4455/?embed=true"
+                },
+                {
+                  "label": "iHeart80s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart80s-5060/",
+                  "embed_url": "https://www.iheart.com/live/iheart80s-5060/?embed=true"
+                },
+                {
+                  "label": "FAST iHeart80s Radio",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/fast-iheart80s-radio-9010/",
+                  "embed_url": "https://www.iheart.com/live/fast-iheart80s-radio-9010/?embed=true"
+                },
+                {
+                  "label": "iHeart90s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart90s-6834/",
+                  "embed_url": "https://www.iheart.com/live/iheart90s-6834/?embed=true"
+                },
+                {
+                  "label": "iHeart2000s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart2000s-6850/",
+                  "embed_url": "https://www.iheart.com/live/iheart2000s-6850/?embed=true"
+                },
+                {
+                  "label": "Classic Rock",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/classic-rock-4426/",
+                  "embed_url": "https://www.iheart.com/live/classic-rock-4426/?embed=true"
+                },
+                {
+                  "label": "Q95 Indianapolis",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/q95-901/",
+                  "embed_url": "https://www.iheart.com/live/q95-901/?embed=true"
+                },
+                {
+                  "label": "Q104.3 New York Rock",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/q1043-1465/",
+                  "embed_url": "https://www.iheart.com/live/q1043-1465/?embed=true"
+                }
+              ]
+            },
+            {
+              "name": "News & Talk Radio Room",
+              "description": "Live news, talk radio, business updates, and current-event listening.",
+              "tags": [
+                "News",
+                "Talk",
+                "Live"
+              ],
+              "features": [
+                "music_room",
+                "room_radio",
+                "shared_links"
+              ],
+              "topic": "Use this room for news/talk stations, business radio, and spoken-word current events.",
+              "stations": [
+                {
+                  "label": "93 WIBC Indianapolis",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/93-wibc-6057/",
+                  "embed_url": "https://www.iheart.com/live/93-wibc-6057/?embed=true"
+                },
+                {
+                  "label": "Fox News Radio",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/fox-news-radio-8627/",
+                  "embed_url": "https://www.iheart.com/live/fox-news-radio-8627/?embed=true"
+                },
+                {
+                  "label": "iHeartRadio 24/7 News",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheartradio-247-news-6043/",
+                  "embed_url": "https://www.iheart.com/live/iheartradio-247-news-6043/?embed=true"
+                },
+                {
+                  "label": "710 WOR",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/710-wor-5874/",
+                  "embed_url": "https://www.iheart.com/live/710-wor-5874/?embed=true"
+                },
+                {
+                  "label": "NewsTalk 1130 / 103.5",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/newstalk-1130-1035-1213/",
+                  "embed_url": "https://www.iheart.com/live/newstalk-1130-1035-1213/?embed=true"
+                },
+                {
+                  "label": "Bloomberg 1130",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/bloomberg-1130-6286/",
+                  "embed_url": "https://www.iheart.com/live/bloomberg-1130-6286/?embed=true"
+                },
+                {
+                  "label": "Business News 97.5 Indianapolis",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/business-news-975-8376/",
+                  "embed_url": "https://www.iheart.com/live/business-news-975-8376/?embed=true"
+                },
+                {
+                  "label": "NewsRadio 630 WLAP",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/newsradio-630-wlap-965/",
+                  "embed_url": "https://www.iheart.com/live/newsradio-630-wlap-965/?embed=true"
+                },
+                {
+                  "label": "920 WBAA News",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/920-wbaa-news-7197/",
+                  "embed_url": "https://www.iheart.com/live/920-wbaa-news-7197/?embed=true"
+                }
+              ]
+            },
+            {
+              "name": "Sports Radio Room",
+              "description": "National and regional sports talk radio for live games, debate, and scores.",
+              "tags": [
+                "Sports",
+                "Talk",
+                "Live"
+              ],
+              "features": [
+                "music_room",
+                "room_radio",
+                "shared_links"
+              ],
+              "topic": "Use this room for sports radio, game talk, and live sports discussion.",
+              "stations": [
+                {
+                  "label": "Fox Sports Radio",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/fox-sports-radio-4732/",
+                  "embed_url": "https://www.iheart.com/live/fox-sports-radio-4732/?embed=true"
+                },
+                {
+                  "label": "ESPN Radio",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/espn-radio-7903/",
+                  "embed_url": "https://www.iheart.com/live/espn-radio-7903/?embed=true"
+                },
+                {
+                  "label": "Fox Sports 1260",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/fox-sports-1260-905/",
+                  "embed_url": "https://www.iheart.com/live/fox-sports-1260-905/?embed=true"
+                },
+                {
+                  "label": "97.1 The Ticket",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/971-the-ticket-10827/",
+                  "embed_url": "https://www.iheart.com/live/971-the-ticket-10827/?embed=true"
+                },
+                {
+                  "label": "93.9 The Ville",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/939-the-ville-6792/",
+                  "embed_url": "https://www.iheart.com/live/939-the-ville-6792/?embed=true"
+                }
+              ]
+            },
+            {
+              "name": "Comedy Radio Room",
+              "description": "Comedy radio, morning-show comedy, and funny spoken-word listening.",
+              "tags": [
+                "Comedy",
+                "Talk",
+                "Fun"
+              ],
+              "features": [
+                "music_room",
+                "room_radio"
+              ],
+              "topic": "Use this room for stand-up, comedy radio, and funny morning-show style audio.",
+              "stations": [
+                {
+                  "label": "iHeart Comedy",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart-comedy-4902/",
+                  "embed_url": "https://www.iheart.com/live/iheart-comedy-4902/?embed=true"
+                },
+                {
+                  "label": "Comedy 103.1",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/comedy-1031-10849/",
+                  "embed_url": "https://www.iheart.com/live/comedy-1031-10849/?embed=true"
+                },
+                {
+                  "label": "TJ & Riggins",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/tj-riggins-8526/",
+                  "embed_url": "https://www.iheart.com/live/tj-riggins-8526/?embed=true"
+                },
+                {
+                  "label": "Q95 Indianapolis",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/q95-901/",
+                  "embed_url": "https://www.iheart.com/live/q95-901/?embed=true"
+                },
+                {
+                  "label": "103 X",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/103-x-6862/",
+                  "embed_url": "https://www.iheart.com/live/103-x-6862/?embed=true"
+                }
+              ]
+            },
+            {
+              "name": "Gospel & Christian Radio Room",
+              "description": "Gospel, inspirational, contemporary Christian, and faith-based radio.",
+              "tags": [
+                "Gospel",
+                "Christian",
+                "Faith"
+              ],
+              "features": [
+                "music_room",
+                "room_radio"
+              ],
+              "topic": "Use this room for gospel, inspirational, and Christian radio listening.",
+              "stations": [
+                {
+                  "label": "Hallelujah",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/hallelujah-7005/",
+                  "embed_url": "https://www.iheart.com/live/hallelujah-7005/?embed=true"
+                },
+                {
+                  "label": "Hallelujah 100.3",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/hallelujah-1003-6972/",
+                  "embed_url": "https://www.iheart.com/live/hallelujah-1003-6972/?embed=true"
+                },
+                {
+                  "label": "95.7 Hallelujah FM",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/957-hallelujah-fm-2137/",
+                  "embed_url": "https://www.iheart.com/live/957-hallelujah-fm-2137/?embed=true"
+                },
+                {
+                  "label": "Inspiration 1390 WGRB",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/inspiration-1390-wgrb-845/",
+                  "embed_url": "https://www.iheart.com/live/inspiration-1390-wgrb-845/?embed=true"
+                },
+                {
+                  "label": "Christian Top 20",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/christian-top-20-4978/",
+                  "embed_url": "https://www.iheart.com/live/christian-top-20-4978/?embed=true"
+                },
+                {
+                  "label": "Up!",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/up-7203/",
+                  "embed_url": "https://www.iheart.com/live/up-7203/?embed=true"
+                },
+                {
+                  "label": "Real Southern Gospel Radio",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/real-southern-gospel-radio-9257/",
+                  "embed_url": "https://www.iheart.com/live/real-southern-gospel-radio-9257/?embed=true"
+                },
+                {
+                  "label": "98.8FM Gospel Radio",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/988fm-gospel-radio-10452/",
+                  "embed_url": "https://www.iheart.com/live/988fm-gospel-radio-10452/?embed=true"
+                }
+              ]
+            },
+            {
+              "name": "Indiana Local Radio Room",
+              "description": "Indiana-focused stations for local news, rock, country, business, sports, and hip-hop/R&B.",
+              "tags": [
+                "Indiana",
+                "Local",
+                "Radio"
+              ],
+              "features": [
+                "music_room",
+                "room_radio",
+                "shared_links"
+              ],
+              "topic": "Use this room for Indiana local stations and Midwest-local listening.",
+              "stations": [
+                {
+                  "label": "93 WIBC Indianapolis",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/93-wibc-6057/",
+                  "embed_url": "https://www.iheart.com/live/93-wibc-6057/?embed=true"
+                },
+                {
+                  "label": "Q95 Indianapolis",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/q95-901/",
+                  "embed_url": "https://www.iheart.com/live/q95-901/?embed=true"
+                },
+                {
+                  "label": "Country 97.1 Hank FM",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/country-971-hank-fm-6058/",
+                  "embed_url": "https://www.iheart.com/live/country-971-hank-fm-6058/?embed=true"
+                },
+                {
+                  "label": "Real 98.3 Indianapolis",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/real-983-6944/",
+                  "embed_url": "https://www.iheart.com/live/real-983-6944/?embed=true"
+                },
+                {
+                  "label": "Business News 97.5 Indianapolis",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/business-news-975-8376/",
+                  "embed_url": "https://www.iheart.com/live/business-news-975-8376/?embed=true"
+                },
+                {
+                  "label": "Fox Sports 1260",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/fox-sports-1260-905/",
+                  "embed_url": "https://www.iheart.com/live/fox-sports-1260-905/?embed=true"
+                },
+                {
+                  "label": "B100 South Bend",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/b100-5768/",
+                  "embed_url": "https://www.iheart.com/live/b100-5768/?embed=true"
+                },
+                {
+                  "label": "103.9 The Bear",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/1039-the-bear-9306/",
+                  "embed_url": "https://www.iheart.com/live/1039-the-bear-9306/?embed=true"
+                },
+                {
+                  "label": "Indy 103.3",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/indy-1033-909/",
+                  "embed_url": "https://www.iheart.com/live/indy-1033-909/?embed=true"
+                },
+                {
+                  "label": "920 WBAA News",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/920-wbaa-news-7197/",
+                  "embed_url": "https://www.iheart.com/live/920-wbaa-news-7197/?embed=true"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Music File Sharing",
+          "rooms": [
+            {
+              "name": "Tracks & Singles",
+              "description": "Room for song links, legally shared singles, stems, and playlist swaps.",
+              "tags": [
+                "Singles",
+                "Playlists",
+                "Music"
+              ],
+              "features": [
+                "music_share",
+                "room_radio",
+                "file_share",
+                "shared_links"
+              ],
+              "topic": "Music-focused sharing room for singles, playlist links, direct audio files you are allowed to share, and radio handoffs.",
+              "stations": [
+                {
+                  "label": "iHeart Pop HITS",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart-pop-hits-8830/",
+                  "embed_url": "https://www.iheart.com/live/iheart-pop-hits-8830/?embed=true"
+                },
+                {
+                  "label": "Z100 New York",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/z100-1469/",
+                  "embed_url": "https://www.iheart.com/live/z100-1469/?embed=true"
+                },
+                {
+                  "label": "102.7 KIIS-FM",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/1027-kiis-fm-185/",
+                  "embed_url": "https://www.iheart.com/live/1027-kiis-fm-185/?embed=true"
+                },
+                {
+                  "label": "103.5 KTU",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/1035-ktu-1473/",
+                  "embed_url": "https://www.iheart.com/live/1035-ktu-1473/?embed=true"
+                },
+                {
+                  "label": "Power 105.1",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/power-1051-1481/",
+                  "embed_url": "https://www.iheart.com/live/power-1051-1481/?embed=true"
+                },
+                {
+                  "label": "Real 98.3 Indianapolis",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/real-983-6944/",
+                  "embed_url": "https://www.iheart.com/live/real-983-6944/?embed=true"
+                },
+                {
+                  "label": "Q95 Indianapolis",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/q95-901/",
+                  "embed_url": "https://www.iheart.com/live/q95-901/?embed=true"
+                },
+                {
+                  "label": "Country 97.1 Hank FM",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/country-971-hank-fm-6058/",
+                  "embed_url": "https://www.iheart.com/live/country-971-hank-fm-6058/?embed=true"
+                },
+                {
+                  "label": "Big Classic Hits",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/big-classic-hits-4455/",
+                  "embed_url": "https://www.iheart.com/live/big-classic-hits-4455/?embed=true"
+                },
+                {
+                  "label": "iHeart80s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart80s-5060/",
+                  "embed_url": "https://www.iheart.com/live/iheart80s-5060/?embed=true"
+                },
+                {
+                  "label": "iHeart90s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart90s-6834/",
+                  "embed_url": "https://www.iheart.com/live/iheart90s-6834/?embed=true"
+                },
+                {
+                  "label": "iHeart2000s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart2000s-6850/",
+                  "embed_url": "https://www.iheart.com/live/iheart2000s-6850/?embed=true"
+                }
+              ]
+            },
+            {
+              "name": "Albums & Sets",
+              "description": "Albums, DJ sets, mixtapes, and lawful collection sharing.",
+              "tags": [
+                "Albums",
+                "Sets",
+                "Files"
+              ],
+              "features": [
+                "music_share",
+                "room_radio",
+                "file_share",
+                "shared_links"
+              ],
+              "topic": "Use this room for albums, DJ mixes, live sets, and collection-sized music drops that are okay to share.",
+              "stations": [
+                {
+                  "label": "Classic Rock",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/classic-rock-4426/",
+                  "embed_url": "https://www.iheart.com/live/classic-rock-4426/?embed=true"
+                },
+                {
+                  "label": "Q104.3 New York Rock",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/q1043-1465/",
+                  "embed_url": "https://www.iheart.com/live/q1043-1465/?embed=true"
+                },
+                {
+                  "label": "Big Classic Hits",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/big-classic-hits-4455/",
+                  "embed_url": "https://www.iheart.com/live/big-classic-hits-4455/?embed=true"
+                },
+                {
+                  "label": "iHeart80s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart80s-5060/",
+                  "embed_url": "https://www.iheart.com/live/iheart80s-5060/?embed=true"
+                },
+                {
+                  "label": "iHeart90s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart90s-6834/",
+                  "embed_url": "https://www.iheart.com/live/iheart90s-6834/?embed=true"
+                },
+                {
+                  "label": "Smooth Jazz",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/smooth-jazz-4242/",
+                  "embed_url": "https://www.iheart.com/live/smooth-jazz-4242/?embed=true"
+                },
+                {
+                  "label": "iHeartCountry Classics",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheartcountry-classics-4435/",
+                  "embed_url": "https://www.iheart.com/live/iheartcountry-classics-4435/?embed=true"
+                },
+                {
+                  "label": "Rihanna Radio",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/artist/rihanna-34742/",
+                  "embed_url": "https://www.iheart.com/artist/rihanna-34742/?embed=true"
+                },
+                {
+                  "label": "Z100 New York",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/z100-1469/",
+                  "embed_url": "https://www.iheart.com/live/z100-1469/?embed=true"
+                },
+                {
+                  "label": "Jingle Ball Radio",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/jingle-ball-radio-9165/",
+                  "embed_url": "https://www.iheart.com/live/jingle-ball-radio-9165/?embed=true"
+                }
+              ]
+            },
+            {
+              "name": "Podcasts & Talk Audio",
+              "description": "Podcasts, spoken-word audio, radio shows, and interviews.",
+              "tags": [
+                "Podcasts",
+                "Talk",
+                "Audio"
+              ],
+              "features": [
+                "music_share",
+                "room_radio",
+                "file_share",
+                "shared_links"
+              ],
+              "topic": "Audio-focused room for podcasts, radio segments, and spoken-word programs users can choose to play or open.",
+              "stations": [
+                {
+                  "label": "710 WOR",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/710-wor-5874/",
+                  "embed_url": "https://www.iheart.com/live/710-wor-5874/?embed=true"
+                },
+                {
+                  "label": "93 WIBC Indianapolis",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/93-wibc-6057/",
+                  "embed_url": "https://www.iheart.com/live/93-wibc-6057/?embed=true"
+                },
+                {
+                  "label": "Fox News Radio",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/fox-news-radio-8627/",
+                  "embed_url": "https://www.iheart.com/live/fox-news-radio-8627/?embed=true"
+                },
+                {
+                  "label": "iHeartRadio 24/7 News",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheartradio-247-news-6043/",
+                  "embed_url": "https://www.iheart.com/live/iheartradio-247-news-6043/?embed=true"
+                },
+                {
+                  "label": "Blaze Radio Network",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/blaze-radio-network-4874/",
+                  "embed_url": "https://www.iheart.com/live/blaze-radio-network-4874/?embed=true"
+                },
+                {
+                  "label": "Bloomberg 1130",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/bloomberg-1130-6286/",
+                  "embed_url": "https://www.iheart.com/live/bloomberg-1130-6286/?embed=true"
+                },
+                {
+                  "label": "Business News 97.5 Indianapolis",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/business-news-975-8376/",
+                  "embed_url": "https://www.iheart.com/live/business-news-975-8376/?embed=true"
+                },
+                {
+                  "label": "NewsTalk 1130 / 103.5",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/newstalk-1130-1035-1213/",
+                  "embed_url": "https://www.iheart.com/live/newstalk-1130-1035-1213/?embed=true"
+                }
+              ]
+            },
+            {
+              "name": "Audiobooks",
+              "description": "Audiobooks, narrated works, and spoken-word collections.",
+              "tags": [
+                "Audiobooks",
+                "Narration",
+                "Library"
+              ],
+              "features": [
+                "music_share",
+                "file_share",
+                "shared_links"
+              ],
+              "topic": "Audiobook room for narration links, chapter collections, and reading-list audio discussion."
+            },
+            {
+              "name": "Royalty-Free & CC Audio",
+              "description": "Creative Commons tracks, royalty-free beds, loops, and safe-use music libraries.",
+              "tags": [
+                "CC",
+                "Royalty-Free",
+                "Assets"
+              ],
+              "features": [
+                "music_share",
+                "file_share",
+                "shared_links"
+              ],
+              "topic": "Best room for loops, sound beds, CC-licensed music, and creator-safe audio assets."
+            },
+            {
+              "name": "Country Sharing",
+              "description": "Country-focused sharing room for lawful track links, concert clips, stems, and room radio.",
+              "tags": [
+                "Country",
+                "Files",
+                "Links"
+              ],
+              "features": [
+                "music_share",
+                "room_radio",
+                "file_share",
+                "shared_links"
+              ],
+              "topic": "Share country singles, setlists, live versions, and related files while the room keeps a country station running.",
+              "stations": [
+                {
+                  "label": "iHeartCountry",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheartcountry-4418/",
+                  "embed_url": "https://www.iheart.com/live/iheartcountry-4418/?embed=true"
+                },
+                {
+                  "label": "Country 97.1 Hank FM",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/country-971-hank-fm-6058/",
+                  "embed_url": "https://www.iheart.com/live/country-971-hank-fm-6058/?embed=true"
+                },
+                {
+                  "label": "Pure Country 101",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/pure-country-101-7517/",
+                  "embed_url": "https://www.iheart.com/live/pure-country-101-7517/?embed=true"
+                },
+                {
+                  "label": "Country 92.5",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/country-925-445/",
+                  "embed_url": "https://www.iheart.com/live/country-925-445/?embed=true"
+                },
+                {
+                  "label": "iHeartCountry 80s",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheartcountry-80s-6836/",
+                  "embed_url": "https://www.iheart.com/live/iheartcountry-80s-6836/?embed=true"
+                },
+                {
+                  "label": "iHeartCountry Classics",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheartcountry-classics-4435/",
+                  "embed_url": "https://www.iheart.com/live/iheartcountry-classics-4435/?embed=true"
+                },
+                {
+                  "label": "B100 South Bend",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/b100-5768/",
+                  "embed_url": "https://www.iheart.com/live/b100-5768/?embed=true"
+                },
+                {
+                  "label": "The BIG 98",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/the-big-98-2157/",
+                  "embed_url": "https://www.iheart.com/live/the-big-98-2157/?embed=true"
+                }
+              ]
+            },
+            {
+              "name": "Rock & Alt Sharing",
+              "description": "Room for lawful rock and alt track sharing, setlists, live cuts, and room-synced radio.",
+              "tags": [
+                "Rock",
+                "Alt",
+                "Files"
+              ],
+              "features": [
+                "music_share",
+                "room_radio",
+                "file_share",
+                "shared_links"
+              ],
+              "topic": "Best for rock and alt links, live set clips, and station-assisted discovery.",
+              "stations": [
+                {
+                  "label": "Classic Rock",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/classic-rock-4426/",
+                  "embed_url": "https://www.iheart.com/live/classic-rock-4426/?embed=true"
+                },
+                {
+                  "label": "Classic Rock Live",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/classic-rock-live-10715/",
+                  "embed_url": "https://www.iheart.com/live/classic-rock-live-10715/?embed=true"
+                },
+                {
+                  "label": "Q95 Indianapolis",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/q95-901/",
+                  "embed_url": "https://www.iheart.com/live/q95-901/?embed=true"
+                },
+                {
+                  "label": "Q104.3 New York Rock",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/q1043-1465/",
+                  "embed_url": "https://www.iheart.com/live/q1043-1465/?embed=true"
+                },
+                {
+                  "label": "iHeart Pop Rocks",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/iheart-pop-rocks-8842/",
+                  "embed_url": "https://www.iheart.com/live/iheart-pop-rocks-8842/?embed=true"
+                },
+                {
+                  "label": "99.3 The Fox Rocks",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/993-the-fox-rocks-3524/",
+                  "embed_url": "https://www.iheart.com/live/993-the-fox-rocks-3524/?embed=true"
+                },
+                {
+                  "label": "103.9 The Bear",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/1039-the-bear-9306/",
+                  "embed_url": "https://www.iheart.com/live/1039-the-bear-9306/?embed=true"
+                }
+              ]
+            },
+            {
+              "name": "Hip-Hop & R&B Sharing",
+              "description": "Room for lawful hip-hop and R&B track links, mixtapes, stems, and radio handoffs.",
+              "tags": [
+                "Hip-Hop",
+                "R&B",
+                "Files"
+              ],
+              "features": [
+                "music_share",
+                "room_radio",
+                "file_share",
+                "shared_links"
+              ],
+              "topic": "Use this room for hip-hop and R&B sharing with the room radio synced to matching stations.",
+              "stations": [
+                {
+                  "label": "Hip Hop Beats",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/hip-hop-beats-4429/",
+                  "embed_url": "https://www.iheart.com/live/hip-hop-beats-4429/?embed=true"
+                },
+                {
+                  "label": "Power 105.1",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/power-1051-1481/",
+                  "embed_url": "https://www.iheart.com/live/power-1051-1481/?embed=true"
+                },
+                {
+                  "label": "Real 92.3",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/real-923-181/",
+                  "embed_url": "https://www.iheart.com/live/real-923-181/?embed=true"
+                },
+                {
+                  "label": "Real 98.3 Indianapolis",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/real-983-6944/",
+                  "embed_url": "https://www.iheart.com/live/real-983-6944/?embed=true"
+                },
+                {
+                  "label": "Power 99",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/power-99-2009/",
+                  "embed_url": "https://www.iheart.com/live/power-99-2009/?embed=true"
+                },
+                {
+                  "label": "97.9 WJLB",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/979-wjlb-1141/",
+                  "embed_url": "https://www.iheart.com/live/979-wjlb-1141/?embed=true"
+                },
+                {
+                  "label": "103.5 The Beat",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/1035-the-beat-581/",
+                  "embed_url": "https://www.iheart.com/live/1035-the-beat-581/?embed=true"
+                },
+                {
+                  "label": "103 JAMZ",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/103-jamz-2453/",
+                  "embed_url": "https://www.iheart.com/live/103-jamz-2453/?embed=true"
+                },
+                {
+                  "label": "JAM'N 95.7",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/jamn-957-261/",
+                  "embed_url": "https://www.iheart.com/live/jamn-957-261/?embed=true"
+                },
+                {
+                  "label": "Q93",
+                  "provider": "iHeartRadio",
+                  "page_url": "https://www.iheart.com/live/q93-1037/",
+                  "embed_url": "https://www.iheart.com/live/q93-1037/?embed=true"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
