@@ -1,0 +1,2555 @@
+/* Echo-Chat mobile shell
+   Loaded unconditionally because mobile mode can be enabled by server hints,
+   viewport changes, or coarse-pointer tablets after first paint. Desktop stays
+   untouched because every broad rule is gated by mobile runtime classes.
+   Desktop browser resize also enters the shell at the runtime breakpoint, so
+   a narrow resizable window gets clean single-panel navigation instead of a
+   squeezed three-column desktop.
+*/
+
+@media all {
+  html.ec-mobile-runtime-active,
+  body.ec-mobile-shell-active {
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body.ec-mobile-shell-active {
+    touch-action: manipulation;
+  }
+
+
+  /* Phone hard-fit rules: prevent desktop chrome and admin tools from making
+     the page wider/taller than the physical phone viewport. */
+  body.ec-mobile-shell-active {
+    --mobileNavH: 62px;
+    margin: 0;
+    width: 100vw;
+    max-width: 100vw;
+    min-width: 0;
+    height: var(--ecMobileViewportH, 100dvh);
+    max-height: var(--ecMobileViewportH, 100dvh);
+    overflow: hidden;
+  }
+
+  body.ec-mobile-shell-active * {
+    box-sizing: border-box;
+  }
+
+  #appRoot.is-mobile-shell,
+  #appRoot.is-mobile-shell #siteArea,
+  #appRoot.is-mobile-shell #ecDock,
+  #appRoot.is-mobile-shell .sitePlaceholderSlot,
+  #appRoot.is-mobile-shell .sitePlaceholder,
+  #appRoot.is-mobile-shell .roomBrowser,
+  #appRoot.is-mobile-shell .roomEmbed,
+  #appRoot.is-mobile-shell .dock {
+    max-width: 100vw;
+    min-width: 0;
+  }
+
+  #appRoot.is-mobile-shell .sitePlaceholderSlot,
+  #appRoot.is-mobile-shell .sitePlaceholder,
+  #appRoot.is-mobile-shell .roomBrowser {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  #appRoot.is-mobile-shell .roomBrowser {
+    display: flex;
+    flex-direction: column;
+  }
+
+  #appRoot.is-mobile-shell .rbGrid,
+  #appRoot.is-mobile-shell .rbGridSelector,
+  #appRoot.is-mobile-shell .roomBrowser.is-popout .rbGrid {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  #appRoot.is-mobile-shell .rbCol {
+    min-height: 0;
+    max-height: none;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #appRoot.is-mobile-shell .rbRoomRow {
+    align-items: stretch !important;
+    flex-direction: column;
+    gap: 8px !important;
+  }
+
+  #appRoot.is-mobile-shell .rbRoomRow .rbItemLeft,
+  #appRoot.is-mobile-shell .rbRoomRow .rbBtns {
+    width: 100%;
+    max-width: none;
+  }
+
+  #appRoot.is-mobile-shell .rbRoomRow .rbBtns {
+    justify-content: stretch;
+  }
+
+  #appRoot.is-mobile-shell .rbJoinBtn,
+  #appRoot.is-mobile-shell .rbFavBtn,
+  #appRoot.is-mobile-shell .rbInviteBtn {
+    flex: 1 1 auto;
+  }
+
+  #appRoot.is-mobile-shell .rbRoomRow .rbItemMeta {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+
+  body.ec-mobile-keyboard-open #appRoot {
+    height: var(--ecMobileViewportH, 100dvh);
+  }
+
+  #appRoot.is-mobile-shell {
+    --mobileNavH: 62px;
+    height: var(--ecMobileViewportH, 100dvh);
+    min-height: var(--ecMobileViewportH, 100dvh);
+    overflow: hidden;
+  }
+
+  #appRoot.is-mobile-shell #siteArea,
+  #appRoot.is-mobile-shell #ecDock {
+    position: fixed;
+    inset: 0 0 var(--mobileNavH) 0;
+    width: auto;
+    height: auto;
+    right: 0;
+    left: 0;
+    top: 0;
+    bottom: var(--mobileNavH);
+    box-sizing: border-box;
+  }
+
+  #appRoot.is-mobile-shell #siteArea {
+    padding: 8px;
+    gap: 8px;
+    overflow: hidden;
+  }
+
+  #appRoot.is-mobile-shell .siteHeader {
+    min-height: 38px;
+    padding: 7px 9px;
+    gap: 8px;
+  }
+
+  #appRoot.is-mobile-shell .siteBrand {
+    max-width: 64vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #appRoot.is-mobile-shell .siteHint {
+    display: none;
+  }
+
+  #appRoot.is-mobile-shell .sitePlaceholder,
+  #appRoot.is-mobile-shell .sitePlaceholderSlot,
+  #appRoot.is-mobile-shell .roomEmbed {
+    min-height: 0;
+  }
+
+  #appRoot.is-mobile-shell .sitePlaceholder {
+    padding: 8px;
+  }
+
+  #appRoot.is-mobile-shell .roomBrowser {
+    padding: 8px;
+  }
+
+  #appRoot.is-mobile-shell .rbHead {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  #appRoot.is-mobile-shell .rbHeadActions,
+  #appRoot.is-mobile-shell .rbHeadActions .miniBtn,
+  #appRoot.is-mobile-shell .roomEmbedActions,
+  #appRoot.is-mobile-shell .roomEmbedActions .miniBtn {
+    width: 100%;
+  }
+
+  #appRoot.is-mobile-shell .rbHeadActions,
+  #appRoot.is-mobile-shell .roomEmbedActions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  #appRoot.is-mobile-shell .rbGrid,
+  #appRoot.is-mobile-shell .rbGridSelector,
+  #appRoot.is-mobile-shell .roomBrowser.is-popout .rbGrid {
+    grid-template-columns: 1fr;
+    height: auto;
+    min-height: 0;
+    overflow: auto;
+    padding-bottom: 8px;
+  }
+
+  #appRoot.is-mobile-shell .rbCol {
+    min-height: 220px;
+  }
+
+  #appRoot.is-mobile-shell .rbCats,
+  #appRoot.is-mobile-shell .rbRooms,
+  #appRoot.is-mobile-shell .rbCustomRooms {
+    max-height: none;
+  }
+
+  #appRoot.is-mobile-shell .rbTools,
+  #appRoot.is-mobile-shell .rbToolsCustom {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  #appRoot.is-mobile-shell .rbSearch,
+  #appRoot.is-mobile-shell .rbSelect {
+    min-height: 38px;
+    font-size: 16px; /* avoids iOS zoom-on-focus */
+  }
+
+  #appRoot.is-mobile-shell .rbScopeBar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
+
+  #appRoot.is-mobile-shell .rbScopeChip,
+  #appRoot.is-mobile-shell .miniBtn,
+  #appRoot.is-mobile-shell .ym-send,
+  #appRoot.is-mobile-shell .ym-toolBtn,
+  #appRoot.is-mobile-shell .tbBtn,
+  #appRoot.is-mobile-shell .tabBtn,
+  #appRoot.is-mobile-shell .dockMenuBtn {
+    min-height: 38px;
+    touch-action: manipulation;
+  }
+
+  #appRoot.is-mobile-shell .roomEmbedHead {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+  }
+
+  #appRoot.is-mobile-shell .roomEmbedBody {
+    grid-template-columns: 1fr;
+  }
+
+  #appRoot.is-mobile-shell .roomEmbedUsers {
+    display: none;
+  }
+
+  #appRoot.is-mobile-shell .roomEmbedUsersHead {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    align-items: center;
+    gap: 8px;
+  }
+
+  #appRoot.is-mobile-shell .mobileUsersCloseBtn {
+    display: inline-flex;
+    min-height: 38px;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #appRoot.is-mobile-shell .roomEmbedLog {
+    padding: 8px;
+    font-size: max(var(--room-font-size, 12px), 14px);
+  }
+
+  #appRoot.is-mobile-shell .roomEmbedCompose,
+  #appRoot.is-mobile-shell .ym-compose {
+    position: sticky;
+    bottom: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 42px 42px 42px 58px;
+    gap: 6px;
+    padding: 8px;
+    background: color-mix(in srgb, var(--panel2) 86%, transparent);
+    backdrop-filter: blur(8px);
+  }
+
+  #appRoot.is-mobile-shell .roomEmbedCompose .ym-input,
+  #appRoot.is-mobile-shell #roomEmbedInput,
+  #appRoot.is-mobile-shell .ym-input,
+  #appRoot.is-mobile-shell input,
+  #appRoot.is-mobile-shell select,
+  #appRoot.is-mobile-shell textarea {
+    min-height: 40px;
+    font-size: 16px;
+  }
+
+  #appRoot.is-mobile-shell .ym-voiceBar {
+    grid-template-columns: 1fr;
+    padding: 8px;
+  }
+
+  #appRoot.is-mobile-shell .ym-voiceBtns,
+  #appRoot.is-mobile-shell .ym-voiceDeviceRow,
+  #appRoot.is-mobile-shell .ym-avDeviceRow {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  #appRoot.is-mobile-shell .ym-avPanel {
+    left: 8px;
+    right: 8px;
+    bottom: 72px;
+    width: auto;
+    max-height: calc(var(--ecMobileViewportH, 100dvh) - 110px);
+  }
+
+  #appRoot.is-mobile-shell .ym-avPanel.is-popout {
+    left: 8px !important;
+    right: 8px !important;
+    bottom: 72px !important;
+    top: auto !important;
+    width: auto !important;
+    height: min(460px, calc(var(--ecMobileViewportH, 100dvh) - 104px)) !important;
+    resize: vertical;
+  }
+
+  #appRoot.is-mobile-shell .dock {
+    border-left: none;
+    border-top: 1px solid var(--edgeLight);
+    overflow: hidden;
+  }
+
+  #appRoot.is-mobile-shell .dock::before,
+  #appRoot.is-mobile-shell .dockAlertRail {
+    display: none;
+  }
+
+  #appRoot.is-mobile-shell .dockTitlebar {
+    min-height: 44px;
+  }
+
+  #appRoot.is-mobile-shell .dockMenuBar {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #appRoot.is-mobile-shell .dockProfile {
+    padding: 8px;
+  }
+
+  #appRoot.is-mobile-shell .dockPanels {
+    min-height: 0;
+  }
+
+  #appRoot.is-mobile-shell .dockPanel {
+    padding: 8px;
+  }
+
+  #appRoot.is-mobile-shell .dockTaskbar {
+    max-height: 88px;
+    overflow: auto;
+  }
+
+  #appRoot.is-mobile-shell .mobileShellNav {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: var(--mobileNavH, 62px);
+    z-index: 1000000;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    padding: 7px 8px calc(7px + env(safe-area-inset-bottom, 0px));
+    box-sizing: border-box;
+    background: linear-gradient(180deg, rgba(20, 28, 45, 0.94), rgba(8, 12, 20, 0.98));
+    border-top: 1px solid rgba(255,255,255,0.13);
+    box-shadow: 0 -12px 32px rgba(0,0,0,0.34);
+  }
+
+  #appRoot.is-mobile-shell .mobileShellNav[hidden] {
+    display: grid !important;
+  }
+
+  #appRoot.is-mobile-shell .mobileShellNavBtn {
+    border: 1px solid rgba(var(--accent-rgb),0.28);
+    border-radius: 15px;
+    background: rgba(255,255,255,0.06);
+    color: #eef4ff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    min-width: 0;
+    touch-action: manipulation;
+  }
+
+  #appRoot.is-mobile-shell .mobileShellNavIcon {
+    font-size: 17px;
+    line-height: 1;
+  }
+
+  #appRoot.is-mobile-shell .mobileShellNavBtn.is-active {
+    background: linear-gradient(180deg, rgba(var(--accent2-rgb),0.34), rgba(var(--accent-rgb),0.20));
+    border-color: rgba(var(--accent2-rgb),0.58);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 0 0 1px rgba(var(--accent-rgb),0.12);
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="rooms"] #ecDock,
+  #appRoot.is-mobile-shell[data-mobile-panel="rooms"] .roomEmbed,
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] #ecDock,
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] #sitePlaceholderSlot,
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] #siteArea {
+    display: none !important;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] #siteArea,
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbed,
+  #appRoot.is-mobile-shell[data-mobile-panel="rooms"] #siteArea,
+  #appRoot.is-mobile-shell[data-mobile-panel="rooms"] #sitePlaceholderSlot,
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] #ecDock {
+    display: flex !important;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] #siteArea {
+    padding: 8px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .siteHeader,
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .siteHeader {
+    display: none;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] #ecDock {
+    flex-direction: column;
+  }
+
+  #appRoot.is-mobile-shell .roomBrowserPopout {
+    inset: 8px 8px calc(var(--mobileNavH, 62px) + 8px) 8px;
+    padding: 0;
+  }
+
+  #appRoot.is-mobile-shell .roomBrowserPopoutCard {
+    width: 100%;
+    max-height: 100%;
+    border-radius: 14px;
+  }
+
+  #appRoot.is-mobile-shell .roomBrowserPopoutBody {
+    overflow: auto;
+  }
+
+  #appRoot.is-mobile-shell .modalCard,
+  #appRoot.is-mobile-shell .settingsModalCard,
+  #appRoot.is-mobile-shell .createRoomCard {
+    width: calc(100vw - 18px);
+    max-height: calc(var(--ecMobileViewportH, 100dvh) - var(--mobileNavH, 62px) - 18px);
+  }
+
+  #appRoot.is-mobile-shell .settingsLayout {
+    grid-template-columns: 1fr;
+  }
+
+  #appRoot.is-mobile-shell .settingsTabs {
+    border-right: none;
+    border-bottom: 1px solid var(--borderSoft);
+    flex-direction: row;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+
+  #appRoot.is-mobile-shell .settingsTabBtn {
+    flex: 0 0 auto;
+    min-width: 150px;
+  }
+
+  #appRoot.is-mobile-shell .windowsLayer {
+    inset: 0 0 var(--mobileNavH, 62px) 0;
+  }
+
+  #appRoot.is-mobile-shell .ym-window {
+    position: fixed !important;
+    left: 8px !important;
+    right: 8px !important;
+    top: 8px !important;
+    bottom: calc(var(--mobileNavH, 62px) + 8px) !important;
+    width: auto !important;
+    height: auto !important;
+    max-width: none !important;
+    max-height: none !important;
+    border-radius: 14px;
+  }
+
+  #appRoot.is-mobile-shell .ym-titlebar {
+    cursor: default;
+  }
+
+  #appRoot.is-mobile-shell .ec-emojiPopover {
+    left: 8px !important;
+    right: 8px !important;
+    bottom: calc(var(--mobileNavH, 62px) + 8px) !important;
+    top: auto !important;
+    width: auto !important;
+    height: min(430px, calc(var(--ecMobileViewportH, 100dvh) - var(--mobileNavH, 62px) - 24px));
+  }
+
+
+  /* Beta.26 mobile room chat polish: the chat panel behaves like a phone app,
+     not a squeezed desktop column. */
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] #siteArea {
+    padding: 6px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbed {
+    flex: 1 1 auto;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    border-radius: 16px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedHead {
+    flex: 0 0 auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    padding: 7px 8px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedTitle {
+    max-width: 100%;
+    font-size: 12px;
+    line-height: 1.2;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedActions {
+    display: flex;
+    width: 100%;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 1px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedActions .miniBtn {
+    flex: 1 0 auto;
+    min-width: max-content;
+    min-height: 40px;
+    padding: 7px 10px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .mobileUsersBtn {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .mobileUsersCount {
+    min-width: 20px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: rgba(var(--accent-rgb),0.16);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedBody,
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedChatCol {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: auto;
+    overflow: hidden;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedBody {
+    display: flex;
+    position: relative;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedChatCol {
+    width: 100%;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedPolicy {
+    flex: 0 0 auto;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedLog {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    padding: 9px 8px 12px;
+    scroll-padding-bottom: 90px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .ec-msgGroup {
+    grid-template-columns: 30px minmax(0, 1fr);
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .ec-msgAvatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 9px;
+    font-size: 11px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .ec-msgGroupHead {
+    gap: 6px;
+    margin-bottom: 4px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .ec-msgSender {
+    max-width: 58vw;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .ec-msgItem,
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .msgRow {
+    max-width: 100%;
+    padding: 8px 9px;
+    border-radius: 13px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .ec-globalAnnouncementCard {
+    grid-template-columns: 32px minmax(0, 1fr);
+    padding: 10px;
+    border-radius: 14px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .ec-globalAnnouncementBadge {
+    width: 30px;
+    height: 30px;
+    border-radius: 11px;
+    font-size: 15px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .ec-globalAnnouncementText {
+    font-size: 12px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .ec-msgText,
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .msgText {
+    line-height: 1.42;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .ec-msgItem--room .msgReactionDock {
+    margin-left: 0;
+    margin-top: 6px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .ec-msgItem--room .msgActions {
+    position: static;
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    margin-top: 6px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    transform: none;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .ec-msgItem--room.rxLocked .msgActions,
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .ec-msgItem--room.rxLocked:hover .msgActions,
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .ec-msgItem--room.rxLocked:focus-within .msgActions {
+    display: none;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .reactBtn,
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .reactPill {
+    min-height: 30px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedCompose,
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .ym-compose {
+    position: sticky;
+    bottom: 0;
+    z-index: 15;
+    flex: 0 0 auto;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 7px;
+    padding: 8px;
+    border-top: 1px solid var(--borderSoft);
+    background: color-mix(in srgb, var(--panel2) 94%, transparent);
+    backdrop-filter: blur(10px);
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedCompose .ym-input,
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] #roomEmbedInput {
+    grid-column: 1 / -1;
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    border-radius: 14px;
+    font-size: 16px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedCompose .ym-toolBtn,
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedCompose .ym-send {
+    width: 100%;
+    min-width: 0;
+    min-height: 42px;
+    padding-left: 6px;
+    padding-right: 6px;
+    border-radius: 13px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedUsers {
+    display: none;
+  }
+
+  #appRoot.is-mobile-shell.is-mobile-users-open[data-mobile-panel="chat"] .roomEmbedUsers {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    bottom: calc(var(--mobileNavH, 62px) + 8px);
+    z-index: 1000001;
+    display: flex !important;
+    width: auto;
+    max-height: min(48dvh, 360px);
+    border: 1px solid rgba(var(--accent-rgb),0.28);
+    border-radius: 16px;
+    box-shadow: 0 18px 42px rgba(0,0,0,0.42), inset 1px 1px 0 var(--edgeLight);
+    overflow: hidden;
+  }
+
+  #appRoot.is-mobile-shell.is-mobile-users-open[data-mobile-panel="chat"] .roomUsersList {
+    max-height: 300px;
+  }
+
+  #appRoot.is-mobile-shell.is-mobile-users-open[data-mobile-panel="chat"] .mobileUsersBtn {
+    background: linear-gradient(180deg, rgba(var(--accent2-rgb),0.32), rgba(var(--accent-rgb),0.18));
+    border-color: rgba(var(--accent2-rgb),0.58);
+  }
+
+  body.ec-mobile-keyboard-open {
+    --mobileNavH: 0px;
+  }
+
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell .mobileShellNav {
+    display: none !important;
+  }
+
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell[data-mobile-panel="chat"] #siteArea {
+    padding-bottom: 4px;
+  }
+
+  @media (max-width: 390px) {
+    #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedActions .miniBtn {
+      min-height: 38px;
+      padding-left: 8px;
+      padding-right: 8px;
+      font-size: 12px;
+    }
+
+    #appRoot.is-mobile-shell[data-mobile-panel="chat"] .ec-msgGroup {
+      grid-template-columns: 26px minmax(0, 1fr);
+      gap: 6px;
+    }
+
+    #appRoot.is-mobile-shell[data-mobile-panel="chat"] .ec-msgAvatar {
+      width: 25px;
+      height: 25px;
+      border-radius: 8px;
+    }
+  }
+
+  /* Admins often test from phones. Keep the admin panel as a small top bar
+     unless it is maximized, so it cannot cover the entire phone UI. */
+  body.ec-mobile-shell-active #ecAdminPanel {
+    left: 8px !important;
+    right: 8px !important;
+    top: max(8px, env(safe-area-inset-top, 0px)) !important;
+    bottom: auto !important;
+    width: auto !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    border-radius: 14px !important;
+  }
+
+  body.ec-mobile-shell-active #ecAdminPanel:not(.ecap-max) {
+    height: 50px !important;
+    max-height: 50px !important;
+  }
+
+  body.ec-mobile-shell-active #ecAdminPanel:not(.ecap-max) .ecap-body {
+    display: none !important;
+  }
+
+  body.ec-mobile-shell-active #ecAdminPanel .ecap-head {
+    min-height: 50px;
+    padding: 7px 8px;
+    gap: 6px;
+  }
+
+  body.ec-mobile-shell-active #ecAdminPanel .ecap-title {
+    max-width: 48vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+  }
+
+  body.ec-mobile-shell-active #ecAdminPanel .ecap-subtitle {
+    display: none;
+  }
+
+  body.ec-mobile-shell-active #ecAdminPanel .ecap-headBtns {
+    gap: 4px;
+  }
+
+  body.ec-mobile-shell-active #ecAdminPanel .ecap-iconBtn {
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+  }
+
+  body.ec-mobile-shell-active #ecAdminPanel.ecap-max {
+    top: max(8px, env(safe-area-inset-top, 0px)) !important;
+    bottom: calc(var(--mobileNavH, 62px) + 8px) !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+
+  body.ec-mobile-shell-active #ecAdminPanel.ecap-max .ecap-body {
+    height: calc(var(--ecMobileViewportH, 100dvh) - var(--mobileNavH, 62px) - 72px) !important;
+    max-height: none !important;
+  }
+
+  body.ec-mobile-shell-active #ecAdminPanel.ecap-max .ecap-navShell {
+    display: flex !important;
+    flex-direction: column !important;
+    min-height: 0 !important;
+  }
+
+  body.ec-mobile-shell-active #ecAdminPanel.ecap-max .ecap-tabGroups {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    gap: 8px !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    scrollbar-width: thin !important;
+  }
+
+  body.ec-mobile-shell-active #ecAdminPanel.ecap-max .ecap-tabGroup {
+    flex: 0 0 min(78vw, 280px) !important;
+  }
+
+  body.ec-mobile-shell-active #ecAdminPanel.ecap-max .ecap-grid2,
+  body.ec-mobile-shell-active #ecAdminPanel.ecap-max .ecap-grid3,
+  body.ec-mobile-shell-active #ecAdminPanel.ecap-max .ecap-statGrid,
+  body.ec-mobile-shell-active #ecAdminPanel.ecap-max .ecap-trendGrid,
+  body.ec-mobile-shell-active #ecAdminPanel.ecap-max .ecap-gotoGrid {
+    grid-template-columns: 1fr !important;
+  }
+
+  body.ec-mobile-shell-active #ecAdminPanel.ecap-max .ecap-row,
+  body.ec-mobile-shell-active #ecAdminPanel.ecap-max .ecap-userSearchBar,
+  body.ec-mobile-shell-active #ecAdminPanel.ecap-max .ecap-userFilterRow,
+  body.ec-mobile-shell-active #ecAdminPanel.ecap-max .ecap-actions {
+    align-items: stretch !important;
+  }
+
+  body.ec-mobile-shell-active #ecAdminPanel.ecap-max .ecap-btn,
+  body.ec-mobile-shell-active #ecAdminPanel.ecap-max .ecap-tab,
+  body.ec-mobile-shell-active #ecAdminPanel.ecap-max .ecap-gotoBtn,
+  body.ec-mobile-shell-active #ecAdminPanel.ecap-max input,
+  body.ec-mobile-shell-active #ecAdminPanel.ecap-max select,
+  body.ec-mobile-shell-active #ecAdminPanel.ecap-max textarea {
+    min-height: 44px !important;
+    font-size: 16px !important;
+  }
+
+  /* Friend-request flyouts become a phone-size sheet instead of a desktop
+     bubble that can drift off-screen. */
+
+  body.ec-mobile-shell-active .toastStack {
+    position: fixed !important;
+    left: 8px !important;
+    right: 8px !important;
+    bottom: calc(var(--mobileNavH, 62px) + 10px + env(safe-area-inset-bottom, 0px)) !important;
+    z-index: 1000030 !important;
+    max-width: none !important;
+    width: auto !important;
+  }
+
+  body.ec-mobile-shell-active .toast {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  body.ec-mobile-shell-active .dockAlertFlyout:not(.hidden) {
+    position: fixed !important;
+    left: 8px !important;
+    right: 8px !important;
+    top: 68px !important;
+    width: auto !important;
+    max-height: calc(var(--ecMobileViewportH, 100dvh) - var(--mobileNavH, 62px) - 84px) !important;
+    border-radius: 18px !important;
+    z-index: 1000002 !important;
+  }
+
+  body.ec-mobile-shell-active .dockAlertFlyoutBody {
+    max-height: calc(var(--ecMobileViewportH, 100dvh) - var(--mobileNavH, 62px) - 170px) !important;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  body.ec-mobile-shell-active #pendingRequestsList li.pendingRequestItem,
+  body.ec-mobile-shell-active #railPendingRequestsList li.pendingRequestItem {
+    align-items: center;
+    gap: 8px;
+    min-height: 58px;
+  }
+
+  body.ec-mobile-shell-active .pendingRequestItem .liLeft {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  body.ec-mobile-shell-active .pendingRequestItem .liText {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  body.ec-mobile-shell-active .pendingRequestItem .liName {
+    display: block;
+    max-width: none;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    word-break: break-word;
+    font-size: 15px;
+    font-weight: 900;
+    line-height: 1.15;
+  }
+
+  body.ec-mobile-shell-active .pendingRequestItem .liMeta {
+    font-size: 12px;
+    line-height: 1.2;
+  }
+
+}
+
+@media (max-width: 480px) {
+  #appRoot.is-mobile-shell .roomEmbedCompose,
+  #appRoot.is-mobile-shell .ym-compose {
+    grid-template-columns: minmax(0, 1fr) 38px 38px 38px 52px;
+    gap: 5px;
+  }
+
+  #appRoot.is-mobile-shell .roomEmbedActions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  #appRoot.is-mobile-shell .rbRoomRow .rbBtns,
+  #appRoot.is-mobile-shell .rbCustomRoomsList .rbRoomRow .rbBtns {
+    width: 100%;
+    margin-left: 0;
+    justify-content: stretch;
+  }
+
+  #appRoot.is-mobile-shell .rbJoinBtn,
+  #appRoot.is-mobile-shell .rbFavBtn,
+  #appRoot.is-mobile-shell .rbInviteBtn {
+    flex: 1 1 auto;
+  }
+}
+
+@media (max-width: 1120px), (max-width: 1024px) and (pointer: coarse) {
+  #appRoot.is-mobile-shell .ym-handsFreeLabel {
+    min-height: 34px;
+    font-size: 12px;
+  }
+  #appRoot.is-mobile-shell .ym-talkBtn {
+    min-height: 34px;
+    padding-inline: 10px;
+  }
+}
+
+@media (max-width: 1120px), (max-width: 1024px) and (pointer: coarse) {
+  #appRoot.is-mobile-shell .ec-media-status-icon {
+    font-size: 13px;
+    min-width: 2.4em;
+    margin-left: 8px;
+  }
+}
+
+
+@media (max-width: 1120px), (max-width: 1024px) and (pointer: coarse) {
+  #userList li .liActions {
+    gap: 6px;
+  }
+  #userList li .liActions .iconBtn {
+    min-width: 38px;
+    min-height: 34px;
+  }
+  .roomEmbedActions #btnRoomEmbedInvite {
+    display: inline-flex;
+  }
+}
+
+  /* Beta.125 mobile room browser redesign: phone users move through room
+     browsing as steps instead of scrolling one long stacked desktop grid. */
+  #appRoot.is-mobile-shell .rbMobileSteps {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    padding: 6px;
+    border: 1px solid rgba(var(--accent-rgb),0.18);
+    border-radius: 14px;
+    background: linear-gradient(180deg, rgba(var(--accent-rgb),0.10), rgba(0,0,0,0.04));
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
+  }
+
+  #appRoot.is-mobile-shell .rbMobileStep {
+    min-height: 42px;
+    border: 1px solid rgba(var(--accent-rgb),0.18);
+    border-radius: 11px;
+    background: rgba(var(--accent-rgb),0.06);
+    color: var(--text);
+    font-weight: 800;
+    letter-spacing: .01em;
+    touch-action: manipulation;
+  }
+
+  #appRoot.is-mobile-shell .rbMobileStep.is-active {
+    background: var(--primaryBtnBg);
+    color: var(--primaryBtnText);
+    border-color: var(--primaryBtnBorder);
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.14) inset;
+  }
+
+  #appRoot.is-mobile-shell .rbMobileHint {
+    display: block;
+    padding: 6px 10px 2px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.35;
+  }
+
+  #appRoot.is-mobile-shell .rbGridSelector {
+    display: block;
+    overflow: hidden;
+    height: 100%;
+    min-height: 0;
+    padding-bottom: 0;
+  }
+
+  #appRoot.is-mobile-shell .rbGridSelector > .rbCol {
+    display: none;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  #appRoot.is-mobile-shell .roomBrowser[data-rb-mobile-step="categories"] .rbCats,
+  #appRoot.is-mobile-shell .roomBrowser[data-rb-mobile-step="official"] .rbRooms,
+  #appRoot.is-mobile-shell .roomBrowser[data-rb-mobile-step="custom"] .rbCustomRooms {
+    display: flex;
+  }
+
+  #appRoot.is-mobile-shell .roomBrowser[data-rb-mobile-step="categories"] .rbCats .rbList,
+  #appRoot.is-mobile-shell .roomBrowser[data-rb-mobile-step="official"] .rbRooms .rbList,
+  #appRoot.is-mobile-shell .roomBrowser[data-rb-mobile-step="custom"] .rbCustomRooms .rbList {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #appRoot.is-mobile-shell .rbColHead {
+    min-height: 42px;
+    display: flex;
+    align-items: center;
+  }
+
+  #appRoot.is-mobile-shell .rbCatHeader,
+  #appRoot.is-mobile-shell .rbCatSub {
+    min-height: 46px;
+    font-size: 14px;
+  }
+
+  #appRoot.is-mobile-shell .rbCatSub {
+    padding-left: 34px !important;
+  }
+
+  #appRoot.is-mobile-shell .rbCatHeader .rbCatHeadRow,
+  #appRoot.is-mobile-shell .rbCatSub {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  #appRoot.is-mobile-shell .rbCatHeader .rbCatChevron {
+    display: none;
+  }
+
+  #appRoot.is-mobile-shell .rbCatCounts,
+  #appRoot.is-mobile-shell .rbCatSubMeta {
+    font-size: 12px;
+  }
+
+  #appRoot.is-mobile-shell .rbRooms .rbTools,
+  #appRoot.is-mobile-shell .rbCustomRooms .rbTools {
+    display: grid;
+    grid-template-columns: 1fr 118px;
+    align-items: stretch;
+  }
+
+  #appRoot.is-mobile-shell .rbRooms .rbCheck {
+    grid-column: 1 / -1;
+    min-height: 34px;
+    padding: 6px 8px;
+    border: 1px solid var(--borderFaint);
+    border-radius: 10px;
+    background: rgba(0,0,0,0.04);
+  }
+
+  #appRoot.is-mobile-shell .rbToolsCustom {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  #appRoot.is-mobile-shell .rbScopeBar {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    padding: 8px;
+    border-bottom: 1px solid rgba(var(--accent-rgb),0.16);
+    background: color-mix(in srgb, var(--surface2) 88%, rgba(var(--accent-rgb),0.12));
+  }
+
+  #appRoot.is-mobile-shell .rbScopeChip {
+    flex: 0 0 auto;
+    min-height: 38px;
+    padding: 8px 12px;
+  }
+
+  #appRoot.is-mobile-shell .rbSelectionLabel,
+  #appRoot.is-mobile-shell .rbCustomSelectionLabel {
+    font-size: 12px;
+    line-height: 1.35;
+  }
+
+  #appRoot.is-mobile-shell .rbRoomRow {
+    min-height: 92px;
+    padding: 12px !important;
+    border-radius: 14px;
+  }
+
+  #appRoot.is-mobile-shell .rbRoomRow .rbItemName {
+    font-size: 16px;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  #appRoot.is-mobile-shell .rbRoomRow .rbRowTags {
+    width: 100%;
+  }
+
+  #appRoot.is-mobile-shell .rbRoomRow .rbItemMeta {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-height: 1.3;
+  }
+
+  #appRoot.is-mobile-shell .rbRoomRow .rbBtns {
+    display: grid;
+    grid-template-columns: minmax(48px, .7fr) minmax(48px, .7fr) minmax(92px, 1.4fr);
+    gap: 8px;
+    align-items: stretch;
+  }
+
+  #appRoot.is-mobile-shell .rbRoomRow .rbBadge,
+  #appRoot.is-mobile-shell .rbRoomRow .rbFavBtn,
+  #appRoot.is-mobile-shell .rbRoomRow .rbInviteBtn,
+  #appRoot.is-mobile-shell .rbRoomRow .rbJoinBtn {
+    min-height: 42px;
+    border-radius: 12px;
+  }
+
+  #appRoot.is-mobile-shell .rbRoomRow .rbInviteBtn {
+    grid-column: 1 / -1;
+  }
+
+  #appRoot.is-mobile-shell .rbRoomRow .rbJoinBtn {
+    font-weight: 900;
+  }
+
+@media all {
+  .rbMobileSteps,
+  .rbMobileHint {
+    display: none;
+  }
+}
+
+@media all {
+  /* Beta.126 mobile chat screen polish: phone users get a clear room back
+     action, users sheet, uncluttered composer, and a jump-to-latest affordance. */
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedChatCol {
+    position: relative;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .mobileBackRoomsBtn,
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .mobileUsersBtn {
+    display: inline-flex !important;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .mobileBackRoomsBtn {
+    order: -20;
+    font-weight: 900;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .mobileUsersBtn {
+    order: -19;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedActions #btnRoomBrowserPopout {
+    display: none !important;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedActions {
+    scroll-snap-type: x proximity;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedActions .miniBtn {
+    scroll-snap-align: start;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedActions #btnRoomEmbedLeave {
+    margin-left: auto;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedCompose,
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .ym-compose {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+    padding: 8px max(8px, env(safe-area-inset-right, 0px)) calc(8px + env(safe-area-inset-bottom, 0px)) max(8px, env(safe-area-inset-left, 0px));
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedCompose .ym-input,
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] #roomEmbedInput {
+    grid-column: 1 / -1;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedCompose [data-mobile-compose-tool="true"] {
+    display: none !important;
+  }
+
+  #appRoot.is-mobile-shell.is-mobile-compose-tools-open[data-mobile-panel="chat"] .roomEmbedCompose [data-mobile-compose-tool="true"] {
+    display: inline-flex !important;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .mobileComposeMoreBtn,
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] #roomEmbedSend {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .mobileComposeMoreBtn[aria-expanded="true"] {
+    background: linear-gradient(180deg, rgba(var(--accent2-rgb),0.32), rgba(var(--accent-rgb),0.18));
+    border-color: rgba(var(--accent2-rgb),0.58);
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] #roomEmbedSend {
+    font-size: 15px;
+    font-weight: 900;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .mobileLatestBtn {
+    position: absolute;
+    right: 14px;
+    bottom: 96px;
+    z-index: 18;
+    display: none;
+    min-height: 38px;
+    padding: 8px 12px;
+    border: 1px solid rgba(var(--accent2-rgb),0.58);
+    border-radius: 999px;
+    background: linear-gradient(180deg, rgba(var(--accent2-rgb),0.34), rgba(var(--accent-rgb),0.22));
+    color: var(--text);
+    font-weight: 900;
+    box-shadow: 0 10px 28px rgba(0,0,0,0.32), inset 0 1px 0 rgba(255,255,255,0.16);
+    touch-action: manipulation;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .mobileLatestBtn.is-visible:not([hidden]) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell[data-mobile-panel="chat"] .mobileLatestBtn {
+    bottom: 92px;
+  }
+
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedActions {
+    display: none;
+  }
+
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedHead {
+    padding: 5px 8px;
+  }
+
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedTitle {
+    font-size: 11px;
+  }
+
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedLog {
+    scroll-padding-bottom: 120px;
+  }
+}
+
+body:not(.ec-mobile-shell-active) #btnRoomEmbedBackMobile,
+body:not(.ec-mobile-shell-active) #btnRoomEmbedUsersMobile,
+body:not(.ec-mobile-shell-active) #btnRoomEmbedToolsMobile,
+body:not(.ec-mobile-shell-active) #btnRoomEmbedLatestMobile {
+  display: none !important;
+}
+
+@media all {
+  /* Beta.127 mobile Hub polish: turn the desktop buddy dock into phone-sized
+     sections so users do not have to hunt through menu bars and stacked panels. */
+  .mobileHubNav,
+  .mobileHubMePanel {
+    display: none;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] #ecDock {
+    padding: 0;
+    background: linear-gradient(180deg, var(--panel), var(--panel2));
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .dockTitlebar {
+    flex: 0 0 auto;
+    min-height: 48px;
+    padding: 7px 8px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .dockTitleBtns {
+    gap: 5px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .dockTitleBtns .tbBtn {
+    min-height: 36px;
+    padding: 6px 8px;
+    border-radius: 11px;
+    font-size: 12px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .dockMenuBar,
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .dockTabs {
+    display: none !important;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .mobileHubNav[hidden],
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .mobileHubNav {
+    display: grid !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+    flex: 0 0 auto;
+    padding: 7px 8px;
+    border-top: 1px solid rgba(255,255,255,0.12);
+    border-bottom: 1px solid var(--borderSoft);
+    background: color-mix(in srgb, var(--panel2) 92%, transparent);
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .mobileHubSectionBtn {
+    min-width: 0;
+    min-height: 48px;
+    padding: 6px 4px;
+    border: 1px solid rgba(var(--accent-rgb),0.24);
+    border-radius: 15px;
+    background: rgba(255,255,255,0.08);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    font-size: 11px;
+    font-weight: 900;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .mobileHubSectionBtn.is-active {
+    background: linear-gradient(180deg, rgba(var(--accent2-rgb),0.32), rgba(var(--accent-rgb),0.18));
+    border-color: rgba(var(--accent2-rgb),0.58);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 0 0 1px rgba(var(--accent-rgb),0.12);
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .mobileHubSectionIcon {
+    font-size: 18px;
+    line-height: 1;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .mobileHubSectionText {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .dockProfile {
+    flex: 0 0 auto;
+    padding: 8px;
+    border-bottom: 1px solid var(--borderSoft);
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .dockProfile .meRow {
+    display: none;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"][data-mobile-hub-section="me"] .dockProfile .meRow {
+    display: flex;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"][data-mobile-hub-section="me"] .dockProfile .searchRow,
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"][data-mobile-hub-section="alerts"] .dockProfile {
+    display: none !important;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .dockSearch {
+    min-height: 42px;
+    border-radius: 14px;
+    font-size: 16px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .dockPanels {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+    background: transparent;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .dockPanel {
+    position: absolute;
+    inset: 0;
+    padding: 9px;
+    gap: 8px;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .dockSection {
+    padding: 8px;
+    border-radius: 16px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .dockSection .list li,
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .list li {
+    min-height: 58px;
+    padding: 11px 10px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .dockSection .list li .liActions,
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .list li .liActions {
+    opacity: 1;
+    transform: none;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .panelActions.compact {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 7px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .panelActions.compact .miniBtn,
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .panelActions.compact .miniInput {
+    width: 100%;
+    min-height: 42px;
+    font-size: 16px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"][data-mobile-hub-section="alerts"] .dockPanels,
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"][data-mobile-hub-section="me"] .dockPanels {
+    display: none !important;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .mobileHubMePanel[hidden],
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .mobileHubMePanel {
+    display: none !important;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"][data-mobile-hub-section="me"] .mobileHubMePanel[hidden],
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"][data-mobile-hub-section="me"] .mobileHubMePanel {
+    display: flex !important;
+    flex-direction: column;
+    gap: 10px;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding: 10px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .mobileHubMeHead {
+    padding: 11px;
+    border: 1px solid var(--borderSoft);
+    border-radius: 16px;
+    background: rgba(255,255,255,0.08);
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .mobileHubMeTitle {
+    font-weight: 950;
+    font-size: 16px;
+    color: var(--text);
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .mobileHubMeHint {
+    margin-top: 3px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.35;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .mobileHubMeActions {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .mobileHubActionBtn {
+    min-height: 48px;
+    width: 100%;
+    border: 1px solid rgba(var(--accent-rgb),0.28);
+    border-radius: 15px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,255,255,0.06));
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 900;
+    text-align: left;
+    padding: 10px 12px;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .mobileHubActionBtn:active,
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .mobileHubActionBtn:focus-visible {
+    background: linear-gradient(180deg, rgba(var(--accent2-rgb),0.30), rgba(var(--accent-rgb),0.18));
+    outline: none;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .dockAlertRail {
+    display: none !important;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"][data-mobile-hub-section="alerts"] .dockAlertRail {
+    position: static !important;
+    left: auto !important;
+    top: auto !important;
+    width: auto !important;
+    display: grid !important;
+    grid-template-columns: 1fr;
+    align-items: stretch;
+    gap: 9px;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding: 10px;
+    pointer-events: auto;
+    z-index: 2;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"][data-mobile-hub-section="alerts"] .dockAlertBubble {
+    --bubble-base-x: 0px !important;
+    --bubble-float-x: 0px !important;
+    --bubble-float-y: 0px !important;
+    width: 100%;
+    min-height: 64px;
+    opacity: 1 !important;
+    visibility: visible !important;
+    pointer-events: auto !important;
+    transform: none !important;
+    border: 1px solid rgba(var(--accent-rgb),0.32);
+    border-radius: 17px;
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 10px;
+    padding: 12px;
+    transition: none;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"][data-mobile-hub-section="alerts"] .dockAlertIcon {
+    font-size: 21px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"][data-mobile-hub-section="alerts"] .dockAlertLabel {
+    flex: 1 1 auto;
+    text-align: left;
+    font-size: 14px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"][data-mobile-hub-section="alerts"] .dockAlertCount {
+    min-width: 28px;
+    min-height: 24px;
+    border-radius: 999px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"][data-mobile-hub-section="alerts"] .dockAlertFlyout:not(.hidden) {
+    position: static !important;
+    width: 100% !important;
+    max-height: none !important;
+    margin-top: 4px;
+    border-radius: 17px !important;
+    transform: none !important;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"][data-mobile-hub-section="alerts"] .dockAlertFlyoutBody {
+    max-height: min(44dvh, 360px) !important;
+  }
+
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell[data-mobile-panel="hub"] .mobileHubNav,
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell[data-mobile-panel="hub"] .dockTitlebar {
+    display: none !important;
+  }
+}
+
+/* Beta.128 mobile PM/group chat sheets: floating desktop windows become
+   full-screen phone conversations with a tiny action strip and hidden tools. */
+@media all {
+  #appRoot.is-mobile-shell .ym-mobileWindowNav {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    padding: 7px 8px;
+    border-bottom: 1px solid var(--borderSoft);
+    background: linear-gradient(180deg, rgba(var(--accent-rgb),0.12), rgba(0,0,0,0.02));
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"] .ym-mobileWindowNav {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  #appRoot.is-mobile-shell .ym-mobileWindowNavBtn {
+    min-height: 44px;
+    min-width: 0;
+    padding: 7px 8px;
+    border-radius: 13px;
+    border: 1px solid rgba(var(--accent-rgb),0.25);
+    background: linear-gradient(180deg, var(--btnBg), var(--btnBg2));
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 900;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  #appRoot.is-mobile-shell .ym-mobileWindowNavBtn[aria-expanded="true"] {
+    border-color: rgba(var(--accent2-rgb),0.58);
+    background: linear-gradient(180deg, rgba(var(--accent2-rgb),0.28), rgba(var(--accent-rgb),0.13));
+  }
+
+  #appRoot.is-mobile-shell .ym-mobileWindowCloseBtn {
+    border-color: rgba(255,77,79,0.34);
+    color: #ffb1b8;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-kind="dm"],
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"] {
+    display: flex;
+    flex-direction: column;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-kind="dm"] .ym-titlebar,
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"] .ym-titlebar {
+    flex: 0 0 auto;
+    min-height: 46px;
+    padding: 8px 9px;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-kind="dm"] .ym-title,
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"] .ym-title {
+    max-width: none;
+    font-size: 13px;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-kind="dm"] .winBtn,
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"] .winBtn {
+    width: 38px;
+    height: 34px;
+    border-radius: 12px;
+    font-size: 16px;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-kind="dm"] .ym-body,
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"] .ym-body {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-kind="dm"] .ym-log,
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"] .ym-log {
+    min-height: 0;
+    padding: 9px 8px 12px;
+    font-size: 14px;
+    line-height: 1.42;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-kind="dm"] .ym-body > .ym-toolbar,
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"] .ym-body > .ym-groupActionToolbar {
+    display: none;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-kind="dm"].is-mobile-window-tools-open .ym-body > .ym-toolbar,
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"].is-mobile-window-tools-open .ym-body > .ym-groupActionToolbar {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 7px;
+    align-items: stretch;
+    padding: 8px;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"].is-mobile-window-tools-open .ym-body > .ym-groupActionToolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-kind="dm"] .ym-toolbar .ym-toolHint,
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"] .ym-toolbar .ym-toolHint {
+    display: none;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-kind="dm"] .ym-toolbar .ym-toolBtn,
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"] .ym-toolbar .ym-toolBtn {
+    width: 100%;
+    min-width: 0;
+    min-height: 40px;
+    border-radius: 13px;
+    font-size: 13px;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-kind="dm"] .ym-compose,
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"] .ym-compose {
+    flex: 0 0 auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 44px 68px;
+    gap: 7px;
+    padding: 8px;
+    border-top: 1px solid var(--borderSoft);
+    background: color-mix(in srgb, var(--panel2) 94%, transparent);
+    backdrop-filter: blur(10px);
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-kind="dm"] .ym-compose .ym-input,
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"] .ym-compose .ym-input {
+    min-width: 0;
+    min-height: 44px;
+    border-radius: 14px;
+    font-size: 16px;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-kind="dm"] .ym-compose .ym-toolBtn,
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"] .ym-compose .ym-toolBtn,
+  #appRoot.is-mobile-shell .ym-window[data-kind="dm"] .ym-compose .ym-send,
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"] .ym-compose .ym-send {
+    width: 100%;
+    min-height: 44px;
+    min-width: 0;
+    border-radius: 14px;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"] .ym-groupChatLayout {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+    position: relative;
+    overflow: hidden;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"] .ym-groupChatMain {
+    width: 100%;
+    min-width: 0;
+    border-right: none;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"] .ym-groupMembersPanel {
+    display: none;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"] .ym-mobileGroupUsersBackdrop {
+    display: none;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"].is-mobile-group-members-open .ym-mobileGroupUsersBackdrop {
+    position: fixed;
+    inset: 0 0 var(--mobileNavH, 62px) 0;
+    z-index: 1000002;
+    display: block;
+    width: 100%;
+    min-height: 100%;
+    padding: 0;
+    border: 0;
+    background: rgba(0,0,0,0.26);
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"].is-mobile-group-members-open .ym-groupMembersPanel {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    bottom: calc(var(--mobileNavH, 62px) + 8px);
+    z-index: 1000003;
+    display: flex !important;
+    width: auto;
+    max-height: min(48dvh, 360px);
+    border: 1px solid rgba(var(--accent-rgb),0.28);
+    border-radius: 16px;
+    box-shadow: 0 18px 42px rgba(0,0,0,0.42), inset 1px 1px 0 var(--edgeLight);
+    overflow: hidden;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"].is-mobile-group-members-open .ym-groupMembersList {
+    max-height: 300px;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"] .ym-groupMembersClose {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell .ym-window[data-kind="dm"],
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell .ym-window[data-kind="group"] {
+    bottom: 4px !important;
+  }
+
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell .ym-mobileWindowNav,
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell .ym-window[data-kind="dm"] .ym-body > .ym-toolbar,
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell .ym-window[data-kind="group"] .ym-body > .ym-groupActionToolbar {
+    display: none !important;
+  }
+}
+
+.ym-mobileWindowNav { display: none; }
+
+/* Beta.128 mobile settings: make settings behave like a phone drawer with
+   horizontally-scannable sections and sticky Save/Close actions. */
+@media all {
+  body.ec-mobile-shell-active #settingsModal:not(.hidden) {
+    align-items: stretch;
+    justify-content: stretch;
+    padding: 8px 8px calc(var(--mobileNavH, 62px) + 8px);
+  }
+
+  #appRoot.is-mobile-shell .settingsModalCard {
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    max-height: none;
+    border-radius: 18px;
+  }
+
+  #appRoot.is-mobile-shell .settingsModalHead {
+    flex: 0 0 auto;
+    padding: 12px 14px;
+  }
+
+  #appRoot.is-mobile-shell .settingsModalHead .modalTitle {
+    font-size: 16px;
+  }
+
+  #appRoot.is-mobile-shell .settingsModalHead .modalSubTitle {
+    font-size: 12px;
+    line-height: 1.3;
+  }
+
+  #appRoot.is-mobile-shell .settingsBody {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  #appRoot.is-mobile-shell .settingsLayout {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+  }
+
+  #appRoot.is-mobile-shell .settingsTabs {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 7px;
+    padding: 8px;
+    border-right: none;
+    border-bottom: 1px solid var(--borderSoft);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    scroll-snap-type: x proximity;
+  }
+
+  #appRoot.is-mobile-shell .settingsTabBtn {
+    flex: 0 0 auto;
+    min-width: 132px;
+    min-height: 42px;
+    padding: 9px 11px;
+    border-radius: 14px;
+    text-align: center;
+    font-size: 12px;
+    scroll-snap-align: start;
+    touch-action: manipulation;
+  }
+
+  #appRoot.is-mobile-shell .settingsPanels {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  #appRoot.is-mobile-shell .settingsPanel {
+    height: 100%;
+    padding: 12px;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #appRoot.is-mobile-shell .settingsSection {
+    padding: 12px;
+    margin-bottom: 12px;
+    border: 1px solid var(--borderSoft);
+    border-radius: 16px;
+    background: rgba(255,255,255,0.035);
+  }
+
+  #appRoot.is-mobile-shell .settingsModalFoot {
+    position: sticky;
+    bottom: 0;
+    z-index: 4;
+    flex: 0 0 auto;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 10px max(10px, env(safe-area-inset-right, 0px)) max(10px, env(safe-area-inset-bottom, 0px)) max(10px, env(safe-area-inset-left, 0px));
+    box-shadow: 0 -12px 28px rgba(0,0,0,0.22);
+  }
+
+  #appRoot.is-mobile-shell .settingsFootLeft,
+  #appRoot.is-mobile-shell .settingsFootRight,
+  #appRoot.is-mobile-shell .settingsModalFoot .ghostBtn,
+  #appRoot.is-mobile-shell .settingsModalFoot .primaryBtn {
+    width: 100%;
+  }
+
+  #appRoot.is-mobile-shell .settingsFootLeft,
+  #appRoot.is-mobile-shell .settingsFootRight {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  #appRoot.is-mobile-shell .settingsModalFoot .ghostBtn,
+  #appRoot.is-mobile-shell .settingsModalFoot .primaryBtn {
+    min-height: 42px;
+    justify-content: center;
+  }
+
+  #appRoot.is-mobile-shell .settingsPanel input,
+  #appRoot.is-mobile-shell .settingsPanel select,
+  #appRoot.is-mobile-shell .settingsPanel button,
+  #appRoot.is-mobile-shell .settingsPanel a.miniBtn {
+    min-height: 42px;
+    font-size: 16px;
+  }
+
+  #appRoot.is-mobile-shell .settingsPanel .smallText,
+  #appRoot.is-mobile-shell .settingsPanel .muted {
+    line-height: 1.35;
+  }
+
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell .settingsModalCard {
+    height: var(--ecMobileViewportH, 100dvh);
+  }
+}
+
+@media all {
+  #appRoot.is-mobile-shell .ym-mobileWindowUsersBtn {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Beta.129 mobile profile/avatar/gallery polish: profile windows become
+   phone-style profile sheets with section navigation and edit shortcuts. */
+.ym-mobileProfileNav,
+.ym-mobileProfileEditDrawer {
+  display: none;
+}
+
+@media all {
+  #appRoot.is-mobile-shell .ecProfileWindow {
+    display: flex;
+    flex-direction: column;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileWindow .ym-titlebar {
+    flex: 0 0 auto;
+    min-height: 46px;
+    padding: 8px 9px;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileWindow .ym-title {
+    max-width: none;
+    font-size: 13px;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileWindow .winBtn {
+    width: 38px;
+    height: 34px;
+    border-radius: 12px;
+    font-size: 16px;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileWindow .ym-mobileProfileNav {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 7px 8px;
+    border-bottom: 1px solid var(--borderSoft);
+    background: linear-gradient(180deg, rgba(var(--accent-rgb),0.12), rgba(0,0,0,0.02));
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileWindow .ym-mobileProfileNav::-webkit-scrollbar {
+    display: none;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileWindow .ym-mobileProfileNavBtn,
+  #appRoot.is-mobile-shell .ecProfileWindow .ym-mobileProfileEditAction {
+    flex: 0 0 auto;
+    min-width: 76px;
+    min-height: 44px;
+    padding: 7px 10px;
+    border-radius: 13px;
+    border: 1px solid rgba(var(--accent-rgb),0.25);
+    background: linear-gradient(180deg, var(--btnBg), var(--btnBg2));
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 900;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileWindow .ym-mobileProfileNavBtn.is-active,
+  #appRoot.is-mobile-shell .ecProfileWindow .ym-mobileProfileNavBtn[aria-expanded="true"] {
+    border-color: rgba(var(--accent2-rgb),0.58);
+    background: linear-gradient(180deg, rgba(var(--accent2-rgb),0.28), rgba(var(--accent-rgb),0.13));
+  }
+
+  #appRoot.is-mobile-shell .ecProfileWindow .ym-mobileProfileCloseBtn {
+    border-color: rgba(255,77,79,0.34);
+    color: #ffb1b8;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileWindow.is-mobile-profile-edit-open .ym-mobileProfileEditDrawer {
+    flex: 0 0 auto;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 7px;
+    padding: 8px;
+    border-bottom: 1px solid var(--borderSoft);
+    background: color-mix(in srgb, var(--panel2) 94%, transparent);
+  }
+
+  #appRoot.is-mobile-shell .ecProfileWindow .ym-mobileProfileEditAction {
+    width: 100%;
+    min-width: 0;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileWindow .ym-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: auto;
+    overflow: hidden;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileWindow .ym-log {
+    height: 100%;
+    min-height: 0;
+    overflow: auto;
+    padding: 0 0 10px;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileWindow .ym-compose,
+  #appRoot.is-mobile-shell .ecProfileWindow .ym-resize,
+  #appRoot.is-mobile-shell .ecProfileWindow .ecProfileResizeHint {
+    display: none !important;
+  }
+
+  #appRoot.is-mobile-shell .ecProfilePageCard {
+    width: 100%;
+    min-height: 100%;
+    padding: 0 0 12px;
+    border-radius: 0;
+    border-left: 0;
+    border-right: 0;
+    box-shadow: none;
+    overflow-x: hidden;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileHeroFacebook {
+    border-radius: 0 0 22px 22px;
+    min-height: 176px;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileTopFacebook,
+  #appRoot.is-mobile-shell .ecProfileTopPremium {
+    grid-template-columns: 82px minmax(0, 1fr);
+    gap: 10px;
+    align-items: end;
+    padding: 14px 12px 12px;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileAvatarFacebook,
+  #appRoot.is-mobile-shell .ecProfileAvatarLarge {
+    width: 82px;
+    height: 82px;
+    border-radius: 22px;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileTitleLarge {
+    font-size: clamp(20px, 7vw, 28px);
+    line-height: 1.05;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileMeta {
+    font-size: 12px;
+    line-height: 1.25;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileHeroActions {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    width: 100%;
+    padding-top: 4px;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileHeroActions .miniBtn,
+  #appRoot.is-mobile-shell .ecProfileActions .miniBtn,
+  #appRoot.is-mobile-shell .ecProfileComposerQuickRow .miniBtn,
+  #appRoot.is-mobile-shell .ecProfileComposerActions .miniBtn,
+  #appRoot.is-mobile-shell .ecProfileGalleryFilters .miniBtn,
+  #appRoot.is-mobile-shell .ecProfileGalleryMoreRow .miniBtn,
+  #appRoot.is-mobile-shell .ecProfilePostActions .miniBtn {
+    min-height: 40px;
+    border-radius: 13px;
+    padding: 8px 10px;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileFacebookBar {
+    padding: 8px 10px;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileSummaryRowFacebook,
+  #appRoot.is-mobile-shell .ecProfileQuickFactsFacebook,
+  #appRoot.is-mobile-shell .ecProfileQuickFacts,
+  #appRoot.is-mobile-shell .ecProfileFacebookLayout,
+  #appRoot.is-mobile-shell .ecProfileFacebookLayoutPremium,
+  #appRoot.is-mobile-shell .ecProfileViewGrid,
+  #appRoot.is-mobile-shell .ecProfileViewGridPremium,
+  #appRoot.is-mobile-shell .ecProfilePhotosPane,
+  #appRoot.is-mobile-shell .ecProfileFavoritesGrid,
+  #appRoot.is-mobile-shell .ecProfileGrid,
+  #appRoot.is-mobile-shell .ecProfileComposerGrid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileFacebookLayout,
+  #appRoot.is-mobile-shell .ecProfileFacebookLayoutPremium,
+  #appRoot.is-mobile-shell .ecProfileViewGrid,
+  #appRoot.is-mobile-shell .ecProfilePhotosPane,
+  #appRoot.is-mobile-shell .ecProfileFavoritesGrid {
+    padding: 10px;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileStickyNav {
+    position: sticky;
+    top: 0;
+    z-index: 7;
+    padding: 8px;
+    background: color-mix(in srgb, var(--panel) 94%, transparent);
+    border-bottom: 1px solid var(--borderSoft);
+    backdrop-filter: blur(12px);
+  }
+
+  #appRoot.is-mobile-shell .ecProfileSegmentedTabs,
+  #appRoot.is-mobile-shell .ecProfileFacebookTabs,
+  #appRoot.is-mobile-shell .ecProfileGalleryFilters,
+  #appRoot.is-mobile-shell .ecProfilePresetStyleTabs {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 7px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileSegmentedTabs::-webkit-scrollbar,
+  #appRoot.is-mobile-shell .ecProfileFacebookTabs::-webkit-scrollbar,
+  #appRoot.is-mobile-shell .ecProfileGalleryFilters::-webkit-scrollbar,
+  #appRoot.is-mobile-shell .ecProfilePresetStyleTabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileTabBtn,
+  #appRoot.is-mobile-shell .ecProfilePresetTab {
+    flex: 0 0 auto;
+    min-height: 44px;
+    min-width: 76px;
+    border-radius: 13px;
+    font-size: 12px;
+    text-align: center;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileRailToggle {
+    display: none;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileRail,
+  #appRoot.is-mobile-shell .ecProfileMainColumn,
+  #appRoot.is-mobile-shell .ecProfileSectionCard,
+  #appRoot.is-mobile-shell .ecProfileSectionCardPremium,
+  #appRoot.is-mobile-shell .ecProfilePostCard,
+  #appRoot.is-mobile-shell .ecProfileFavoriteCard {
+    min-width: 0;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileSectionCard,
+  #appRoot.is-mobile-shell .ecProfileSectionCardPremium {
+    border-radius: 16px;
+    padding: 12px;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileComposerTop {
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileComposerAvatar {
+    width: 42px;
+    height: 42px;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileComposerTextarea,
+  #appRoot.is-mobile-shell .ecProfileTextarea,
+  #appRoot.is-mobile-shell .ecProfileInput,
+  #appRoot.is-mobile-shell .ecProfileSelect {
+    font-size: 16px;
+    border-radius: 14px;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileComposerQuickRow {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileComposerActions,
+  #appRoot.is-mobile-shell .ecProfilePostHead,
+  #appRoot.is-mobile-shell .ecProfilePostActions,
+  #appRoot.is-mobile-shell .ecProfileGalleryToolbar,
+  #appRoot.is-mobile-shell .ecProfileFieldMetaRow,
+  #appRoot.is-mobile-shell .ecProfileUploadRow,
+  #appRoot.is-mobile-shell .ecProfilePresetActions {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    align-items: stretch;
+  }
+
+  #appRoot.is-mobile-shell .ecProfilePhotoGrid,
+  #appRoot.is-mobile-shell .ecProfilePhotoGalleryGrid,
+  #appRoot.is-mobile-shell .ecProfilePhotoMiniGrid,
+  #appRoot.is-mobile-shell .ecProfilePresetGrid,
+  #appRoot.is-mobile-shell [data-owner-avatar-preset-grid] {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  #appRoot.is-mobile-shell .ecProfilePhotoTile,
+  #appRoot.is-mobile-shell .ecProfilePresetBtn {
+    min-height: 112px;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileOwnerEditorLayer {
+    position: fixed;
+    inset: 0;
+    z-index: 1000020;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileOwnerEditorBackdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.62);
+  }
+
+  #appRoot.is-mobile-shell [data-profile-owner-panel] {
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    top: 8px;
+    bottom: calc(var(--mobileNavH, 62px) + 8px);
+    width: auto;
+    max-width: none;
+    max-height: none;
+    overflow: auto;
+    border-radius: 18px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #appRoot.is-mobile-shell [data-profile-owner-panel] .ecProfileOwnerDialogBody,
+  #appRoot.is-mobile-shell .ecProfileOwnerDialogBody {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell .ecProfileWindow .ym-mobileProfileNav,
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell .ecProfileWindow .ym-mobileProfileEditDrawer,
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell .ecProfileWindow .ecProfileHeroFacebook,
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell .ecProfileWindow .ecProfileFacebookBar {
+    display: none !important;
+  }
+}
+
+@media all {
+  /* Beta.130 mobile release-candidate audit: guard against confusing dead-ends
+     and duplicate phone navigation while keeping desktop behavior untouched. */
+  #appRoot.is-mobile-shell .mobileShellNavBtn:disabled,
+  #appRoot.is-mobile-shell .mobileShellNavBtn[aria-disabled="true"] {
+    opacity: 0.48;
+    cursor: not-allowed;
+    filter: grayscale(0.35);
+  }
+
+  #appRoot.is-mobile-shell .mobileShellNavBtn:disabled .mobileShellNavIcon,
+  #appRoot.is-mobile-shell .mobileShellNavBtn[aria-disabled="true"] .mobileShellNavIcon {
+    opacity: 0.72;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileWindow > .ym-mobileWindowNav {
+    display: none !important;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileWindow .ym-mobileProfileEditBtn:disabled,
+  #appRoot.is-mobile-shell .ecProfileWindow .ym-mobileProfileEditBtn[aria-disabled="true"] {
+    opacity: 0.52;
+    cursor: not-allowed;
+  }
+
+  #appRoot.is-mobile-shell .ecProfileWindow:not(.has-mobile-profile-edit).is-mobile-profile-edit-open .ym-mobileProfileEditDrawer {
+    display: none !important;
+  }
+
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell .ecProfileWindow [data-profile-owner-panel] {
+    top: 4px;
+    bottom: 4px;
+  }
+}
+
+/* Beta.306 mobile tap targets/search controls: every interactive search/filter
+   control in the phone shell gets a thumb-size hit area and 16px input text to
+   avoid mobile browser zoom. */
+@media all {
+  #appRoot.is-mobile-shell .rbSearch,
+  #appRoot.is-mobile-shell .rbSelect,
+  #appRoot.is-mobile-shell .dockSearchInput,
+  #appRoot.is-mobile-shell .friendSearchInput,
+  #appRoot.is-mobile-shell .groupSearchInput,
+  #appRoot.is-mobile-shell input[type="search"],
+  #appRoot.is-mobile-shell input[type="text"],
+  #appRoot.is-mobile-shell select {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  #appRoot.is-mobile-shell button,
+  #appRoot.is-mobile-shell .miniBtn,
+  #appRoot.is-mobile-shell .iconBtn,
+  #appRoot.is-mobile-shell .dockMenuBtn,
+  #appRoot.is-mobile-shell .tabBtn,
+  #appRoot.is-mobile-shell .tbBtn {
+    touch-action: manipulation;
+  }
+
+  #appRoot.is-mobile-shell .rbTools,
+  #appRoot.is-mobile-shell .rbToolsCustom,
+  #appRoot.is-mobile-shell .dockSearchRow,
+  #appRoot.is-mobile-shell .dockPanelSearchRow {
+    gap: 8px;
+  }
+}
+
+/* Mobile room radio: many stations should scroll horizontally instead of making the chat hard to use. */
+@media (max-width: 720px) {
+  .roomEmbedMediaStations {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 6px;
+    scroll-snap-type: x proximity;
+  }
+  .roomEmbedMediaStationBtn {
+    flex: 0 0 auto;
+    min-height: 38px;
+    scroll-snap-align: start;
+    white-space: nowrap;
+  }
+  .roomEmbedMediaControls {
+    gap: 10px;
+  }
+  .roomEmbedMediaRail.is-compact {
+    margin: 6px 8px 0;
+    padding: 7px 8px;
+  }
+  .roomEmbedMediaRail.is-compact .roomEmbedMediaFrame {
+    min-height: 72px;
+    height: 72px;
+    max-height: 72px;
+  }
+  .roomEmbedMediaRail.is-expanded .roomEmbedMediaFrame {
+    min-height: 150px;
+  }
+  .roomEmbedMediaRail.is-compact .roomEmbedMediaTitle {
+    font-size: 12px;
+  }
+
+}
+
+@media all {
+  #appRoot.is-mobile-shell.is-mobile-users-open[data-mobile-panel="chat"] .roomEmbedModPanel {
+    margin: 8px;
+  }
+
+  #appRoot.is-mobile-shell.is-mobile-users-open[data-mobile-panel="chat"] .roomUsersList {
+    min-height: 90px;
+  }
+}
+
+
+/* F062 mobile room status filter */
+#appRoot.is-mobile-shell #rbRoomStatusFilter {
+  min-width: 118px;
+}
+
+#appRoot.is-mobile-shell .rbRowTag.is-blocked-tag,
+#appRoot.is-mobile-shell .rbRowTag.is-policy-tag {
+  max-width: 86px;
+}
+
+/* Beta.267 F116: PM/group windows act as full-screen phone sheets, not draggable desktop popups. */
+@media all {
+  #appRoot.is-mobile-shell .ym-window[data-mobile-sheet="pm"],
+  #appRoot.is-mobile-shell .ym-window[data-kind="dm"] {
+    inset: 8px 8px calc(var(--mobileNavH, 62px) + 8px) 8px !important;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-radius: 18px;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-mobile-sheet="pm"] .ym-body,
+  #appRoot.is-mobile-shell .ym-window[data-kind="dm"] .ym-body {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-mobile-sheet="pm"] .ym-log,
+  #appRoot.is-mobile-shell .ym-window[data-kind="dm"] .ym-log {
+    flex: 1 1 auto;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-mobile-sheet="pm"] .ec-chatLink,
+  #appRoot.is-mobile-shell .ym-window[data-kind="dm"] .ec-chatLink {
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+}
+
+/* Beta.305 F276: both PM and group conversations are explicit mobile sheets. */
+@media all {
+  #appRoot.is-mobile-shell .ym-window[data-mobile-sheet="group"],
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"] {
+    inset: 8px 8px calc(var(--mobileNavH, 62px) + 8px) 8px !important;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-radius: 18px;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-mobile-sheet="group"] .ym-body,
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"] .ym-body {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-mobile-sheet="group"] .ym-log,
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"] .ym-log {
+    flex: 1 1 auto;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[data-mobile-sheet="group"] .ec-chatLink,
+  #appRoot.is-mobile-shell .ym-window[data-kind="group"] .ec-chatLink {
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+}
