@@ -61,7 +61,6 @@ from realtime.state import (
     ROOM_SLOWMODE_CACHE as _ROOM_SLOWMODE_CACHE,
     ROOM_SLOWMODE_CACHE_LOCK as _ROOM_SLOWMODE_CACHE_LOCK,
     set_room_slowmode_cache as _set_room_slowmode_cache,
-    configure_shared_state,
     connected_room_targets,
     live_room_counts as shared_live_room_counts,
     room_users as shared_room_users,
@@ -84,11 +83,8 @@ def register_socketio_handlers(socketio, settings):
     Registers all Socket.IO event handlers. Uses PostgreSQL via get_db() for persistence.
     """
 
-    # Best-effort Redis-backed shared state for multi-worker presence/room truth.
-    try:
-        configure_shared_state(settings)
-    except Exception:
-        pass
+    # Shared realtime state is configured in server_init.create_app() so startup
+    # can fail loudly for scaled deployments instead of hiding Redis failures.
 
     def _user_sids(username: str) -> list[str]:
         """Return all active Socket.IO session IDs for a given username."""
