@@ -2,18 +2,25 @@
 
 Gunicorn entrypoint for EchoChat.
 
-Run (example):
-  ECHOCHAT_SOCKETIO_ASYNC=eventlet \
-  ECHOCHAT_SOCKETIO_MESSAGE_QUEUE=redis://127.0.0.1:6379/0 \
-  gunicorn -k eventlet -w 2 -b 0.0.0.0:5000 wsgi:app
+Run (single instance example):
+  ECHOCHAT_SOCKETIO_ASYNC=threading \
+  gunicorn -k gthread -w 1 --threads 100 -b 127.0.0.1:5000 wsgi:app
+
+Scale-out example:
+  Start separate one-worker instances on ports 5000-5009 behind sticky Caddy/Nginx routing,
+  with ECHOCHAT_SOCKETIO_MESSAGE_QUEUE=redis://127.0.0.1:6379/1.
 
 Notes:
-- For multi-worker Socket.IO, a Redis message queue is required.
+- Keep Gunicorn at -w 1 per Echo-Chat instance; do not run Gunicorn with multiple workers for Socket.IO.
 - Do NOT start the janitor loop inside Gunicorn workers; run janitor_runner.py
   as a separate systemd service.
 """
 
 from __future__ import annotations
+
+from env_loader import load_project_dotenv
+
+load_project_dotenv()
 
 import os
 
