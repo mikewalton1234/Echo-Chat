@@ -71,7 +71,7 @@ def _find_user(cur, ident: str):
         cur.execute("SELECT id, username, email, email_encrypted, is_admin FROM users WHERE id = %s;", (int(ident),))
         return cur.fetchone()
 
-    cur.execute("SELECT id, username, email, email_encrypted, is_admin FROM users WHERE username = %s;", (ident,))
+    cur.execute("SELECT id, username, email, email_encrypted, is_admin FROM users WHERE LOWER(username) = LOWER(%s);", (ident,))
     row = cur.fetchone()
     if row:
         return row
@@ -91,7 +91,9 @@ def _get_role_id(cur, role: str, create_role: bool):
 
     # Minimal role creation. Permissions should already exist for a seeded schema,
     # but in case this runs before seeding, we still create a placeholder role.
-    cur.execute("INSERT INTO roles (name, description) VALUES (%s, %s) RETURNING id;", (role, f"{role} role"))
+    # The roles table intentionally has only (id, name); do not assume a
+    # description column exists on older or fresh databases.
+    cur.execute("INSERT INTO roles (name) VALUES (%s) RETURNING id;", (role,))
     return cur.fetchone()[0]
 
 

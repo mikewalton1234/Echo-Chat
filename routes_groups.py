@@ -34,7 +34,9 @@ Implements:
 
 NOTE:
   - Group chat messages are stored in messages.room as "g:<group_id>".
-  - For backwards-compat, unread_count also considers legacy room=str(group_id).
+  - Legacy bare-numeric group message keys are disabled by default because they
+    can collide with public/custom room names. Enable only with
+    allow_legacy_numeric_group_history=true for deliberate migration reads.
 """
 
 from __future__ import annotations
@@ -54,6 +56,7 @@ from werkzeug.utils import secure_filename
 
 from database import get_auth_session_state, get_db, revoke_auth_session, touch_auth_session_activity
 from security import log_audit_event, safe_existing_file_under, apply_safe_download_headers
+from moderation import is_user_sanctioned
 
 # Role hierarchy for group-scoped privileges
 _ROLE_RANK = {"member": 0, "moderator": 1, "admin": 2, "owner": 3}
@@ -120,9 +123,35 @@ def register_group_routes(app, settings: dict[str, Any], limiter=None) -> None:
 
     max_group_upload = int(settings.get("max_group_upload_bytes") or (25 * 1024 * 1024))  # 25MB default
     legacy_group_file_upload_disabled = bool(
-        settings.get("disable_group_files_globally", False)
+        settings.get("disable_legacy_group_file_upload", True)
+        or settings.get("require_group_e2ee", True)
+        or settings.get("disable_group_files_globally", False)
         or settings.get("disable_file_transfer_globally", False)
     )
+
+    def _legacy_group_upload_denial(actor: str, group_id: int) -> tuple[str, int] | None:
+        """Apply the same sanctions to legacy group attachments as modern files."""
+        user = str(actor or "").strip()
+        if not user:
+            return ("Invalid user", 403)
+        if is_user_sanctioned(user, "ban"):
+            return ("You are banned.", 403)
+        if is_user_sanctioned(user, "upload"):
+            return ("Uploads are disabled for this account", 403)
+        if is_user_sanctioned(user, "mute"):
+            return ("You are muted.", 403)
+        try:
+            conn = get_db()
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM group_mutes WHERE group_id=%s AND LOWER(username)=LOWER(%s) LIMIT 1;",
+                    (int(group_id), user),
+                )
+                if cur.fetchone() is not None:
+                    return ("You are muted in this group.", 403)
+        except Exception:
+            return ("Group moderation state unavailable", 503)
+        return None
 
     def _save_filestorage_limited(file_storage, storage_path: str, max_bytes: int, *, chunk_size: int = 1024 * 1024) -> int:
         """Stream an uploaded file and stop as soon as its endpoint limit is exceeded."""
@@ -242,8 +271,7 @@ def register_group_routes(app, settings: dict[str, Any], limiter=None) -> None:
 
     def _group_unread_stats(group_id: int, username: str) -> dict[str, int]:
         """Return unread stats for a member without leaking group existence."""
-        room = _room_key(group_id)
-        legacy_room = str(int(group_id))
+        room_values = _group_history_room_values(group_id)
         actor = str(username or "").strip()
         total = 0
         read = 0
@@ -261,9 +289,9 @@ def register_group_routes(app, settings: dict[str, Any], limiter=None) -> None:
                          )
                        ) AS read_messages
                   FROM messages m
-                 WHERE m.room = %s OR m.room = %s;
+                 WHERE m.room = ANY(%s);
                 """,
-                (actor, room, legacy_room),
+                (actor, room_values),
             )
             row = cur.fetchone() or (0, 0)
             total = int(row[0] or 0)
@@ -305,6 +333,21 @@ def register_group_routes(app, settings: dict[str, Any], limiter=None) -> None:
 
     def _room_key(group_id: int) -> str:
         return f"g:{group_id}"
+
+    def _group_history_room_values(group_id: int) -> list[str]:
+        """Return allowed DB room keys for group message-derived reads.
+
+        New group messages use g:<id>.  Older builds sometimes stored group
+        messages under the bare numeric id, but that key can collide with a
+        normal room named like "123".  Keep the numeric key opt-in only.
+        """
+        primary = _room_key(int(group_id))
+        values = [primary]
+        if bool(settings.get("allow_legacy_numeric_group_history", False)):
+            legacy = str(int(group_id))
+            if legacy not in values:
+                values.append(legacy)
+        return values
 
     def _audit(actor: str, action: str, target: str | None = None, details: str | None = None) -> None:
         try:
@@ -601,10 +644,13 @@ def register_group_routes(app, settings: dict[str, Any], limiter=None) -> None:
         if not user_id:
             return _json_error("Invalid user", 403)
 
+        legacy_numeric_history = bool(settings.get("allow_legacy_numeric_group_history", False))
+        group_unread_room_sql = "(m.room = ('g:' || g.id::text) OR m.room = g.id::text)" if legacy_numeric_history else "m.room = ('g:' || g.id::text)"
+
         conn = get_db()
         with conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT g.id, g.group_name, g.group_description, gm.role,
                        COALESCE(member_counts.member_count, 0) AS member_count,
                        creator.username AS created_by,
@@ -612,7 +658,7 @@ def register_group_routes(app, settings: dict[str, Any], limiter=None) -> None:
                        (
                          SELECT COUNT(*)
                            FROM messages m
-                          WHERE (m.room = ('g:' || g.id::text) OR m.room = g.id::text)
+                          WHERE {group_unread_room_sql}
                             AND NOT EXISTS (
                               SELECT 1
                                 FROM message_reads mr
@@ -1628,11 +1674,13 @@ def register_group_routes(app, settings: dict[str, Any], limiter=None) -> None:
                 )
                 members_to_notify = [str(r[0]) for r in (cur.fetchall() or []) if r and r[0]]
                 # group_mutes has no FK in older/fresh schemas, and messages use
-                # synthetic rooms (g:<id> plus a legacy bare-id room), so delete
-                # those explicitly before the groups row cascades memberships,
-                # invites, pins, and encrypted group-file metadata.
+                # synthetic group rooms.  Delete only the scoped group room key
+                # by default (g:<id>); the legacy bare numeric key is included
+                # only when allow_legacy_numeric_group_history is explicitly on,
+                # matching history/unread/attachment lookup behavior and avoiding
+                # accidental deletion of unrelated rooms named like "123".
                 cur.execute("DELETE FROM group_mutes WHERE group_id = %s;", (group_id,))
-                cur.execute("DELETE FROM messages WHERE room = %s OR room = %s;", (_room_key(group_id), str(int(group_id))))
+                cur.execute("DELETE FROM messages WHERE room = ANY(%s);", (_group_history_room_values(group_id),))
                 cur.execute("DELETE FROM groups WHERE id = %s;", (group_id,))
                 deleted = int(cur.rowcount or 0)
             conn.commit()
@@ -1746,6 +1794,11 @@ def register_group_routes(app, settings: dict[str, Any], limiter=None) -> None:
         if not _is_member(group_id, actor_id):
             return _not_found()
 
+        denial = _legacy_group_upload_denial(actor, group_id)
+        if denial is not None:
+            message, status = denial
+            return _json_error(message, status)
+
         if request.content_length and int(request.content_length) > (max_group_upload + 256_000):
             return jsonify({"error": f"File too large (max {max_group_upload} bytes)"}), 413
 
@@ -1827,8 +1880,7 @@ def register_group_routes(app, settings: dict[str, Any], limiter=None) -> None:
         if not _is_member(group_id, actor_id):
             return None
         conn = get_db()
-        room = _room_key(group_id)
-        legacy_room = str(group_id)
+        room_values = _group_history_room_values(group_id)
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1836,9 +1888,9 @@ def register_group_routes(app, settings: dict[str, Any], limiter=None) -> None:
                   FROM file_attachments fa
                   JOIN messages m ON m.id = fa.message_id
                  WHERE fa.id = %s
-                   AND (m.room = %s OR m.room = %s);
+                   AND m.room = ANY(%s);
                 """,
-                (attachment_id, room, legacy_room),
+                (attachment_id, room_values),
             )
             row = cur.fetchone()
         if not row:

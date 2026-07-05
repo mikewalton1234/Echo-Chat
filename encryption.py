@@ -40,8 +40,18 @@ def generate_encryption_key_separate():
     """
     if not os.path.exists(KEY_FILE):
         key = Fernet.generate_key()
-        with open(KEY_FILE, "wb") as f:
+        fd = os.open(KEY_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as f:
             f.write(key)
+        try:
+            os.chmod(KEY_FILE, 0o600)
+        except Exception:
+            pass
+    else:
+        try:
+            os.chmod(KEY_FILE, 0o600)
+        except Exception:
+            pass
     with open(KEY_FILE, "rb") as f:
         return f.read()
 
@@ -53,8 +63,13 @@ def derive_key_from_password(password, salt=None):
     """
     if salt is None:
         salt = os.urandom(16)
-        with open(KEY_FILE, "wb") as f:
+        fd = os.open(KEY_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
             f.write(salt)
+        try:
+            os.chmod(KEY_FILE, 0o600)
+        except Exception:
+            pass
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,

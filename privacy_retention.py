@@ -14,7 +14,8 @@ import re
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
-from database import get_db
+from database import _acquire_conn, _release_conn
+from secret_manager import stable_privacy_hash_key_material
 
 _HASH_PREFIX = "echash:v1:"
 _AUDIT_REDACT_MARKER = "privacy-retained"
@@ -57,7 +58,7 @@ def audit_detail_retention_days(settings: dict | None = None) -> int:
 
 def _hash_salt(settings: dict | None = None) -> str:
     settings = settings or {}
-    return str(settings.get("secret_key") or settings.get("jwt_secret") or "echochat-local-retention-salt")
+    return stable_privacy_hash_key_material(settings) or "echochat-local-retention-salt"
 
 
 def _hash_label(value: Any, kind: str, settings: dict | None = None) -> str | None:
@@ -133,64 +134,80 @@ def privacy_retention_counts(settings: dict | None = None) -> dict:
     }
     if not enabled or days <= 0:
         return counts
-    conn = get_db()
-    with conn.cursor() as cur:
+    conn, from_pool = _acquire_conn()
+    def _rollback_after_optional_failure() -> None:
         try:
-            cur.execute(
-                """
-                SELECT COUNT(*) FROM auth_sessions
-                 WHERE COALESCE(last_activity_at, last_seen_at, created_at) < (CURRENT_TIMESTAMP - (%s || ' days')::interval)
-                   AND ((ip_address IS NOT NULL AND ip_address <> '' AND ip_address NOT LIKE 'echash:v1:%%')
-                    OR  (user_agent IS NOT NULL AND user_agent <> '' AND user_agent NOT LIKE 'echash:v1:%%'));
-                """,
-                (days,),
-            )
-            counts["auth_sessions_raw_old"] = int(cur.fetchone()[0] or 0)
+            conn.rollback()
         except Exception:
-            counts["auth_sessions_raw_old"] = None
-        try:
-            cur.execute(
-                """
-                SELECT COUNT(*) FROM auth_tokens
-                 WHERE COALESCE(last_used_at, created_at) < (CURRENT_TIMESTAMP - (%s || ' days')::interval)
-                   AND ((ip_address IS NOT NULL AND ip_address <> '' AND ip_address NOT LIKE 'echash:v1:%%')
-                    OR  (user_agent IS NOT NULL AND user_agent <> '' AND user_agent NOT LIKE 'echash:v1:%%'));
-                """,
-                (days,),
-            )
-            counts["auth_tokens_raw_old"] = int(cur.fetchone()[0] or 0)
-        except Exception:
-            counts["auth_tokens_raw_old"] = None
-        try:
-            cur.execute(
-                """
-                SELECT COUNT(*) FROM password_reset_tokens
-                 WHERE created_at < (CURRENT_TIMESTAMP - (%s || ' days')::interval)
-                   AND ((request_ip IS NOT NULL AND request_ip <> '' AND request_ip NOT LIKE 'echash:v1:%%')
-                    OR  (user_agent IS NOT NULL AND user_agent <> '' AND user_agent NOT LIKE 'echash:v1:%%'));
-                """,
-                (days,),
-            )
-            counts["password_reset_tokens_raw_old"] = int(cur.fetchone()[0] or 0)
-        except Exception:
-            counts["password_reset_tokens_raw_old"] = None
-        if audit_days > 0:
+            pass
+    try:
+        with conn.cursor() as cur:
             try:
                 cur.execute(
                     """
-                    SELECT COUNT(*) FROM audit_log
-                     WHERE timestamp < (CURRENT_TIMESTAMP - (%s || ' days')::interval)
-                       AND details IS NOT NULL
-                       AND details <> ''
-                       AND details NOT LIKE '%%echash:v1:%%'
-                       AND (details ~* 'ip=' OR details ~* 'ua=' OR details ~ E'(?:[0-9]{1,3}\\.){3}[0-9]{1,3}');
+                    SELECT COUNT(*) FROM auth_sessions
+                     WHERE COALESCE(last_activity_at, last_seen_at, created_at) < (CURRENT_TIMESTAMP - (%s || ' days')::interval)
+                       AND ((ip_address IS NOT NULL AND ip_address <> '' AND ip_address NOT LIKE 'echash:v1:%%')
+                        OR  (user_agent IS NOT NULL AND user_agent <> '' AND user_agent NOT LIKE 'echash:v1:%%'));
                     """,
-                    (audit_days,),
+                    (days,),
                 )
-                counts["audit_details_raw_old"] = int(cur.fetchone()[0] or 0)
+                counts["auth_sessions_raw_old"] = int(cur.fetchone()[0] or 0)
             except Exception:
-                counts["audit_details_raw_old"] = None
-    return counts
+                counts["auth_sessions_raw_old"] = None
+                _rollback_after_optional_failure()
+            try:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) FROM auth_tokens
+                     WHERE COALESCE(last_used_at, created_at) < (CURRENT_TIMESTAMP - (%s || ' days')::interval)
+                       AND ((ip_address IS NOT NULL AND ip_address <> '' AND ip_address NOT LIKE 'echash:v1:%%')
+                        OR  (user_agent IS NOT NULL AND user_agent <> '' AND user_agent NOT LIKE 'echash:v1:%%'));
+                    """,
+                    (days,),
+                )
+                counts["auth_tokens_raw_old"] = int(cur.fetchone()[0] or 0)
+            except Exception:
+                counts["auth_tokens_raw_old"] = None
+                _rollback_after_optional_failure()
+            try:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) FROM password_reset_tokens
+                     WHERE created_at < (CURRENT_TIMESTAMP - (%s || ' days')::interval)
+                       AND ((request_ip IS NOT NULL AND request_ip <> '' AND request_ip NOT LIKE 'echash:v1:%%')
+                        OR  (user_agent IS NOT NULL AND user_agent <> '' AND user_agent NOT LIKE 'echash:v1:%%'));
+                    """,
+                    (days,),
+                )
+                counts["password_reset_tokens_raw_old"] = int(cur.fetchone()[0] or 0)
+            except Exception:
+                counts["password_reset_tokens_raw_old"] = None
+                _rollback_after_optional_failure()
+            if audit_days > 0:
+                try:
+                    cur.execute(
+                        """
+                        SELECT COUNT(*) FROM audit_log
+                         WHERE timestamp < (CURRENT_TIMESTAMP - (%s || ' days')::interval)
+                           AND details IS NOT NULL
+                           AND details <> ''
+                           AND details NOT LIKE '%%echash:v1:%%'
+                           AND (details ~* 'ip=' OR details ~* 'ua=' OR details ~ E'(?:[0-9]{1,3}\\.){3}[0-9]{1,3}');
+                        """,
+                        (audit_days,),
+                    )
+                    counts["audit_details_raw_old"] = int(cur.fetchone()[0] or 0)
+                except Exception:
+                    counts["audit_details_raw_old"] = None
+                    _rollback_after_optional_failure()
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return counts
+    finally:
+        _release_conn(conn, from_pool)
 
 
 def apply_privacy_retention(settings: dict | None = None, *, limit: int = 500) -> dict:
@@ -204,61 +221,69 @@ def apply_privacy_retention(settings: dict | None = None, *, limit: int = 500) -
         result["skipped"] = "privacy retention disabled"
         return result
 
-    conn = get_db()
+    conn, from_pool = _acquire_conn()
     total_updates: dict[str, int] = {}
-
-    def update_table(table: str, id_col: str, ip_col: str, ua_col: str, time_expr: str) -> None:
-        updated = 0
-        with conn.cursor() as cur:
-            cur.execute(
-                f"""
-                SELECT {id_col}, {ip_col}, {ua_col}
-                  FROM {table}
-                 WHERE {time_expr} < (CURRENT_TIMESTAMP - (%s || ' days')::interval)
-                   AND (({ip_col} IS NOT NULL AND {ip_col} <> '' AND {ip_col} NOT LIKE 'echash:v1:%%')
-                    OR  ({ua_col} IS NOT NULL AND {ua_col} <> '' AND {ua_col} NOT LIKE 'echash:v1:%%'))
-                 ORDER BY {time_expr} ASC
-                 LIMIT %s;
-                """,
-                (days, int(limit)),
-            )
-            rows = cur.fetchall() or []
-            for row in rows:
-                row_id, ip_value, ua_value = row
+    try:
+        def update_table(table: str, id_col: str, ip_col: str, ua_col: str, time_expr: str) -> None:
+            updated = 0
+            with conn.cursor() as cur:
                 cur.execute(
-                    f"UPDATE {table} SET {ip_col}=%s, {ua_col}=%s WHERE {id_col}=%s;",
-                    (retained_ip(ip_value, settings), retained_user_agent(ua_value, settings), row_id),
+                    f"""
+                    SELECT {id_col}, {ip_col}, {ua_col}
+                      FROM {table}
+                     WHERE {time_expr} < (CURRENT_TIMESTAMP - (%s || ' days')::interval)
+                       AND (({ip_col} IS NOT NULL AND {ip_col} <> '' AND {ip_col} NOT LIKE 'echash:v1:%%')
+                        OR  ({ua_col} IS NOT NULL AND {ua_col} <> '' AND {ua_col} NOT LIKE 'echash:v1:%%'))
+                     ORDER BY {time_expr} ASC
+                     LIMIT %s;
+                    """,
+                    (days, int(limit)),
                 )
-                updated += 1
-        total_updates[table] = updated
+                rows = cur.fetchall() or []
+                for row in rows:
+                    row_id, ip_value, ua_value = row
+                    cur.execute(
+                        f"UPDATE {table} SET {ip_col}=%s, {ua_col}=%s WHERE {id_col}=%s;",
+                        (retained_ip(ip_value, settings), retained_user_agent(ua_value, settings), row_id),
+                    )
+                    updated += 1
+            total_updates[table] = updated
 
-    update_table("auth_sessions", "session_id", "ip_address", "user_agent", "COALESCE(last_activity_at, last_seen_at, created_at)")
-    update_table("auth_tokens", "jti", "ip_address", "user_agent", "COALESCE(last_used_at, created_at)")
-    update_table("password_reset_tokens", "id", "request_ip", "user_agent", "created_at")
+        update_table("auth_sessions", "session_id", "ip_address", "user_agent", "COALESCE(last_activity_at, last_seen_at, created_at)")
+        update_table("auth_tokens", "jti", "ip_address", "user_agent", "COALESCE(last_used_at, created_at)")
+        update_table("password_reset_tokens", "id", "request_ip", "user_agent", "created_at")
 
-    audit_updated = 0
-    if audit_days > 0:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, details
-                  FROM audit_log
-                 WHERE timestamp < (CURRENT_TIMESTAMP - (%s || ' days')::interval)
-                   AND details IS NOT NULL
-                   AND details <> ''
-                   AND details NOT LIKE '%%echash:v1:%%'
-                   AND (details ~* 'ip=' OR details ~* 'ua=' OR details ~ E'(?:[0-9]{1,3}\\.){3}[0-9]{1,3}')
-                 ORDER BY timestamp ASC
-                 LIMIT %s;
-                """,
-                (audit_days, int(limit)),
-            )
-            for row_id, details in cur.fetchall() or []:
-                redacted = redact_audit_details(details, settings)
-                if redacted != details:
-                    cur.execute("UPDATE audit_log SET details=%s WHERE id=%s;", (redacted, row_id))
-                    audit_updated += 1
-    total_updates["audit_log"] = audit_updated
-    conn.commit()
-    result["updated"] = total_updates
-    return result
+        audit_updated = 0
+        if audit_days > 0:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, details
+                      FROM audit_log
+                     WHERE timestamp < (CURRENT_TIMESTAMP - (%s || ' days')::interval)
+                       AND details IS NOT NULL
+                       AND details <> ''
+                       AND details NOT LIKE '%%echash:v1:%%'
+                       AND (details ~* 'ip=' OR details ~* 'ua=' OR details ~ E'(?:[0-9]{1,3}\\.){3}[0-9]{1,3}')
+                     ORDER BY timestamp ASC
+                     LIMIT %s;
+                    """,
+                    (audit_days, int(limit)),
+                )
+                for row_id, details in cur.fetchall() or []:
+                    redacted = redact_audit_details(details, settings)
+                    if redacted != details:
+                        cur.execute("UPDATE audit_log SET details=%s WHERE id=%s;", (redacted, row_id))
+                        audit_updated += 1
+        total_updates["audit_log"] = audit_updated
+        conn.commit()
+        result["updated"] = total_updates
+        return result
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        _release_conn(conn, from_pool)

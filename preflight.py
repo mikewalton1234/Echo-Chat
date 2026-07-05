@@ -12,6 +12,8 @@ from urllib.parse import urlparse, urlunparse
 from constants import APP_VERSION, get_db_connection_string, postgres_dsn_parts, redact_postgres_dsn, sanitize_postgres_dsn
 from media_mode import resolve_av_mode
 from secrets_policy import persist_secrets_enabled
+from secret_manager import is_strong_secret, resolve_secret
+from scaled_redis_autoconfig import apply_scaled_runtime_safety_defaults
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -63,6 +65,55 @@ def _redact_url_password(url: str | None) -> str | None:
     except Exception:
         return str(url)
 
+
+
+
+def _safe_positive_int(value: Any, default: int = 1, *, maximum: int | None = None) -> int:
+    try:
+        out = int(value)
+    except Exception:
+        out = default
+    if out < 1:
+        out = default
+    if maximum is not None and out > maximum:
+        out = maximum
+    return out
+
+
+def _safe_int(value: Any, default: int, *, minimum: int | None = None, maximum: int | None = None) -> int:
+    try:
+        out = int(value)
+    except Exception:
+        out = default
+    if minimum is not None and out < minimum:
+        out = minimum
+    if maximum is not None and out > maximum:
+        out = maximum
+    return out
+
+
+def _resolve_worker_count(settings: dict) -> int:
+    for name in ("ECHOCHAT_WORKERS", "ECHOCHAT_PRODUCTION_WORKERS", "WEB_CONCURRENCY", "PRODUCTION_WORKERS"):
+        raw = os.environ.get(name)
+        if raw:
+            return _safe_positive_int(raw, 1)
+    for key in ("production_workers", "worker_count", "web_workers"):
+        raw = settings.get(key)
+        if raw:
+            return _safe_positive_int(raw, 1)
+    return 1
+
+
+def _resolve_instance_count(settings: dict) -> int:
+    for name in ("ECHOCHAT_PRODUCTION_INSTANCES", "ECHOCHAT_INSTANCE_COUNT", "PRODUCTION_INSTANCES"):
+        raw = os.environ.get(name)
+        if raw:
+            return _safe_positive_int(raw, 1, maximum=10)
+    for key in ("production_instance_count", "production_instances", "instance_count"):
+        raw = settings.get(key)
+        if raw:
+            return _safe_positive_int(raw, 1, maximum=10)
+    return 1
 
 def _resolve_runtime_paths(settings: dict) -> dict[str, Path]:
     def _resolve(raw: str | None, fallback: Path) -> Path:
@@ -122,14 +173,8 @@ def _check_settings_file(settings_file: str | os.PathLike[str] | None) -> dict:
 
 
 def _check_secret_and_cookie_coherence(settings: dict) -> dict:
-    secret_key = str(settings.get("secret_key") or os.getenv("SECRET_KEY") or "").strip()
-    jwt_secret = str(
-        settings.get("jwt_secret")
-        or settings.get("jwt_secret_key")
-        or os.getenv("JWT_SECRET_KEY")
-        or os.getenv("ECHOCHAT_JWT_SECRET")
-        or ""
-    ).strip()
+    secret_key = resolve_secret(settings, "secret_key")
+    jwt_secret = resolve_secret(settings, "jwt_secret")
 
     https_enabled = bool(settings.get("https", False))
     cookie_secure = bool(settings.get("cookie_secure", False) or https_enabled)
@@ -137,9 +182,9 @@ def _check_secret_and_cookie_coherence(settings: dict) -> dict:
     persistence = bool(persist_secrets_enabled(settings))
 
     missing = []
-    if not secret_key:
+    if not is_strong_secret(secret_key):
         missing.append("secret_key")
-    if not jwt_secret:
+    if not is_strong_secret(jwt_secret):
         missing.append("jwt_secret")
 
     state = "ok"
@@ -201,10 +246,12 @@ def _resolve_message_queue(settings: dict) -> str | None:
         v = (os.environ.get(key) or "").strip()
         if v:
             return v
+    profile = settings.get("socketio_profile") or {}
+    if isinstance(profile, dict):
+        v = str(profile.get("message_queue") or "").strip()
+        if v:
+            return v
     v = str(settings.get("socketio_message_queue") or "").strip()
-    if v:
-        return v
-    v = (os.environ.get("REDIS_URL") or "").strip()
     return v or None
 
 
@@ -212,9 +259,10 @@ def _resolve_message_queue(settings: dict) -> str | None:
 
 def _check_socketio_topology(settings: dict, runtime_context: dict | None = None) -> dict:
     runtime_context = runtime_context or {}
-    worker_count = int(runtime_context.get("worker_count") or os.environ.get("WEB_CONCURRENCY") or 1)
+    worker_count = _safe_int(runtime_context.get("worker_count") or _resolve_worker_count(settings), 1, minimum=1)
+    instance_count = _safe_int(runtime_context.get("production_instance_count") or _resolve_instance_count(settings), 1, minimum=1, maximum=10)
     websocket_only = bool(runtime_context.get("websocket_only") or False)
-    max_http_buffer_size = int(runtime_context.get("max_http_buffer_size") or settings.get("socketio_max_http_buffer_size") or settings.get("max_request_bytes") or 31457280)
+    max_http_buffer_size = _safe_int(runtime_context.get("max_http_buffer_size") or settings.get("socketio_max_http_buffer_size") or settings.get("max_request_bytes") or 31457280, 31457280, minimum=16384, maximum=104857600)
     async_mode = runtime_context.get("async_mode")
     ws_enabled = runtime_context.get("ws_enabled")
     message_queue = runtime_context.get("message_queue") or _resolve_message_queue(settings)
@@ -222,8 +270,11 @@ def _check_socketio_topology(settings: dict, runtime_context: dict | None = None
     state = "ok"
     notes: list[str] = ["Socket.IO topology evaluated"]
     if worker_count > 1 and not message_queue:
-        state = "warn"
-        notes.append("multi-worker mode does not have a Socket.IO message queue configured")
+        state = "fail"
+        notes.append("multi-worker mode does not have an explicit Socket.IO message queue configured")
+    if instance_count > 1 and not message_queue:
+        state = "fail"
+        notes.append("multiple one-worker instances need an explicit Socket.IO message queue")
     if worker_count > 1 and websocket_only and not ws_enabled:
         state = "fail"
         notes.append("multi-worker websocket-only topology requires WebSocket support; threading/polling is not supported")
@@ -236,6 +287,7 @@ def _check_socketio_topology(settings: dict, runtime_context: dict | None = None
         state,
         "; ".join(notes),
         worker_count=worker_count,
+        production_instance_count=instance_count,
         websocket_only=websocket_only,
         max_http_buffer_size=max_http_buffer_size,
         async_mode=async_mode,
@@ -252,10 +304,16 @@ def _check_db(settings: dict, init_db_pool_if_needed: bool) -> dict:
         if settings.get("database_url"):
             dsn_override = str(sanitize_postgres_dsn(str(settings["database_url"])))
         if init_db_pool_if_needed:
-            cfg_min = int(settings.get("db_pool_min", 1))
-            cfg_max = int(settings.get("db_pool_max", 50))
-            if cfg_max < 50:
+            instances = _resolve_instance_count(settings)
+            cfg_min = _safe_int(settings.get("db_pool_min", 1), 1, minimum=1, maximum=25)
+            if settings.get("db_pool_max") is None:
+                cfg_max = 50 if instances <= 1 else (25 if instances <= 2 else 15 if instances <= 5 else 10)
+            else:
+                cfg_max = _safe_int(settings.get("db_pool_max", 50), 50 if instances <= 1 else 10, minimum=1, maximum=100)
+            if instances <= 1 and cfg_max < 50:
                 cfg_max = 50
+            if cfg_min > cfg_max:
+                cfg_min = cfg_max
             init_db_pool(
                 minconn=cfg_min,
                 maxconn=cfg_max,
@@ -302,6 +360,48 @@ def _check_runtime_paths(settings: dict) -> dict:
             worst = "fail"
     summary = "Runtime paths are writable" if worst == "ok" else "One or more runtime paths are not writable"
     return _status("runtime_paths", worst, summary, paths=details)
+
+
+def _resolve_shared_state_url(settings: dict) -> str | None:
+    for key in ("ECHOCHAT_SHARED_STATE_REDIS_URL", "SHARED_STATE_REDIS_URL"):
+        v = (os.environ.get(key) or "").strip()
+        if v:
+            return v
+    v = str(settings.get("shared_state_redis_url") or "").strip()
+    return v or None
+
+
+def _check_shared_state_topology(settings: dict, runtime_context: dict | None = None) -> dict:
+    runtime_context = runtime_context or {}
+    worker_count = _safe_int(runtime_context.get("worker_count") or _resolve_worker_count(settings), 1, minimum=1)
+    instance_count = _safe_int(runtime_context.get("production_instance_count") or _resolve_instance_count(settings), 1, minimum=1, maximum=10)
+    scaled = bool(worker_count > 1 or instance_count > 1)
+    url = _resolve_shared_state_url(settings)
+    runtime_enabled = runtime_context.get("shared_state_enabled")
+    state = "ok"
+    notes = []
+    if scaled and not url:
+        state = "fail"
+        notes.append("scaled realtime mode requires explicit shared_state_redis_url")
+    elif scaled and runtime_enabled is False:
+        state = "fail"
+        notes.append("shared-state Redis is configured but runtime did not enable it")
+    elif scaled:
+        notes.append("shared-state Redis configured for scaled realtime state")
+    elif url:
+        notes.append("shared-state Redis configured")
+    else:
+        state = "info"
+        notes.append("single-instance mode can use process-local realtime state")
+    return _status(
+        "shared_state_topology",
+        state,
+        "; ".join(notes),
+        production_instance_count=instance_count,
+        worker_count=worker_count,
+        shared_state_url=_redact_url_password(url),
+        runtime_enabled=runtime_enabled,
+    )
 
 
 def _check_socket_runtime(settings: dict, runtime_context: dict | None = None) -> dict:
@@ -405,9 +505,12 @@ def run_preflight(
     runtime_context: Optional[Dict[str, Any]] = None,
     include_database: bool = True,
 ) -> dict:
+    settings = dict(settings or {})
+    apply_scaled_runtime_safety_defaults(settings)
     runtime_context = dict(runtime_context or {})
     checks = [
         _check_socketio_topology(settings, runtime_context),
+        _check_shared_state_topology(settings, runtime_context),
         _check_settings_file(settings_file),
         _check_secret_and_cookie_coherence(settings),
         _check_upload_surface(settings),

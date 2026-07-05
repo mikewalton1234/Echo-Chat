@@ -52,6 +52,13 @@ from webrtc_ice_config import ice_server_summary, p2p_ice_servers, voice_ice_ser
 from database import get_db
 from database import (
     create_user_with_keys,
+    canonical_username,
+    find_user_by_username_ci,
+    create_login_session_and_tokens,
+    rotate_refresh_and_store_access_token,
+    store_auth_token_in_conn,
+    apply_auth_risk_event,
+    get_auth_version,
     get_public_key_for_username,
     get_encrypted_private_key_for_username,
     ensure_user_has_keys,
@@ -107,6 +114,7 @@ from sensitive_fields_crypto import encrypt_sensitive_field, decrypt_sensitive_f
 from email_at_rest import display_email, submitted_email_matches
 from sms_2fa_config import effective_twilio_settings, twilio_ready
 from account_status import account_can_authenticate, account_status_allows_auth, account_status_error_code, account_status_reason, get_effective_account_status
+from moderation import get_active_ip_sanction_detail, is_ip_sanctioned
 
 try:
     from realtime.state import auth_session_sids as _state_auth_session_sids, user_sids as _state_user_sids
@@ -186,6 +194,54 @@ def register_auth_routes(app, settings, limiter=None):
         """Build a non-cacheable JSON response for /token/refresh."""
         return _auth_json_response(payload, status=status, clear_cookies=clear_cookies)
 
+    def _active_ip_ban_message(ip: str | None) -> str:
+        """Human-readable reason for current request IP-ban enforcement."""
+        reason = None
+        expires_at = None
+        try:
+            reason, expires_at = get_active_ip_sanction_detail(ip)
+        except Exception:
+            reason, expires_at = None, None
+        msg = "This connection is blocked by an active IP ban."
+        if reason:
+            msg += f" Reason: {reason}"
+        if expires_at:
+            try:
+                msg += f" Until: {expires_at.isoformat()}"
+            except Exception:
+                pass
+        return msg
+
+    def _current_request_ip_banned() -> tuple[bool, str | None, str]:
+        ip = get_request_ip() or None
+        try:
+            if ip and is_ip_sanctioned(ip):
+                return True, ip, _active_ip_ban_message(ip)
+        except Exception:
+            # Do not fail open on auth boundaries if the active IP-ban check errors.
+            logging.warning("IP-ban enforcement check failed during auth", exc_info=True)
+            return True, ip, "This connection could not be verified for sign-in. Please contact an admin."
+        return False, ip, ""
+
+    def _log_ip_ban_block(action: str, ip: str | None, detail: str = "") -> None:
+        try:
+            log_audit_event("system", action, ip or "unknown", detail or "blocked by active IP ban")
+        except Exception:
+            pass
+
+    def _chat_ip_ban_redirect(ip: str | None, message: str):
+        _log_ip_ban_block("chat_ip_ban_blocked", ip)
+        resp = redirect(f"/login?reason={urllib.parse.quote('ip_banned')}")
+        try:
+            unset_jwt_cookies(resp)
+        except Exception:
+            pass
+        try:
+            session.clear()
+        except Exception:
+            pass
+        return resp
+
     def _account_status_auth_allowed(username: str) -> tuple[bool, str | None, str, str]:
         """Return whether an account may use auth/session features right now."""
         return account_can_authenticate(username)
@@ -258,6 +314,21 @@ def register_auth_routes(app, settings, limiter=None):
     ENABLE_2FA_CSRF_FALLBACK_COOKIE = "echochat_enable_2fa_csrf"
 
     _EMAIL_RE = re.compile(r"^[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9-]+(?:\.[A-Z0-9-]+)+$", re.IGNORECASE)
+    _DUMMY_LOGIN_HASH = hash_password("EchoChat dummy login timing password v1")
+    _DUMMY_RECOVERY_PIN_HASH = hash_password("000000")
+
+    def _dummy_password_verify(candidate: str) -> None:
+        try:
+            verify_password_and_upgrade(candidate or "", _DUMMY_LOGIN_HASH)
+        except Exception:
+            pass
+
+    def _dummy_recovery_pin_verify(candidate: str) -> None:
+        try:
+            verify_password_and_upgrade(candidate or "", _DUMMY_RECOVERY_PIN_HASH)
+        except Exception:
+            pass
+
 
     def _csrf_time_limit_seconds() -> int | None:
         raw = app.config.get("WTF_CSRF_TIME_LIMIT", 3600)
@@ -342,15 +413,37 @@ def register_auth_routes(app, settings, limiter=None):
         resp = make_response(render_template("login.html", **ctx))
         return _set_login_csrf_fallback_cookie(resp, ctx.get("login_csrf_token"))
 
-    def _login_2fa_account_still_matches(username: str, phone: str) -> bool:
-        """Return true when the pending SMS login challenge still matches the account.
+    def _server_challenges(kind: str) -> dict:
+        key = f"ECHOCHAT_{kind.upper()}_CHALLENGES"
+        store = app.config.get(key)
+        if not isinstance(store, dict):
+            store = {}
+            app.config[key] = store
+        return store
 
-        A login SMS challenge is created after the password has been verified, but
-        another browser/admin action can disable 2FA or change the saved phone while
-        that challenge is pending. Re-check immediately before final login so a stale
-        code cannot finish a login after 2FA was revoked or moved to another number.
-        """
-        username = str(username or "").strip().lower()
+    def _save_server_challenge(kind: str, username: str, phone: str) -> str:
+        challenge_id = secrets.token_urlsafe(24)
+        _server_challenges(kind)[challenge_id] = {
+            "username": str(username or "").strip(),
+            "phone": _normalize_phone_e164(phone or ""),
+            "started_at": datetime.now(timezone.utc).timestamp(),
+            "auth_version": get_auth_version(username),
+        }
+        return challenge_id
+
+    def _load_server_challenge(kind: str, challenge_id: str) -> dict | None:
+        if not challenge_id:
+            return None
+        item = _server_challenges(kind).get(str(challenge_id))
+        return dict(item) if isinstance(item, dict) else None
+
+    def _pop_server_challenge(kind: str, challenge_id: str | None) -> None:
+        if challenge_id:
+            _server_challenges(kind).pop(str(challenge_id), None)
+
+    def _login_2fa_account_still_matches(username: str, phone: str, auth_version: int | None = None) -> bool:
+        """Return true when the pending SMS login challenge still matches the account."""
+        username = str(username or "").strip()
         expected_phone = _normalize_phone_e164(phone or "")
         if not username or not expected_phone:
             return False
@@ -358,19 +451,25 @@ def register_auth_routes(app, settings, limiter=None):
             conn = get_db()
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT phone, two_factor_enabled FROM users WHERE LOWER(username) = LOWER(%s) LIMIT 1;",
+                    "SELECT username, phone, two_factor_enabled, COALESCE(auth_version, 0) FROM users WHERE LOWER(username) = LOWER(%s) LIMIT 1;",
                     (username,),
                 )
                 row = cur.fetchone()
         except Exception as exc:
             logging.error("DB error checking pending SMS 2FA login state for %s: %s", username, exc)
             return False
-        if not row or not bool(row[1]):
+        if not row or not bool(row[2]):
             return False
-        allowed, _status, _code, _reason = _account_status_auth_allowed(username)
+        if auth_version is not None:
+            try:
+                if int(auth_version) != int(row[3] or 0):
+                    return False
+            except Exception:
+                return False
+        allowed, _status, _code, _reason = _account_status_auth_allowed(str(row[0] or username))
         if not allowed:
             return False
-        current_phone = _normalize_phone_e164(decrypt_sensitive_field(row[0] or "", settings, field_name="users.phone"))
+        current_phone = _normalize_phone_e164(decrypt_sensitive_field(row[1] or "", settings, field_name="users.phone"))
         return bool(current_phone and secrets.compare_digest(current_phone, expected_phone))
 
 
@@ -695,11 +794,13 @@ def register_auth_routes(app, settings, limiter=None):
             return False, "Could not verify that code right now. Check Twilio Verify settings and logs."
 
     def _clear_pending_login_2fa() -> None:
+        _pop_server_challenge("login_2fa", session.pop("pending_2fa_challenge_id", None))
         session.pop("pending_2fa_username", None)
         session.pop("pending_2fa_phone", None)
         session.pop("pending_2fa_started_at", None)
 
     def _clear_pending_enable_2fa() -> None:
+        _pop_server_challenge("enable_2fa", session.pop("enable_2fa_challenge_id", None))
         session.pop("enable_2fa_phone", None)
         session.pop("enable_2fa_user", None)
         session.pop("enable_2fa_started_at", None)
@@ -771,6 +872,66 @@ def register_auth_routes(app, settings, limiter=None):
         except Exception:
             return False
 
+    def _ensure_baseline_viewer_role(username: str) -> None:
+        """Self-heal the baseline viewer role for accounts missing it."""
+        username = str(username or "").strip()
+        if not username:
+            return
+        conn = get_db()
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM users WHERE LOWER(username)=LOWER(%s) LIMIT 1;", (username,))
+            user_row = cur.fetchone()
+            cur.execute("SELECT id FROM roles WHERE name = 'viewer' LIMIT 1;")
+            role_row = cur.fetchone()
+            if user_row and role_row:
+                cur.execute(
+                    """
+                    INSERT INTO user_roles (user_id, role_id)
+                    VALUES (%s, %s)
+                    ON CONFLICT (user_id, role_id) DO NOTHING;
+                    """,
+                    (user_row[0], role_row[0]),
+                )
+        conn.commit()
+
+    def _issue_replacement_auth_cookies(username: str, sid: str, *, user_agent: str | None, ip_address: str | None, redirect_to: str | None = None):
+        """Mint and persist fresh cookies for the current auth session after an auth-risk event."""
+        access_token = create_access_token(identity=username, additional_claims={"sid": sid})
+        refresh_token = create_refresh_token(identity=username, additional_claims={"sid": sid})
+        conn = get_db()
+        try:
+            a = decode_token(access_token, allow_expired=False)
+            r = decode_token(refresh_token, allow_expired=False)
+            store_auth_token_in_conn(
+                conn,
+                jti=a.get("jti"),
+                username=username,
+                token_type="access",
+                expires_at=(datetime.fromtimestamp(a.get("exp"), tz=timezone.utc) if isinstance(a.get("exp"), (int, float)) else None),
+                session_id=sid,
+                user_agent=user_agent,
+                ip_address=ip_address,
+            )
+            store_auth_token_in_conn(
+                conn,
+                jti=r.get("jti"),
+                username=username,
+                token_type="refresh",
+                expires_at=(datetime.fromtimestamp(r.get("exp"), tz=timezone.utc) if isinstance(r.get("exp"), (int, float)) else None),
+                session_id=sid,
+                user_agent=user_agent,
+                ip_address=ip_address,
+            )
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        resp = make_response(redirect(redirect_to) if redirect_to else jsonify({"ok": True}))
+        return _set_auth_cookies_for_response(resp, access_token, refresh_token)
+
     def _clear_user_transient_presence(username: str) -> None:
         """Clear one-session presence text whenever a user signs in/out."""
         username = str(username or "").strip()
@@ -780,7 +941,7 @@ def register_auth_routes(app, settings, limiter=None):
             conn = get_db()
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE users SET presence_status = 'online', custom_status = NULL WHERE username = %s;",
+                    "UPDATE users SET presence_status = 'online', custom_status = NULL WHERE LOWER(username) = LOWER(%s);",
                     (username,),
                 )
             conn.commit()
@@ -902,56 +1063,83 @@ def register_auth_routes(app, settings, limiter=None):
     def _finalize_login_success(username: str):
         allowed, account_status, code, reason = _account_status_auth_allowed(username)
         if not allowed:
-            return _render_login(error=reason or "This account cannot sign in right now.")
+            msg = "Invalid username or password" if not is_localish_request() else (reason or "This account cannot sign in right now.")
+            return _render_login(error=msg)
         is_admin = _effective_admin_for_user(username)
-        _clear_pending_login_2fa()
-        session.pop("admin_reauth_user", None)
-        session.pop("admin_reauth_sid", None)
-        session.pop("admin_reauth_at", None)
-        session.update(
-            {
-                "username": username,
-                "is_admin": bool(is_admin),
-            }
-        )
         ua = request.headers.get("User-Agent")
-        ip = get_request_ip() or None
-        sid = create_auth_session(username=username, user_agent=ua, ip_address=ip)
-        session["auth_session_id"] = sid
+        ip_banned, banned_ip, ip_ban_message = _current_request_ip_banned()
+        if ip_banned:
+            _clear_pending_login_2fa()
+            try:
+                log_audit_event("anon", "login_ip_ban_blocked", banned_ip, f"user={username}")
+            except Exception:
+                pass
+            return _render_login(error=ip_ban_message)
+        ip = banned_ip or get_request_ip() or None
 
         # Custom presence text is intentionally transient. Start each login clean.
         _clear_user_transient_presence(username)
 
-        access_token = create_access_token(identity=username, additional_claims={"sid": sid})
-        refresh_token = create_refresh_token(identity=username, additional_claims={"sid": sid})
-
+        # Create tokens first, then persist session + token JTIs atomically before cookies are sent.
+        temp_access = create_access_token(identity=username, additional_claims={"sid": "pending"})
+        temp_refresh = create_refresh_token(identity=username, additional_claims={"sid": "pending"})
         try:
-            from datetime import datetime, timezone
-
-            a = decode_token(access_token, allow_expired=False)
-            r = decode_token(refresh_token, allow_expired=False)
+            a = decode_token(temp_access, allow_expired=False)
+            r = decode_token(temp_refresh, allow_expired=False)
             a_exp = a.get("exp")
             r_exp = r.get("exp")
-            store_auth_token(
-                jti=a.get("jti"),
-                username=username,
-                token_type="access",
-                expires_at=(datetime.fromtimestamp(a_exp, tz=timezone.utc) if isinstance(a_exp, (int, float)) else None),
-                session_id=sid,
-                user_agent=ua,
-                ip_address=ip,
-            )
-            store_auth_token(
-                jti=r.get("jti"),
-                username=username,
-                token_type="refresh",
-                expires_at=(datetime.fromtimestamp(r_exp, tz=timezone.utc) if isinstance(r_exp, (int, float)) else None),
-                session_id=sid,
-                user_agent=ua,
-                ip_address=ip,
-            )
+            # Create the DB session first so the final JWTs can carry its sid.
+            sid = None
+            # Generate final tokens after session creation inside the DB helper sequence.
+            from db.core import get_db as _login_get_db
+            login_conn = _login_get_db()
+            try:
+                from database import create_auth_session_in_conn as _create_auth_session_in_conn
+                sid = _create_auth_session_in_conn(login_conn, username, user_agent=ua, ip_address=ip)
+                access_token = create_access_token(identity=username, additional_claims={"sid": sid})
+                refresh_token = create_refresh_token(identity=username, additional_claims={"sid": sid})
+                a = decode_token(access_token, allow_expired=False)
+                r = decode_token(refresh_token, allow_expired=False)
+                store_auth_token_in_conn(
+                    login_conn,
+                    jti=a.get("jti"),
+                    username=username,
+                    token_type="access",
+                    expires_at=(datetime.fromtimestamp(a.get("exp"), tz=timezone.utc) if isinstance(a.get("exp"), (int, float)) else None),
+                    session_id=sid,
+                    user_agent=ua,
+                    ip_address=ip,
+                )
+                store_auth_token_in_conn(
+                    login_conn,
+                    jti=r.get("jti"),
+                    username=username,
+                    token_type="refresh",
+                    expires_at=(datetime.fromtimestamp(r.get("exp"), tz=timezone.utc) if isinstance(r.get("exp"), (int, float)) else None),
+                    session_id=sid,
+                    user_agent=ua,
+                    ip_address=ip,
+                )
+                login_conn.commit()
+            except Exception:
+                try:
+                    login_conn.rollback()
+                except Exception:
+                    pass
+                raise
+        except Exception as exc:
+            logging.error("Login token/session persistence failed for %s: %s", username, exc)
+            _clear_pending_login_2fa()
+            return _render_login(error="Could not start a secure session. Please try again.")
+
+        # Privilege transition: clear transient Flask session data before marking authenticated.
+        session.clear()
+        session.update({"username": username, "is_admin": bool(is_admin), "auth_session_id": sid})
+
+        try:
+            _ensure_baseline_viewer_role(username)
         except Exception:
-            pass
+            logging.warning("Could not self-heal baseline viewer role for %s", username, exc_info=True)
 
         resp = make_response(redirect("/chat"))
         resp.delete_cookie(LOGIN_CSRF_FALLBACK_COOKIE, path="/login")
@@ -1093,6 +1281,29 @@ def register_auth_routes(app, settings, limiter=None):
                     pass
             return None, None, _session_failure_response("session_revoked", redirect_on_failure=redirect_on_failure)
 
+        ip_banned, banned_ip, ip_ban_message = _current_request_ip_banned()
+        if ip_banned:
+            try:
+                revoke_auth_session(sid, reason="ip_banned")
+            except Exception:
+                pass
+            if username:
+                try:
+                    _force_logout_live_sessions(
+                        username,
+                        ip_ban_message,
+                        auth_session_ids={sid},
+                        action="ip_banned",
+                        code="ip_banned",
+                    )
+                except Exception:
+                    pass
+            try:
+                log_audit_event("system", "session_ip_ban_blocked", banned_ip, f"user={username}; sid={sid}")
+            except Exception:
+                pass
+            return None, None, _session_failure_response("ip_banned", redirect_on_failure=redirect_on_failure)
+
         allowed, account_status, status_code, status_reason = _account_status_auth_allowed(username)
         if not allowed:
             try:
@@ -1169,6 +1380,13 @@ def register_auth_routes(app, settings, limiter=None):
         # /chat cannot see it. However the CSRF cookie (csrf_refresh_token) is
         # available on '/', so we use it as a signal that a refresh cookie likely
         # exists.
+        # IP-ban hard gate: do not render the chat shell for a banned IP.
+        # Sockets and /token/refresh also enforce this, but blocking here avoids
+        # bootstrapping the full app for a connection that is already sanctioned.
+        ip_banned, banned_ip, ip_ban_message = _current_request_ip_banned()
+        if ip_banned:
+            return _chat_ip_ban_redirect(banned_ip, ip_ban_message)
+
         access_cookie_name = app.config.get("JWT_ACCESS_COOKIE_NAME", "echochat_access")
         access_token = request.cookies.get(access_cookie_name)
         refresh_csrf_cookie = request.cookies.get("csrf_refresh_token")
@@ -1250,7 +1468,7 @@ def register_auth_routes(app, settings, limiter=None):
             conn = get_db()
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT encrypted_private_key FROM users WHERE username = %s;",
+                    "SELECT encrypted_private_key FROM users WHERE LOWER(username) = LOWER(%s);",
                     (username,),
                 )
                 row = cur.fetchone()
@@ -1432,6 +1650,10 @@ def register_auth_routes(app, settings, limiter=None):
             "require_group_e2ee": bool(settings.get("require_group_e2ee", True)),
             "require_private_room_e2ee": bool(settings.get("require_private_room_e2ee", True)),
             "require_room_e2ee": bool(settings.get("require_room_e2ee", False)),
+            "max_emoticons_per_message": _client_int_setting("max_emoticons_per_message", 15, minimum=0, maximum=100),
+            "enable_room_typing_indicators": _client_bool_setting("enable_room_typing_indicators", False),
+            "enable_dm_typing_indicators": _client_bool_setting("enable_dm_typing_indicators", True),
+            "enable_group_typing_indicators": _client_bool_setting("enable_group_typing_indicators", True),
             "disable_file_transfer_globally": _client_bool_setting("disable_file_transfer_globally", False),
             "disable_dm_files_globally": _client_bool_setting("disable_dm_files_globally", False) or _client_bool_setting("disable_file_transfer_globally", False),
             "disable_group_files_globally": _client_bool_setting("disable_group_files_globally", False) or _client_bool_setting("disable_file_transfer_globally", False),
@@ -1552,7 +1774,27 @@ def register_auth_routes(app, settings, limiter=None):
             )
 
         ua = request.headers.get("User-Agent")
-        ip = get_request_ip() or None
+        ip_banned, banned_ip, ip_ban_message = _current_request_ip_banned()
+        ip = banned_ip or get_request_ip() or None
+        if ip_banned:
+            try:
+                revoke_all_sessions_for_user(username, reason="ip_banned")
+            except Exception:
+                pass
+            try:
+                _force_logout_live_sessions(
+                    username,
+                    ip_ban_message,
+                    action="ip_banned",
+                    code="ip_banned",
+                )
+            except Exception:
+                pass
+            try:
+                log_audit_event("system", "refresh_ip_ban_blocked", ip, f"user={username}")
+            except Exception:
+                pass
+            return _refresh_json_response({"ok": False, "error": "ip_banned", "message": ip_ban_message}, 403, clear_cookies=True)
 
         # Determine refresh token state (handles replay vs race conditions).
         meta = get_refresh_token_meta(username, old_refresh_jti)
@@ -1696,34 +1938,27 @@ def register_auth_routes(app, settings, limiter=None):
             datetime.fromtimestamp(refresh_exp, tz=timezone.utc) if isinstance(refresh_exp, (int, float)) else None
         )
 
-        # Atomic rotation: revoke old refresh + insert new refresh
-        if not rotate_refresh_token(
-            username=username,
-            old_jti=old_refresh_jti,
-            new_jti=new_refresh_jti,
-            new_expires_at=refresh_expires_at,
-            session_id=sid,
-            user_agent=ua,
-            ip_address=ip,
-        ):
-            # Likely race: another refresh already rotated this token.
-            # Do NOT unset cookies (a parallel successful refresh might have
-            # already set a new refresh cookie).
-            return _refresh_json_response({"ok": False, "error": "stale_refresh"}, 409)
-
-        # Store access token so logout can revoke immediately.
+        # Atomic rotation: replace old refresh, insert new refresh, and persist new access token together.
         try:
-            store_auth_token(
-                jti=new_access_jti,
+            rotated = rotate_refresh_and_store_access_token(
                 username=username,
-                token_type="access",
-                expires_at=access_expires_at,
+                old_jti=old_refresh_jti,
+                new_refresh_jti=new_refresh_jti,
+                new_refresh_expires_at=refresh_expires_at,
+                new_access_jti=new_access_jti,
+                new_access_expires_at=access_expires_at,
                 session_id=sid,
                 user_agent=ua,
                 ip_address=ip,
             )
         except Exception:
-            pass
+            logging.exception("Refresh rotation persistence failed for %s", username)
+            return _refresh_json_response({"ok": False, "error": "refresh_persist_failed"}, 401, clear_cookies=True)
+        if not rotated:
+            # Likely race: another refresh already rotated this token.
+            # Do NOT unset cookies (a parallel successful refresh might have
+            # already set a new refresh cookie).
+            return _refresh_json_response({"ok": False, "error": "stale_refresh"}, 409)
 
         resp = _refresh_json_response({"ok": True})
         return _set_auth_cookies_for_response(resp, new_access, new_refresh)
@@ -1747,9 +1982,10 @@ def register_auth_routes(app, settings, limiter=None):
             if request.args.get("cancel_2fa"):
                 _clear_pending_login_2fa()
                 return _render_login(error=None)
-            pending_username = str(session.get("pending_2fa_username") or "").strip().lower()
-            pending_phone = _normalize_phone_e164(session.get("pending_2fa_phone") or "")
-            pending_started_at = float(session.get("pending_2fa_started_at") or 0.0)
+            login_challenge = _load_server_challenge("login_2fa", session.get("pending_2fa_challenge_id")) or {}
+            pending_username = str(login_challenge.get("username") or session.get("pending_2fa_username") or "").strip().lower()
+            pending_phone = _normalize_phone_e164(login_challenge.get("phone") or "")
+            pending_started_at = float(login_challenge.get("started_at") or 0.0)
             max_age = int(effective_twilio_settings(settings).get("two_factor_login_timeout_seconds") or 600)
             if pending_username and pending_phone and pending_started_at:
                 if (datetime.now(timezone.utc).timestamp() - pending_started_at) <= max_age:
@@ -1771,14 +2007,25 @@ def register_auth_routes(app, settings, limiter=None):
 
         stage = (request.form.get("stage") or "password").strip().lower()
 
+        ip_banned, banned_ip, ip_ban_message = _current_request_ip_banned()
+        if ip_banned:
+            _clear_pending_login_2fa()
+            try:
+                log_audit_event("anon", "login_ip_ban_blocked", banned_ip, f"stage={stage}")
+            except Exception:
+                pass
+            return _render_login(error=ip_ban_message)
+
         if stage == "2fa_cancel":
             _clear_pending_login_2fa()
             return _render_login(error=None)
 
         if stage in {"2fa_sms", "2fa_resend"}:
-            username = str(session.get("pending_2fa_username") or "").strip().lower()
-            phone = _normalize_phone_e164(session.get("pending_2fa_phone") or "")
-            started_at = float(session.get("pending_2fa_started_at") or 0.0)
+            login_challenge = _load_server_challenge("login_2fa", session.get("pending_2fa_challenge_id")) or {}
+            username = str(login_challenge.get("username") or session.get("pending_2fa_username") or "").strip().lower()
+            phone = _normalize_phone_e164(login_challenge.get("phone") or "")
+            started_at = float(login_challenge.get("started_at") or 0.0)
+            challenge_auth_version = login_challenge.get("auth_version")
             max_age = int(effective_twilio_settings(settings).get("two_factor_login_timeout_seconds") or 600)
             if not username or not phone or not started_at:
                 _clear_pending_login_2fa()
@@ -1825,7 +2072,9 @@ def register_auth_routes(app, settings, limiter=None):
                     )
                 ok_send, msg = _send_sms_2fa_code(phone)
                 if ok_send:
-                    session["pending_2fa_started_at"] = datetime.now(timezone.utc).timestamp()
+                    cid = _save_server_challenge("login_2fa", username, phone)
+                    session["pending_2fa_challenge_id"] = cid
+                    session["pending_2fa_username"] = username
                     return _render_login(
                         error=None,
                         two_factor_pending=True,
@@ -1849,7 +2098,7 @@ def register_auth_routes(app, settings, limiter=None):
                     two_factor_phone_mask=_mask_phone(phone),
                     prefill_username=username,
                 )
-            if not _login_2fa_account_still_matches(username, phone):
+            if not _login_2fa_account_still_matches(username, phone, challenge_auth_version):
                 _clear_pending_login_2fa()
                 return _render_login(error="Your 2FA settings changed. Please sign in again.")
             _clear_pending_login_2fa()
@@ -1890,7 +2139,8 @@ def register_auth_routes(app, settings, limiter=None):
                     """
                     SELECT column_name
                       FROM information_schema.columns
-                     WHERE table_name = 'users'
+                     WHERE table_schema = 'public'
+                       AND table_name = 'users'
                        AND column_name = ANY(%s);
                     """,
                     (["two_factor_enabled", "phone"],),
@@ -1911,6 +2161,8 @@ def register_auth_routes(app, settings, limiter=None):
         if row:
             canonical_username = str(row[0] or username)
             ok, upgraded_hash = verify_password_and_upgrade(password, row[1])
+        else:
+            _dummy_password_verify(password)
 
         if not ok:
             _clear_pending_login_2fa()
@@ -1919,13 +2171,15 @@ def register_auth_routes(app, settings, limiter=None):
         allowed, account_status, status_code, status_reason = _account_status_auth_allowed(canonical_username)
         if not allowed:
             _clear_pending_login_2fa()
-            return _render_login(error=status_reason or "This account cannot sign in right now.")
+            logging.info("Login blocked for account status user=%s status=%s code=%s", canonical_username, account_status, status_code)
+            msg = (status_reason or "This account cannot sign in right now.") if is_localish_request() else "Invalid username or password"
+            return _render_login(error=msg)
 
         if upgraded_hash:
             try:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "UPDATE users SET password = %s WHERE username = %s;",
+                        "UPDATE users SET password = %s WHERE LOWER(username) = LOWER(%s);",
                         (upgraded_hash, canonical_username),
                     )
                 conn.commit()
@@ -1948,9 +2202,9 @@ def register_auth_routes(app, settings, limiter=None):
             ok_send, msg = _send_sms_2fa_code(phone)
             if not ok_send:
                 return _render_login(error=msg)
+            cid = _save_server_challenge("login_2fa", canonical_username, phone)
+            session["pending_2fa_challenge_id"] = cid
             session["pending_2fa_username"] = canonical_username
-            session["pending_2fa_phone"] = phone
-            session["pending_2fa_started_at"] = datetime.now(timezone.utc).timestamp()
             return _render_login(
                 error=None,
                 two_factor_pending=True,
@@ -2250,6 +2504,17 @@ def register_auth_routes(app, settings, limiter=None):
         database so the browser can show useful feedback without waiting for the
         final submit. Registration still repeats these checks server-side.
         """
+        ip_banned, banned_ip, ip_ban_message = _current_request_ip_banned()
+        if ip_banned:
+            _log_ip_ban_block("username_available_ip_ban_blocked", banned_ip)
+            return _username_availability_json({
+                "ok": False,
+                "available": False,
+                "status": "ip_banned",
+                "username": "",
+                "message": ip_ban_message,
+            }, status=403)
+
         raw_username = request.args.get("username", "")
         username = normalize_registration_username(raw_username)
         if not username:
@@ -2300,6 +2565,11 @@ def register_auth_routes(app, settings, limiter=None):
     @app.route("/register", methods=["GET", "POST"])
     @_limit(settings.get("rate_limit_register") or "3 per minute", methods=["POST"])
     def register():
+        ip_banned, banned_ip, ip_ban_message = _current_request_ip_banned()
+        if ip_banned:
+            _log_ip_ban_block("register_ip_ban_blocked", banned_ip)
+            return _render_register(ip_ban_message, status=403)
+
         if request.method == "POST":
             submitted_csrf = request.form.get("csrf_token")
             try:
@@ -2398,14 +2668,14 @@ def register_auth_routes(app, settings, limiter=None):
                 if email_in_use(conn, email, settings=settings):
                     return _render_register("Email already in use.", status=409, values=form_values)
 
-                # Use helper to generate RSA keys, encrypt private key, and INSERT
+                # Create the account, default avatar, and baseline viewer role in one transaction.
                 pwd_hash = hash_password(password)
                 pin_hash = hash_password(recovery_pin)
                 create_user_with_keys(
                     conn=conn,
                     username=username,
-                    raw_password=password,   # plaintext used to encrypt private key
-                    password_hash=pwd_hash,  # hashed password stored in DB
+                    raw_password=password,
+                    password_hash=pwd_hash,
                     email=email,
                     phone=phone or None,
                     address=None,
@@ -2414,47 +2684,24 @@ def register_auth_routes(app, settings, limiter=None):
                     is_admin=False,
                     recovery_pin_hash=pin_hash,
                     recovery_pin_set_at=datetime.now(timezone.utc),
+                    commit=False,
                 )
-
-                # Give every new account a generated avatar so nobody starts blank.
-                try:
-                    default_avatar_url = _build_default_avatar_url(username)
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            "UPDATE users SET avatar_url = COALESCE(NULLIF(avatar_url, ''), %s) WHERE username = %s;",
-                            (default_avatar_url, username),
-                        )
-                    conn.commit()
-                except Exception:
-                    try:
-                        conn.rollback()
-                    except Exception:
-                        pass
-                    logging.exception("Failed to assign default avatar for %s", username)
-
-                # Assign default RBAC role (viewer) if roles are present.
-                try:
-                    with conn.cursor() as cur:
-                        cur.execute("SELECT id FROM users WHERE username = %s;", (username,))
-                        user_row = cur.fetchone()
-                        cur.execute("SELECT id FROM roles WHERE name = 'viewer';")
-                        role_row = cur.fetchone()
-                        if user_row and role_row:
-                            cur.execute(
-                                """
-                                INSERT INTO user_roles (user_id, role_id)
-                                VALUES (%s, %s)
-                                ON CONFLICT (user_id, role_id) DO NOTHING;
-                                """,
-                                (user_row[0], role_row[0]),
-                            )
-                    conn.commit()
-                except Exception:
-                    try:
-                        conn.rollback()
-                    except Exception:
-                        pass
-                    logging.exception("Failed to assign viewer role for newly registered user %s", username)
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id FROM users WHERE LOWER(username)=LOWER(%s) LIMIT 1;", (username,))
+                    user_row = cur.fetchone()
+                    cur.execute("SELECT id FROM roles WHERE name = 'viewer' LIMIT 1;")
+                    role_row = cur.fetchone()
+                    if not user_row or not role_row:
+                        raise RuntimeError("baseline viewer role is not available")
+                    cur.execute(
+                        """
+                        INSERT INTO user_roles (user_id, role_id)
+                        VALUES (%s, %s)
+                        ON CONFLICT (user_id, role_id) DO NOTHING;
+                        """,
+                        (user_row[0], role_row[0]),
+                    )
+                conn.commit()
                 resp = make_response(redirect("/login?registered=1"))
                 resp.delete_cookie(REGISTER_CSRF_FALLBACK_COOKIE, path="/register")
                 return resp
@@ -2490,6 +2737,11 @@ def register_auth_routes(app, settings, limiter=None):
           - Always respond generically to avoid account enumeration.
           - Token expires quickly and is single-use.
         """
+
+        ip_banned, banned_ip, ip_ban_message = _current_request_ip_banned()
+        if ip_banned:
+            _log_ip_ban_block("forgot_password_ip_ban_blocked", banned_ip)
+            return _render_forgot(ip_ban_message, status=403)
 
         if request.method == "POST":
             raw_email = request.form.get("email", "") or ""
@@ -2553,7 +2805,8 @@ def register_auth_routes(app, settings, limiter=None):
                         """
                         SELECT username, email, email_hash, email_encrypted, recovery_pin_hash, recovery_failed_attempts, recovery_locked_until
                           FROM users
-                         WHERE username = %s;
+                         WHERE LOWER(username) = LOWER(%s)
+                         LIMIT 1;
                         """,
                         (username_hint,),
                     )
@@ -2592,7 +2845,7 @@ def register_auth_routes(app, settings, limiter=None):
                                        SET recovery_pin_hash = %s,
                                            recovery_failed_attempts = 0,
                                            recovery_locked_until = NULL
-                                     WHERE username = %s;
+                                     WHERE LOWER(username) = LOWER(%s);
                                     """,
                                     (upgraded_pin_hash, username),
                                 )
@@ -2602,7 +2855,7 @@ def register_auth_routes(app, settings, limiter=None):
                                     UPDATE users
                                        SET recovery_failed_attempts = 0,
                                            recovery_locked_until = NULL
-                                     WHERE username = %s;
+                                     WHERE LOWER(username) = LOWER(%s);
                                     """,
                                     (username,),
                                 )
@@ -2626,7 +2879,7 @@ def register_auth_routes(app, settings, limiter=None):
                                 UPDATE users
                                    SET recovery_failed_attempts = %s,
                                        recovery_locked_until = %s
-                                 WHERE username = %s;
+                                 WHERE LOWER(username) = LOWER(%s);
                                 """,
                                 (failed_attempts, new_locked_until, username),
                             )
@@ -2638,6 +2891,9 @@ def register_auth_routes(app, settings, limiter=None):
                             pass
                     lookup_note = "invalid_recovery_pin"
                     username = None
+
+            if not pin_verified:
+                _dummy_recovery_pin_verify(recovery_pin)
 
             # If we found an account and verified its Recovery PIN, generate a token.
             reset_url = None
@@ -2662,7 +2918,7 @@ def register_auth_routes(app, settings, limiter=None):
                             """
                             SELECT username
                               FROM users
-                             WHERE username = %s
+                             WHERE LOWER(username) = LOWER(%s)
                              FOR UPDATE;
                             """,
                             (username,),
@@ -2676,7 +2932,7 @@ def register_auth_routes(app, settings, limiter=None):
                                 """
                                 SELECT COUNT(*)
                                   FROM password_reset_tokens
-                                 WHERE username = %s
+                                 WHERE LOWER(username) = LOWER(%s)
                                    AND created_at > (CURRENT_TIMESTAMP - INTERVAL '24 hours');
                                 """,
                                 (username,),
@@ -2702,7 +2958,7 @@ def register_auth_routes(app, settings, limiter=None):
                                     """
                                     SELECT COUNT(*)
                                       FROM password_reset_tokens
-                                     WHERE username = %s
+                                     WHERE LOWER(username) = LOWER(%s)
                                        AND created_at > (CURRENT_TIMESTAMP - INTERVAL '15 minutes')
                                        AND used_at IS NULL;
                                     """,
@@ -2714,7 +2970,7 @@ def register_auth_routes(app, settings, limiter=None):
                                     cur.execute(
                                         """
                                         DELETE FROM password_reset_tokens
-                                         WHERE username = %s
+                                         WHERE LOWER(username) = LOWER(%s)
                                            AND used_at IS NULL
                                            AND created_at > (CURRENT_TIMESTAMP - INTERVAL '15 minutes');
                                         """,
@@ -2808,14 +3064,25 @@ def register_auth_routes(app, settings, limiter=None):
 
                                     if should_spool:
                                         if allow_remote or is_localish_request():
-                                            os.makedirs("logs", exist_ok=True)
-                                            spool_path = settings.get("password_reset_spool_file") or os.path.join("logs", "reset_links.log")
+                                            spool_path = str(settings.get("password_reset_spool_file") or os.path.join("logs", "reset_links.log"))
+                                            spool_dir = os.path.dirname(spool_path) or "."
+                                            os.makedirs(spool_dir, mode=0o700, exist_ok=True)
+                                            try:
+                                                os.chmod(spool_dir, 0o700)
+                                            except Exception:
+                                                pass
+                                            fd = os.open(spool_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+                                            try:
+                                                os.chmod(spool_path, 0o600)
+                                            except Exception:
+                                                pass
                                             ts = datetime.now(timezone.utc).isoformat()
-                                            with open(spool_path, "a", encoding="utf-8") as f:
-                                                f.write(
-                                                    f"{ts}\tuser={username}\temail={email}\tip={client_ip}\t"
-                                                    f"smtp={email_send_info}\treason={spool_reason}\turl={reset_url}\n"
-                                                )
+                                            line = (
+                                                f"{ts}\tuser={username}\temail={email}\tip={client_ip}\t"
+                                                f"smtp={email_send_info}\treason={spool_reason}\turl={reset_url}\n"
+                                            )
+                                            with os.fdopen(fd, "a", encoding="utf-8") as f:
+                                                f.write(line)
                                             spool_ok = True
 
                                             # Do not print reset links to stdout/server logs.
@@ -2912,6 +3179,11 @@ def register_auth_routes(app, settings, limiter=None):
     def reset_password(token):
         """Complete the reset using token + Recovery PIN."""
 
+        ip_banned, banned_ip, ip_ban_message = _current_request_ip_banned()
+        if ip_banned:
+            _log_ip_ban_block("reset_password_ip_ban_blocked", banned_ip)
+            return _render_reset(ip_ban_message, status=403, require_pin=True)
+
         raw_token = str(token or "").strip()
         if not re.fullmatch(r"[A-Za-z0-9_-]{32,256}", raw_token):
             return _render_reset("Invalid or expired reset link", status=400, require_pin=True)
@@ -2951,7 +3223,7 @@ def register_auth_routes(app, settings, limiter=None):
         account_email = None
         try:
             with conn.cursor() as cur:
-                cur.execute("SELECT recovery_pin_hash, email, email_encrypted FROM users WHERE username = %s;", (username,))
+                cur.execute("SELECT recovery_pin_hash, email, email_encrypted FROM users WHERE LOWER(username) = LOWER(%s);", (username,))
                 prow = cur.fetchone()
             require_pin = bool(prow and prow[0])
             if prow:
@@ -2997,7 +3269,7 @@ def register_auth_routes(app, settings, limiter=None):
                         """
                         SELECT recovery_pin_hash, recovery_failed_attempts, recovery_locked_until
                           FROM users
-                         WHERE username = %s;
+                         WHERE LOWER(username) = LOWER(%s);
                         """,
                         (username,),
                     )
@@ -3033,7 +3305,7 @@ def register_auth_routes(app, settings, limiter=None):
                                 UPDATE users
                                    SET recovery_failed_attempts = %s,
                                        recovery_locked_until = %s
-                                 WHERE username = %s;
+                                 WHERE LOWER(username) = LOWER(%s);
                                 """,
                                 (failed_attempts, new_locked_until, username),
                             )
@@ -3051,7 +3323,7 @@ def register_auth_routes(app, settings, limiter=None):
                     try:
                         with conn.cursor() as cur:
                             cur.execute(
-                                "UPDATE users SET recovery_pin_hash = %s WHERE username = %s;",
+                                "UPDATE users SET recovery_pin_hash = %s WHERE LOWER(username) = LOWER(%s);",
                                 (upgraded_pin_hash, username),
                             )
                         conn.commit()
@@ -3072,7 +3344,7 @@ def register_auth_routes(app, settings, limiter=None):
                         UPDATE password_reset_tokens
                            SET used_at = CURRENT_TIMESTAMP
                          WHERE token_hash = %s
-                           AND username = %s
+                           AND LOWER(username) = LOWER(%s)
                            AND used_at IS NULL
                            AND expires_at > CURRENT_TIMESTAMP;
                         """,
@@ -3089,14 +3361,30 @@ def register_auth_routes(app, settings, limiter=None):
                                public_key = %s,
                                encrypted_private_key = %s,
                                recovery_failed_attempts = 0,
-                               recovery_locked_until = NULL
-                         WHERE username = %s;
+                               recovery_locked_until = NULL,
+                               auth_version = COALESCE(auth_version, 0) + 1,
+                               password_changed_at = CURRENT_TIMESTAMP,
+                               auth_changed_at = CURRENT_TIMESTAMP
+                         WHERE LOWER(username) = LOWER(%s);
                         """,
                         (hash_password(pw), new_public, new_enc_priv, username),
                     )
                     # Consume all other outstanding reset tokens for this user.
                     cur.execute(
-                        "UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE username = %s AND used_at IS NULL;",
+                        "UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE LOWER(username)=LOWER(%s) AND used_at IS NULL;",
+                        (username,),
+                    )
+                    cur.execute(
+                        """
+                        UPDATE auth_sessions
+                           SET revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP),
+                               revoked_reason = COALESCE(revoked_reason, 'password_reset')
+                         WHERE LOWER(username)=LOWER(%s) AND revoked_at IS NULL;
+                        """,
+                        (username,),
+                    )
+                    cur.execute(
+                        "UPDATE auth_tokens SET revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP) WHERE LOWER(username)=LOWER(%s) AND revoked_at IS NULL;",
                         (username,),
                     )
                 conn.commit()
@@ -3106,10 +3394,6 @@ def register_auth_routes(app, settings, limiter=None):
                 except Exception:
                     pass
 
-                try:
-                    revoke_all_sessions_for_user(username, reason="password_reset")
-                except Exception:
-                    pass
                 try:
                     _force_logout_live_sessions(
                         username,
@@ -3193,7 +3477,7 @@ def register_auth_routes(app, settings, limiter=None):
             try:
                 conn = get_db()
                 with conn.cursor() as cur:
-                    cur.execute("SELECT email, email_encrypted FROM users WHERE username = %s LIMIT 1;", (user,))
+                    cur.execute("SELECT email, email_encrypted FROM users WHERE LOWER(username) = LOWER(%s) LIMIT 1;", (user,))
                     row = cur.fetchone()
                 if not row:
                     return None
@@ -3228,7 +3512,7 @@ def register_auth_routes(app, settings, limiter=None):
                     """
                     SELECT email, email_encrypted, phone, two_factor_enabled, is_verified, created_at
                       FROM users
-                     WHERE username = %s
+                     WHERE LOWER(username) = LOWER(%s)
                      LIMIT 1;
                     """,
                     (user,),
@@ -3362,7 +3646,7 @@ def register_auth_routes(app, settings, limiter=None):
                                 """
                                 SELECT password, encrypted_private_key, email, email_encrypted
                                   FROM users
-                                 WHERE username = %s
+                                 WHERE LOWER(username) = LOWER(%s)
                                  FOR UPDATE;
                                 """,
                                 (user,),
@@ -3403,7 +3687,7 @@ def register_auth_routes(app, settings, limiter=None):
                                     UPDATE users
                                        SET password = %s,
                                            encrypted_private_key = %s
-                                     WHERE username = %s;
+                                     WHERE LOWER(username) = LOWER(%s);
                                     """,
                                     (hash_password(new_password), new_encrypted_private_key, user),
                                 )
@@ -3414,7 +3698,7 @@ def register_auth_routes(app, settings, limiter=None):
                                     """
                                     UPDATE password_reset_tokens
                                        SET used_at = COALESCE(used_at, CURRENT_TIMESTAMP)
-                                     WHERE username = %s
+                                     WHERE LOWER(username) = LOWER(%s)
                                        AND used_at IS NULL;
                                     """,
                                     (user,),
@@ -3426,6 +3710,7 @@ def register_auth_routes(app, settings, limiter=None):
                             except Exception:
                                 pass
                         else:
+                            apply_auth_risk_event(user, "password_change", keep_current_sid=current_sid, revoke_all=False, conn=conn, commit=False)
                             conn.commit()
                     except Exception:
                         logging.exception("Could not store password change for %s", user)
@@ -3440,26 +3725,29 @@ def register_auth_routes(app, settings, limiter=None):
                             log_audit_event(user, "password_change", user, "changed from account security")
                         except Exception:
                             pass
-
-                        if sign_out_others and current_sid:
+                        try:
                             try:
-                                revoked = revoke_other_sessions_for_user(user, keep_session_id=current_sid, reason="password_change")
-                                try:
-                                    _force_logout_live_sessions(
-                                        user,
-                                        "Your account password was changed and this device signed out other sessions.",
-                                        exclude_auth_session_ids={current_sid},
-                                        action="password_change",
-                                        code="password_change",
-                                    )
-                                except Exception:
-                                    pass
-                                message = f"Password changed. Signed out {revoked} other session(s). Old reset links were invalidated. Open chat tabs should sign in again so private messages stay available."
+                                _force_logout_live_sessions(
+                                    user,
+                                    "Your account password was changed. Please sign in again.",
+                                    exclude_auth_session_ids={current_sid} if current_sid else None,
+                                    action="password_change",
+                                    code="password_change",
+                                )
                             except Exception:
-                                logging.exception("Password changed for %s but other session revocation failed", user)
-                                message = "Password changed and old reset links were invalidated, but the server could not sign out your other devices right now. Open chat tabs should sign in again so private messages stay available."
-                        else:
-                            message = "Password changed and old reset links were invalidated. Open chat tabs should sign in again so private messages stay available."
+                                pass
+                            resp = _issue_replacement_auth_cookies(
+                                user,
+                                current_sid,
+                                user_agent=request.headers.get("User-Agent"),
+                                ip_address=get_request_ip() or None,
+                                redirect_to="/account/security?message=password_changed",
+                            )
+                            return resp
+                        except Exception:
+                            logging.exception("Password changed for %s but session/version refresh failed", user)
+                            error = "Password changed, but the server could not safely refresh your session. Please sign in again."
+
 
             elif action == "revoke_session":
                 target_sid = str(request.form.get("session_id") or "").strip()
@@ -3582,7 +3870,7 @@ def register_auth_routes(app, settings, limiter=None):
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT phone, two_factor_enabled, password FROM users WHERE username = %s;",
+                    "SELECT phone, two_factor_enabled, password FROM users WHERE LOWER(username) = LOWER(%s);",
                     (user,),
                 )
                 row = cur.fetchone()
@@ -3601,9 +3889,11 @@ def register_auth_routes(app, settings, limiter=None):
         two_factor_enabled = bool(row[1])
         password_hash = row[2]
 
-        pending_phone = _normalize_phone_e164(session.get("enable_2fa_phone") or "")
-        pending_user = str(session.get("enable_2fa_user") or "").strip().lower()
-        pending_started_at = float(session.get("enable_2fa_started_at") or 0.0)
+        enable_challenge = _load_server_challenge("enable_2fa", session.get("enable_2fa_challenge_id")) or {}
+        pending_phone = _normalize_phone_e164(enable_challenge.get("phone") or "")
+        pending_user = str(enable_challenge.get("username") or session.get("enable_2fa_user") or "").strip().lower()
+        pending_started_at = float(enable_challenge.get("started_at") or 0.0)
+        pending_auth_version = enable_challenge.get("auth_version")
         pending_active = pending_user == user and pending_phone and pending_started_at
         max_age = int(effective_twilio_settings(settings).get("two_factor_login_timeout_seconds") or 600)
         if pending_active and (datetime.now(timezone.utc).timestamp() - pending_started_at) > max_age:
@@ -3637,24 +3927,34 @@ def register_auth_routes(app, settings, limiter=None):
                 if not ok:
                     error = "Current password is required to disable 2FA."
                 else:
-                    if upgraded_hash:
-                        try:
-                            with conn.cursor() as cur:
-                                cur.execute("UPDATE users SET password = %s WHERE username = %s;", (upgraded_hash, user))
-                            conn.commit()
-                        except Exception:
-                            logging.exception("Could not upgrade password hash while disabling 2FA for %s", user)
                     try:
                         with conn.cursor() as cur:
+                            if upgraded_hash:
+                                cur.execute("UPDATE users SET password = %s WHERE LOWER(username) = LOWER(%s);", (upgraded_hash, user))
                             cur.execute(
-                                "UPDATE users SET two_factor_enabled = FALSE, two_factor_secret = NULL WHERE username = %s;",
+                                "UPDATE users SET two_factor_enabled = FALSE, two_factor_secret = NULL WHERE LOWER(username) = LOWER(%s);",
                                 (user,),
                             )
+                        apply_auth_risk_event(user, "sms_2fa_disabled", keep_current_sid=_sid, revoke_all=False, conn=conn, commit=False)
                         conn.commit()
                         _clear_pending_enable_2fa()
-                        message = "SMS 2FA disabled."
-                        two_factor_enabled = False
+                        try:
+                            _force_logout_live_sessions(
+                                user,
+                                "SMS 2FA was changed on this account. Please sign in again.",
+                                exclude_auth_session_ids={_sid} if _sid else None,
+                                action="sms_2fa_disabled",
+                                code="sms_2fa_disabled",
+                            )
+                        except Exception:
+                            pass
+                        resp = _issue_replacement_auth_cookies(user, _sid, user_agent=request.headers.get("User-Agent"), ip_address=get_request_ip() or None, redirect_to="/account/security?message=2fa_disabled")
+                        return resp
                     except Exception as e:
+                        try:
+                            conn.rollback()
+                        except Exception:
+                            pass
                         logging.error("DB error disabling 2FA: %s", e)
                         error = "Could not disable SMS 2FA."
 
@@ -3674,6 +3974,9 @@ def register_auth_routes(app, settings, limiter=None):
                     pass
                 elif not phone:
                     error = "Start SMS 2FA setup first."
+                elif pending_auth_version is not None and int(pending_auth_version or 0) != int(get_auth_version(user) or 0):
+                    _clear_pending_enable_2fa()
+                    error = "Your account security state changed. Start SMS 2FA setup again."
                 else:
                     ok_check, msg = _check_sms_2fa_code(phone, code)
                     if not ok_check:
@@ -3682,15 +3985,29 @@ def register_auth_routes(app, settings, limiter=None):
                         try:
                             with conn.cursor() as cur:
                                 cur.execute(
-                                    "UPDATE users SET phone = %s, two_factor_enabled = TRUE, two_factor_secret = NULL WHERE username = %s;",
+                                    "UPDATE users SET phone = %s, two_factor_enabled = TRUE, two_factor_secret = NULL WHERE LOWER(username) = LOWER(%s);",
                                     (encrypt_sensitive_field(phone, settings, field_name="users.phone"), user),
                                 )
+                            apply_auth_risk_event(user, "sms_2fa_enabled", keep_current_sid=_sid, revoke_all=False, conn=conn, commit=False)
                             conn.commit()
                             _clear_pending_enable_2fa()
-                            saved_phone = phone
-                            two_factor_enabled = True
-                            message = "SMS 2FA enabled. Future logins will require a text-message code."
+                            try:
+                                _force_logout_live_sessions(
+                                    user,
+                                    "SMS 2FA was changed on this account. Please sign in again.",
+                                    exclude_auth_session_ids={_sid} if _sid else None,
+                                    action="sms_2fa_enabled",
+                                    code="sms_2fa_enabled",
+                                )
+                            except Exception:
+                                pass
+                            resp = _issue_replacement_auth_cookies(user, _sid, user_agent=request.headers.get("User-Agent"), ip_address=get_request_ip() or None, redirect_to="/account/security?message=2fa_enabled")
+                            return resp
                         except Exception as e:
+                            try:
+                                conn.rollback()
+                            except Exception:
+                                pass
                             logging.error("DB error enabling SMS 2FA: %s", e)
                             error = "Could not enable SMS 2FA."
 
@@ -3710,7 +4027,9 @@ def register_auth_routes(app, settings, limiter=None):
                 else:
                     ok_send, msg = _send_sms_2fa_code(phone)
                     if ok_send:
-                        session["enable_2fa_started_at"] = datetime.now(timezone.utc).timestamp()
+                        cid = _save_server_challenge("enable_2fa", user, phone)
+                        session["enable_2fa_challenge_id"] = cid
+                        session["enable_2fa_user"] = user
                         message = "We sent a fresh verification code."
                     else:
                         error = msg
@@ -3742,15 +4061,15 @@ def register_auth_routes(app, settings, limiter=None):
                     if upgraded_hash:
                         try:
                             with conn.cursor() as cur:
-                                cur.execute("UPDATE users SET password = %s WHERE username = %s;", (upgraded_hash, user))
+                                cur.execute("UPDATE users SET password = %s WHERE LOWER(username) = LOWER(%s);", (upgraded_hash, user))
                             conn.commit()
                         except Exception:
                             logging.exception("Could not upgrade password hash while enabling 2FA for %s", user)
                     ok_send, msg = _send_sms_2fa_code(requested_phone)
                     if ok_send:
-                        session["enable_2fa_phone"] = requested_phone
+                        cid = _save_server_challenge("enable_2fa", user, requested_phone)
+                        session["enable_2fa_challenge_id"] = cid
                         session["enable_2fa_user"] = user
-                        session["enable_2fa_started_at"] = datetime.now(timezone.utc).timestamp()
                         pending_phone = requested_phone
                         pending_active = True
                         message = f"We sent a verification code to {_mask_phone(requested_phone)}."
@@ -3779,6 +4098,8 @@ def register_auth_routes(app, settings, limiter=None):
             return rejection
 
         target_raw = request.args.get("username", "").strip()
+        key_scope = str(request.args.get("scope") or request.args.get("context") or "").strip().lower()
+        room_key_scope = key_scope in {"room", "room_chat", "room_e2ee"}
         if not target_raw:
             return _public_key_json({"ok": False, "error": "username_required"}, status=400)
         if len(target_raw) > 64 or any(ch in target_raw for ch in "\r\n\t\x00"):
@@ -3801,21 +4122,37 @@ def register_auth_routes(app, settings, limiter=None):
         if target_status in {"suspended", "deactivated"}:
             return _public_key_json({"ok": False, "error": "target_not_active", "account_status": target_status}, status=403)
 
-        # E2EE key discovery is part of the DM send path. Once either user has
-        # blocked the other, deny key lookup so post-block sends fail before
-        # encryption/fallback and mixed-case usernames cannot bypass the block.
+        # E2EE key discovery has two block models:
+        # - direct/private contexts (PM, files, groups) are hard pairwise blocks;
+        #   either direction denies key lookup.
+        # - room chat is viewer-side: if I block you, I should not receive your
+        #   room messages, but you can still receive mine while we both remain
+        #   visible in the room roster.  Therefore room-scope lookup only denies
+        #   when the *target* has blocked the requester.
         if requester and str(requester).strip().lower() != str(target).strip().lower():
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT 1
-                      FROM blocks
-                     WHERE (LOWER(blocker)=LOWER(%s) AND LOWER(blocked)=LOWER(%s))
-                        OR (LOWER(blocker)=LOWER(%s) AND LOWER(blocked)=LOWER(%s))
-                     LIMIT 1;
-                    """,
-                    (requester, target, target, requester),
-                )
+                if room_key_scope:
+                    cur.execute(
+                        """
+                        SELECT 1
+                          FROM blocks
+                         WHERE LOWER(blocker)=LOWER(%s)
+                           AND LOWER(blocked)=LOWER(%s)
+                         LIMIT 1;
+                        """,
+                        (target, requester),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT 1
+                          FROM blocks
+                         WHERE (LOWER(blocker)=LOWER(%s) AND LOWER(blocked)=LOWER(%s))
+                            OR (LOWER(blocker)=LOWER(%s) AND LOWER(blocked)=LOWER(%s))
+                         LIMIT 1;
+                        """,
+                        (requester, target, target, requester),
+                    )
                 if cur.fetchone():
                     return _public_key_json({"ok": False, "error": "blocked"}, status=403)
 

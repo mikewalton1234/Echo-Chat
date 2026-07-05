@@ -39,13 +39,14 @@ from database import (
     touch_auth_session_activity,
     _official_room_names_from_json,
 )
-from security import log_audit_event
+from security import log_audit_event, get_request_ip
 from realtime.socket_abuse import socket_connect_guard, socket_event_guard
 from permissions import check_user_permission
-from moderation import is_user_sanctioned, mute_user
+from moderation import get_active_ip_sanction_detail, is_ip_sanctioned, is_user_sanctioned, mute_user
 from account_status import account_can_authenticate, account_status_error_code, account_status_reason, is_effectively_shadowbanned
 from room_name_policy import validate_room_name_format
 from echo_voice_protocol import echo_voice_room_capacity, echo_voice_room_limit
+from emoticon_catalog import filter_excess_emoticon_shortcuts, clamp_max_emoticons_per_message
 
 # Shared in-memory state is centralized in realtime.state so handler modules can be split safely.
 from realtime.state import (
@@ -100,6 +101,104 @@ def register_socketio_handlers(socketio, settings):
         for sid in sids:
             emit(event, payload, to=sid)
         return bool(sids)
+
+
+    def _socketio_room_targets(room: str) -> list[tuple[str, str]]:
+        """Return live Socket.IO room participants as (sid, username).
+
+        The shared CONNECTED_USERS/Redis roster is the normal source of truth,
+        but block/unblock and reconnect races can leave that roster temporarily
+        stale while Flask-SocketIO still knows the actual transport-room
+        membership. Room chat delivery and room-user snapshots must consult the
+        Socket.IO manager too; otherwise two users can be in the same Socket.IO
+        room but each client only sees itself.
+        """
+        room_name = str(room or "").strip()
+        if not room_name:
+            return []
+
+        raw_sids: list[str] = []
+        seen: set[str] = set()
+
+        def _add_sid(value) -> None:
+            try:
+                sid = value[0] if isinstance(value, (tuple, list)) else value
+            except Exception:
+                sid = value
+            sid = str(sid or "").strip()
+            if not sid or sid in seen:
+                return
+            seen.add(sid)
+            raw_sids.append(sid)
+
+        # Preferred public python-socketio manager API.  It returns either sids
+        # or (sid, eio_sid) pairs depending on the installed version/manager.
+        try:
+            manager = getattr(getattr(socketio, "server", None), "manager", None)
+            participants = manager.get_participants("/", room_name) if manager else []
+            for item in participants or []:
+                _add_sid(item)
+        except Exception:
+            pass
+
+        # Fallback for older managers/tests that expose the room map directly.
+        try:
+            manager = getattr(getattr(socketio, "server", None), "manager", None)
+            ns_rooms = (getattr(manager, "rooms", None) or {}).get("/", {}) if manager else {}
+            room_obj = ns_rooms.get(room_name) if isinstance(ns_rooms, dict) else None
+            if isinstance(room_obj, dict):
+                iterable = room_obj.keys()
+            elif isinstance(room_obj, (set, list, tuple)):
+                iterable = room_obj
+            else:
+                iterable = []
+            for item in iterable:
+                _add_sid(item)
+        except Exception:
+            pass
+
+        targets: list[tuple[str, str]] = []
+        target_seen: set[str] = set()
+        for sid in raw_sids:
+            sess = None
+            try:
+                from realtime.state import get_connected_session, upsert_connected_session
+                sess = get_connected_session(sid)
+            except Exception:
+                sess = None
+                upsert_connected_session = None
+            if not sess:
+                try:
+                    with CONNECTED_USERS_LOCK:
+                        sess = dict(CONNECTED_USERS.get(sid) or {})
+                except Exception:
+                    sess = None
+            username = str((sess or {}).get("username") or "").strip()
+            current_room = str((sess or {}).get("room") or "").strip()
+            if not username:
+                continue
+
+            # The Socket.IO manager is authoritative for transport membership.
+            # After block -> unblock or reconnect, the shared roster/session row
+            # can lag behind while the sid is already in the real room.  Do not
+            # drop that participant just because the cached room field is stale;
+            # repair the shared state so later roster/E2EE lookups converge.
+            if current_room != room_name:
+                try:
+                    auth_session_id = str((sess or {}).get("auth_session_id") or "").strip() or None
+                    if callable(upsert_connected_session):
+                        upsert_connected_session(sid, username, room_name, auth_session_id=auth_session_id)
+                    else:
+                        with CONNECTED_USERS_LOCK:
+                            CONNECTED_USERS[sid] = {**(CONNECTED_USERS.get(sid) or {}), "username": username, "room": room_name, "auth_session_id": auth_session_id}
+                except Exception:
+                    pass
+
+            if sid in target_seen:
+                continue
+            target_seen.add(sid)
+            targets.append((sid, username))
+        return targets
 
 
     def _socket_event_guard(username: str, event_name: str, data=None, *, default_max_bytes: int = 65536, default_limit: int = 180, default_window: int = 60):
@@ -193,6 +292,44 @@ def register_socketio_handlers(socketio, settings):
             payload["username"] = username
         return payload
 
+    def _active_ip_ban_socket_payload(ip: str | None, username: str | None = None) -> dict:
+        reason = None
+        expires_at = None
+        try:
+            reason, expires_at = get_active_ip_sanction_detail(ip)
+        except Exception:
+            reason, expires_at = None, None
+        message = "Your connection was closed because this IP address is banned."
+        if reason:
+            message += f" Reason: {reason}"
+        if expires_at:
+            try:
+                message += f" Until: {expires_at.isoformat()}"
+            except Exception:
+                pass
+        return {
+            "success": False,
+            "error": "ip_banned",
+            "code": "ip_banned",
+            "reason": message,
+            "username": username,
+        }
+
+    def _current_socket_ip_banned(username: str | None = None) -> tuple[bool, str | None, dict | None]:
+        ip = get_request_ip() or None
+        try:
+            if ip and is_ip_sanctioned(ip):
+                return True, ip, _active_ip_ban_socket_payload(ip, username=username)
+        except Exception:
+            return True, ip, {
+                "success": False,
+                "error": "ip_ban_check_failed",
+                "code": "ip_ban_check_failed",
+                "reason": "Your connection could not be verified. Please contact an admin.",
+                "username": username,
+            }
+        return False, ip, None
+
     def _require_account_auth_allowed(username: str | None) -> tuple[bool, str | None, str, str]:
         """Gate realtime sessions on effective account lifecycle status."""
         clean = str(username or "").strip()
@@ -244,6 +381,27 @@ def register_socketio_handlers(socketio, settings):
                 if state is None or state.get("revoked_at") is not None:
                     failure_code = "session_revoked"
                 else:
+                    ip_banned, banned_ip, ip_payload = _current_socket_ip_banned(username)
+                    if ip_banned:
+                        try:
+                            revoke_auth_session(auth_session_id, reason="ip_banned")
+                        except Exception:
+                            pass
+                        try:
+                            log_audit_event("system", "socket_ip_ban_blocked", banned_ip, f"user={username}; sid={request.sid}")
+                        except Exception:
+                            pass
+                        if disconnect_on_failure:
+                            try:
+                                emit("force_logout", ip_payload, to=request.sid)
+                            except Exception:
+                                pass
+                            try:
+                                disconnect(sid=request.sid)
+                            except Exception:
+                                pass
+                        return None, None, None, ip_payload
+
                     allowed, account_status, account_code, account_reason = _require_account_auth_allowed(username)
                     if not allowed:
                         try:
@@ -362,10 +520,31 @@ def register_socketio_handlers(socketio, settings):
         room = str(room or "").strip()
         if not room:
             return []
+        users: set[str] = set()
+
+        # Shared roster first (Redis/in-process state).
         try:
-            return list(shared_room_users(room))
+            for raw in list(shared_room_users(room)):
+                name = str(raw or "").strip()
+                if name:
+                    users.add(name)
         except Exception:
-            users: set[str] = set()
+            pass
+
+        # Socket.IO transport-room participants second.  This self-heals the
+        # block -> unblock edge where the transport room is correct but the
+        # shared roster has not caught up, which made each browser see only
+        # itself and made room chat delivery miss the peer.
+        try:
+            for _sid, raw in _socketio_room_targets(room):
+                name = str(raw or "").strip()
+                if name:
+                    users.add(name)
+        except Exception:
+            pass
+
+        # Last-resort legacy in-memory scan.
+        try:
             with CONNECTED_USERS_LOCK:
                 for _sid, sess in CONNECTED_USERS.items():
                     try:
@@ -376,55 +555,133 @@ def register_socketio_handlers(socketio, settings):
                             users.add(str(u))
                     except Exception:
                         continue
-            return sorted(users)
+        except Exception:
+            pass
+
+        return sorted(users, key=lambda u: str(u).lower())
 
     def _emit_room_users_snapshot(room: str, *, to_sid: str | None = None) -> dict:
-        """Emit and return a bounded, de-duplicated users-panel snapshot."""
+        """Emit and return a bounded, de-duplicated users-panel snapshot.
+
+        The returned payload is the live room roster. Blocking is not room
+        membership: a blocked user should remain visible in the room user list,
+        while room messages/typing/direct contact are filtered separately.
+        Emitted payloads are still personalized with block metadata so the
+        browser can label blocked users without removing them from the room.
+        """
         room_name = str(room or "").strip()
-        payload = {"room": room_name, "users": [], "count": 0, "ts": time.time(), "source": "live_roster"}
+        base_payload = {"room": room_name, "users": [], "count": 0, "ts": time.time(), "source": "live_roster"}
+
         try:
             users = set()
             for raw in _live_room_users(room_name):
                 name = str(raw or "").strip()
                 if name:
                     users.add(name)
+            sorted_users = sorted(users, key=lambda u: u.lower())
+            base_payload.update({"users": sorted_users, "count": len(sorted_users)})
 
-            # Self-heal a stale roster edge case: if the caller is already
-            # recorded in this room locally but the shared roster lookup has not
-            # caught up yet, never send that caller an impossible empty roster.
-            current_user = ""
-            self_healed_empty_roster = False
-            if to_sid:
+            def _viewer_from_sid(sid: str | None) -> str:
+                sid = str(sid or "").strip()
+                if not sid:
+                    return ""
                 try:
                     from realtime.state import get_connected_session
-                    sess = get_connected_session(to_sid)
-                    if sess and str(sess.get("room") or "").strip() == room_name:
-                        caller = str(sess.get("username") or "").strip()
-                        if caller:
-                            current_user = caller
-                            self_healed_empty_roster = not bool(users)
-                            users.add(caller)
+                    sess = get_connected_session(sid)
                 except Exception:
-                    pass
+                    sess = None
+                if not sess:
+                    try:
+                        with CONNECTED_USERS_LOCK:
+                            sess = dict(CONNECTED_USERS.get(sid) or {})
+                    except Exception:
+                        sess = None
+                if str((sess or {}).get("room") or "").strip() != room_name:
+                    return ""
+                return str((sess or {}).get("username") or "").strip()
 
-            sorted_users = sorted(users, key=lambda u: u.lower())
-            payload.update({
-                "users": sorted_users,
-                "count": len(sorted_users),
-                "current_user": current_user,
-                "self_healed_empty_roster": bool(self_healed_empty_roster),
-            })
+            def _payload_for_viewer(viewer: str) -> dict:
+                viewer = str(viewer or "").strip()
+                # Room membership is independent of block state: if a user is
+                # actually in the room, keep them in the roster.  Block state is
+                # exposed only as metadata so the client can mark the row as
+                # blocked/muted without making the person disappear.
+                visible = list(sorted_users)
+                self_healed_empty_roster = False
+                if viewer and not any(u.lower() == viewer.lower() for u in visible):
+                    visible.append(viewer)
+                    visible = sorted(set(visible), key=lambda u: u.lower())
+                    self_healed_empty_roster = not bool(sorted_users)
+
+                blocked_by_me: list[str] = []
+                blocks_me: list[str] = []
+                if viewer:
+                    for candidate in visible:
+                        if not candidate or candidate.lower() == viewer.lower():
+                            continue
+                        try:
+                            if _is_blocked(viewer, candidate):
+                                blocked_by_me.append(candidate)
+                        except Exception:
+                            pass
+                        try:
+                            if _is_blocked(candidate, viewer):
+                                blocks_me.append(candidate)
+                        except Exception:
+                            pass
+
+                return {
+                    **base_payload,
+                    "users": visible,
+                    "count": len(visible),
+                    "current_user": viewer,
+                    "blocked_by_me": blocked_by_me,
+                    "blocks_me": blocks_me,
+                    "self_healed_empty_roster": bool(self_healed_empty_roster),
+                }
+
             if to_sid:
+                viewer = _viewer_from_sid(to_sid)
+                payload = _payload_for_viewer(viewer)
                 emit("room_users", payload, to=to_sid)
-            else:
-                socketio.emit("room_users", payload, room=room_name)
+                return payload
+
+            # Broadcast personalized rosters to each actual Socket.IO room
+            # participant.  This avoids one global unfiltered roster while still
+            # healing cases where shared room state is stale.
+            delivered_sids: set[str] = set()
+            targets = []
+            try:
+                targets.extend(_socketio_room_targets(room_name))
+            except Exception:
+                pass
+            try:
+                targets.extend(connected_room_targets(room_name))
+            except Exception:
+                pass
+
+            for target_sid, target_user in targets:
+                sid = str(target_sid or "").strip()
+                if not sid or sid in delivered_sids:
+                    continue
+                viewer = str(target_user or "").strip() or _viewer_from_sid(sid)
+                try:
+                    emit("room_users", _payload_for_viewer(viewer), to=sid)
+                    delivered_sids.add(sid)
+                except Exception:
+                    continue
+
+            if not delivered_sids:
+                # Old tests or unusual managers may not expose participants; keep
+                # the legacy behavior as a fallback rather than dropping updates.
+                socketio.emit("room_users", base_payload, room=room_name)
         except Exception:
             try:
                 if to_sid:
-                    emit("room_users", payload, to=to_sid)
+                    emit("room_users", base_payload, to=to_sid)
             except Exception:
                 pass
-        return payload
+        return base_payload
 
     def _active_sanction_detail(username: str, sanction_type: str) -> tuple[str | None, str | None]:
         """Return (reason, expires_at_iso) for the most recent active sanction of this type."""
@@ -435,10 +692,10 @@ def register_socketio_handlers(socketio, settings):
                     """
                     SELECT reason, expires_at
                       FROM user_sanctions
-                     WHERE username = %s
+                     WHERE LOWER(username) = LOWER(%s)
                        AND sanction_type = %s
                        AND (expires_at IS NULL OR expires_at > NOW())
-                     ORDER BY created_at DESC
+                     ORDER BY created_at DESC, id DESC
                      LIMIT 1;
                     """,
                     (username, sanction_type),
@@ -652,10 +909,11 @@ def register_socketio_handlers(socketio, settings):
     def _public_presence_snapshot_from_row(username, online, presence_status, custom_status, last_seen, avatar_url=None):
         username = str(username or "").strip()
         pres = _normalize_presence(presence_status) or "online"
-        # Server-side live session tracking is the source of truth for whether a user
-        # is actually online. The DB flag is best-effort and can get stuck after
-        # crashes, reloads, or missed disconnect cleanup.
-        effective_online = bool(shared_user_sids(username)) if username else bool(online)
+        # Prefer live Socket.IO session tracking, but also honor the DB online flag.
+        # In multi-worker/dev setups without a shared Socket.IO state backend, the
+        # friend viewer may not see another worker's in-memory sid list even though
+        # the user's connect handler correctly set users.online = TRUE.
+        effective_online = (bool(shared_user_sids(username)) or bool(online)) if username else bool(online)
         visible_online = effective_online and pres != "invisible"
         visible_presence = "offline" if not visible_online else pres
         visible_custom = custom_status if visible_online else None
@@ -684,7 +942,7 @@ def register_socketio_handlers(socketio, settings):
         if not row:
             return {"online": False, "presence_status": "offline", "custom_status": None, "last_seen": None, "avatar_url": ""}
         db_online, presence_status, custom_status, last_seen, avatar_url = row
-        effective_online = bool(shared_user_sids(username)) if username else bool(db_online)
+        effective_online = (bool(shared_user_sids(username)) or bool(db_online)) if username else bool(db_online)
         return {
             "online": effective_online,
             "presence_status": _normalize_presence(presence_status) or "online",
@@ -733,8 +991,14 @@ def register_socketio_handlers(socketio, settings):
         conn = get_db()
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT locked FROM room_locks WHERE room = %s;",
-                (room,),
+                """
+                SELECT locked
+                  FROM room_locks
+                 WHERE LOWER(room) = LOWER(%s)
+                 ORDER BY CASE WHEN room = %s THEN 0 ELSE 1 END
+                 LIMIT 1;
+                """,
+                (room, room),
             )
             row = cur.fetchone()
         return bool(row and row[0])
@@ -743,8 +1007,14 @@ def register_socketio_handlers(socketio, settings):
         conn = get_db()
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT readonly FROM room_readonly WHERE room = %s;",
-                (room,),
+                """
+                SELECT readonly
+                  FROM room_readonly
+                 WHERE LOWER(room) = LOWER(%s)
+                 ORDER BY CASE WHEN room = %s THEN 0 ELSE 1 END
+                 LIMIT 1;
+                """,
+                (room, room),
             )
             row = cur.fetchone()
         return bool(row and row[0])
@@ -780,7 +1050,16 @@ def register_socketio_handlers(socketio, settings):
         try:
             conn = get_db()
             with conn.cursor() as cur:
-                cur.execute('SELECT seconds FROM room_slowmode WHERE room = %s;', (room,))
+                cur.execute(
+                    '''
+                    SELECT seconds
+                      FROM room_slowmode
+                     WHERE LOWER(room) = LOWER(%s)
+                     ORDER BY CASE WHEN room = %s THEN 0 ELSE 1 END
+                     LIMIT 1;
+                    ''',
+                    (room, room),
+                )
                 row = cur.fetchone()
             if row and row[0] is not None:
                 has_room_override = True
@@ -886,34 +1165,65 @@ def register_socketio_handlers(socketio, settings):
             except Exception:
                 pass
 
-    def _store_offline_pm(sender: str, receiver: str, cipher: str) -> None:
-        """Persist ciphertext for later delivery (server never decrypts)."""
+    def _store_offline_pm(sender: str, receiver: str, cipher: str) -> int | None:
+        """Persist ciphertext in the unread/private-message queue and return its row id.
+
+        Despite the historical table name, Echo-Chat now uses offline_messages as
+        the durable unread queue for private messages.  A live relay can still be
+        missed when a tab is backgrounded, sleeping, reconnecting, or not reading
+        the PM window, so the sender stores one encrypted row first and the client
+        ACKs that row only after it has actually been rendered/read.  The server
+        never decrypts this ciphertext.
+        """
         receiver = _resolve_canonical_username(receiver)
         if not receiver:
             try:
                 print(f"[offline_pms] dropped_invalid_receiver sender={sender!r} receiver={receiver!r}")
             except Exception:
                 pass
-            return
+            return None
         if _either_blocked(sender, receiver):
             try:
                 print(f"[offline_pms] dropped_blocked_pair sender={sender!r} receiver={receiver!r}")
             except Exception:
                 pass
-            return
+            return None
+        if bool(settings.get("require_dm_e2ee", True)) and not _looks_like_dm_cipher_envelope(cipher):
+            try:
+                print(f"[offline_pms] dropped_non_e2ee sender={sender!r} receiver={receiver!r}")
+            except Exception:
+                pass
+            return None
+        if str(cipher or "").strip().startswith("EC1:") and not _looks_like_dm_cipher_envelope(cipher):
+            try:
+                print(f"[offline_pms] dropped_bad_e2ee_envelope sender={sender!r} receiver={receiver!r}")
+            except Exception:
+                pass
+            return None
         conn = get_db()
         try:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO offline_messages (sender, receiver, message, delivered)
-                    VALUES (%s, %s, %s, FALSE);
+                    VALUES (%s, %s, %s, FALSE)
+                    RETURNING id;
                     """,
                     (sender, receiver, cipher),
                 )
+                row = cur.fetchone()
             conn.commit()
+            try:
+                return int(row[0]) if row and row[0] is not None else None
+            except Exception:
+                return None
         except Exception as e:
             print(f"[DB ERROR] store_offline_pm: {e}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            return None
         finally:
             # Socket.IO handlers do not reliably trigger Flask teardown hooks.
             # Ensure pooled connections are returned promptly to avoid pool exhaustion.
@@ -927,6 +1237,13 @@ def register_socketio_handlers(socketio, settings):
         """Send per-sender counts of offline PMs that have not been delivered yet."""
         conn = get_db()
         target_sid = sid or request.sid
+        # beta.391: match beta.322 summary behavior: count every undelivered
+        # offline/private-message row for the receiver. Do NOT filter the badge
+        # summary by ciphertext prefix here. `fetch_offline_pms` is still the
+        # delivery/security gate for deciding what can be returned, queued, or
+        # quarantined. The summary must reflect that unread rows exist; otherwise
+        # the PM window can later fetch/show messages while the Missed bubble
+        # incorrectly stays at 0.
         try:
             with conn.cursor() as cur:
                 cur.execute(
@@ -1250,6 +1567,18 @@ def register_socketio_handlers(socketio, settings):
             with _ROOM_EXISTS_LOCK:
                 _ROOM_EXISTS_CACHE[room] = (True, now)
         return exists
+
+    def _filter_excess_emoticons(message: str) -> tuple[str, int]:
+        """Server-side safety net for plaintext room/group emoticon floods."""
+        try:
+            filtered, _kept, removed = filter_excess_emoticon_shortcuts(
+                message,
+                settings,
+                max_count=clamp_max_emoticons_per_message(settings.get('max_emoticons_per_message', 15), 15),
+            )
+            return filtered, int(removed or 0)
+        except Exception:
+            return str(message or ''), 0
 
     _URL_TOKEN_RE = re.compile(r'(https?://|www\.)', re.IGNORECASE)
     _MAGNET_RE = re.compile(r'magnet:\?', re.IGNORECASE)
@@ -1683,6 +2012,83 @@ def register_socketio_handlers(socketio, settings):
     def _group_store_room(group_id: int) -> str:
         return f"g:{group_id}"
 
+    def _looks_like_group_cipher_envelope(value) -> bool:
+        """Validate the outer ECG1 group-message envelope shape before history relay.
+
+        This mirrors the realtime group send boundary.  The server still never
+        decrypts the payload; it only refuses to label malformed/garbage rows as
+        ciphertext during history reads.
+        """
+        if not isinstance(value, str):
+            return False
+        raw = value.strip()
+        if not raw.startswith("ECG1:"):
+            return False
+        body = raw[5:]
+        if not body or len(body) > 120000:
+            return False
+        try:
+            import base64
+            decoded = base64.b64decode(body, validate=True)
+            env = json.loads(decoded.decode("utf-8"))
+        except Exception:
+            return False
+        if not isinstance(env, dict):
+            return False
+        if env.get("v") != 1 or env.get("alg") != "RSA-OAEP+AES-GCM":
+            return False
+        if not isinstance(env.get("iv"), str) or not isinstance(env.get("ct"), str):
+            return False
+        keys = env.get("keys")
+        if not isinstance(keys, dict) or not keys:
+            return False
+        if len(keys) > 500:
+            return False
+        return all(isinstance(k, str) and k.strip() and isinstance(v, str) and v.strip() for k, v in keys.items())
+
+    def _dm_b64_field(value, *, min_bytes: int = 1, max_bytes: int = 200000):
+        if not isinstance(value, str) or not value.strip():
+            return None
+        try:
+            import base64
+            raw = base64.b64decode(value.encode("ascii"), validate=True)
+        except Exception:
+            return None
+        if len(raw) < min_bytes or len(raw) > max_bytes:
+            return None
+        return raw
+
+    def _looks_like_dm_cipher_envelope(value) -> bool:
+        """Validate EC1 DM envelope shape before offline storage/counting.
+
+        This is a storage boundary only; private-message plaintext remains
+        unreadable to the server.
+        """
+        if not isinstance(value, str) or not value.startswith("EC1:"):
+            return False
+        encoded = value[len("EC1:"):].strip()
+        if not encoded or len(encoded) > 180000:
+            return False
+        try:
+            import base64
+            raw = base64.b64decode(encoded.encode("ascii"), validate=True)
+            if len(raw) > 120000:
+                return False
+            env = json.loads(raw.decode("utf-8"))
+        except Exception:
+            return False
+        if not isinstance(env, dict):
+            return False
+        if env.get("v") != 1 or env.get("alg") != "RSA-OAEP+AES-GCM":
+            return False
+        if _dm_b64_field(env.get("ek"), min_bytes=128, max_bytes=512) is None:
+            return False
+        if _dm_b64_field(env.get("iv"), min_bytes=12, max_bytes=12) is None:
+            return False
+        if _dm_b64_field(env.get("ct"), min_bytes=16, max_bytes=120000) is None:
+            return False
+        return True
+
     def _format_group_history_rows(rows, *, require_e2ee: bool, allow_legacy: bool):
         """Convert DB rows -> wire-safe history items.
 
@@ -1708,9 +2114,15 @@ def register_socketio_handlers(socketio, settings):
             }
 
             if is_enc:
-                # message column stores the envelope string
-                item["cipher"] = msg
-                item["message"] = "🔒 Encrypted message"
+                # message column stores the envelope string.  Do not emit corrupt
+                # or legacy plaintext-looking values through the ciphertext field.
+                cipher_text = str(msg or "").strip()
+                if _looks_like_group_cipher_envelope(cipher_text):
+                    item["cipher"] = cipher_text
+                    item["message"] = "🔒 Encrypted message"
+                else:
+                    item["message"] = "⚠️ Invalid encrypted message hidden"
+                    item["hidden_invalid_cipher"] = True
             else:
                 if require_e2ee and not allow_legacy:
                     item["message"] = "⚠️ Legacy plaintext message hidden"

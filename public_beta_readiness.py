@@ -16,6 +16,15 @@ from typing import Any, Iterable
 from urllib.parse import urlparse
 
 from health_status import normalize_public_probe_path
+from secret_manager import (
+    is_strong_secret,
+    resolve_secret,
+    stable_email_field_key_material,
+    stable_email_hash_key_material,
+    stable_privacy_hash_key_material,
+    stable_profile_field_key_material,
+    stable_security_backup_key_material,
+)
 
 
 @dataclass(frozen=True)
@@ -58,15 +67,13 @@ def _env_or_setting(settings: dict[str, Any], env_name: str, setting_name: str) 
 
 
 def _field_crypto_key_available(settings: dict[str, Any], *, field_env: str, field_setting: str, fallback_envs: Iterable[str] = ()) -> bool:
-    for env_name in [field_env, *fallback_envs]:
-        if str(os.getenv(env_name) or "").strip():
-            return True
-    if str(settings.get(field_setting) or "").strip():
-        return True
-    # SECRET_KEY/secret_key is a valid compatibility fallback in the runtime
-    # encryption helpers. Public beta should still prefer dedicated env keys,
-    # but readiness must reflect the real effective runtime behavior.
-    return bool(str(os.getenv("SECRET_KEY") or settings.get("secret_key") or "").strip())
+    if field_setting == "profile_field_encryption_key":
+        return bool(stable_profile_field_key_material(settings))
+    if field_setting == "email_field_encryption_key":
+        return bool(stable_email_field_key_material(settings))
+    if field_setting == "security_backup_encryption_key":
+        return bool(stable_security_backup_key_material(settings))
+    return bool(resolve_secret(settings, field_setting))
 
 
 def _normalize_cookie_samesite(value: Any) -> str:
@@ -166,6 +173,16 @@ def _git_tracked(path: str | Path, repo_root: str | Path | None = None) -> bool 
 
 def infer_hosting_mode(settings: dict[str, Any]) -> str:
     raw = str(settings.get("hosting_mode") or settings.get("deployment_profile") or "").strip().lower().replace(" ", "_").replace("-", "_")
+    public_url = _clean_url(settings.get("public_base_url"))
+    run_mode = str(settings.get("run_mode") or "").strip().lower().replace(" ", "_").replace("-", "_")
+    production_mode = bool(settings.get("production_mode", False)) or run_mode in {"production", "prod", "public", "public_beta"}
+
+    # A generated/default hosting_mode=lan should not mask an internet-facing
+    # production URL. The explicit --development path rewrites run_mode to
+    # development, so that temporary local launch still stays LAN.
+    if production_mode and public_url.startswith("https://") and not _looks_like_placeholder_public_url(public_url):
+        return "public_beta"
+
     if raw in {"local", "lan", "local_lan", "development", "dev"}:
         return "lan"
     if raw in {"no_domain", "no_domain_yet", "pending_domain", "domain_needed", "domain_later"}:
@@ -174,7 +191,6 @@ def infer_hosting_mode(settings: dict[str, Any]) -> str:
         return "public_beta"
     if raw in {"advanced", "custom", "reverse_proxy"}:
         return "advanced"
-    public_url = _clean_url(settings.get("public_base_url"))
     if public_url.startswith("https://") and not _looks_like_placeholder_public_url(public_url):
         return "public_beta"
     if _looks_like_placeholder_public_url(public_url):
@@ -398,7 +414,7 @@ def build_public_beta_readiness(settings: dict[str, Any], *, settings_file: str 
 
         email_encrypt = _truthy(settings.get("encrypt_email_at_rest", True))
         email_field_key = _field_crypto_key_available(settings, field_env="ECHOCHAT_EMAIL_FIELD_KEY", field_setting="email_field_encryption_key", fallback_envs=("ECHOCHAT_PROFILE_FIELD_KEY",))
-        email_hash_key = bool(_env_or_setting(settings, "ECHOCHAT_EMAIL_HASH_KEY", "email_hash_key")) or email_field_key
+        email_hash_key = bool(stable_email_hash_key_material(settings))
         if email_encrypt and email_field_key and email_hash_key:
             items.append(ReadinessItem("pass", "email-at-rest-crypto", "Email at-rest encryption ready", "Email lookup hashes and display envelopes have effective keys."))
         elif email_encrypt:
@@ -427,6 +443,10 @@ def build_public_beta_readiness(settings: dict[str, Any], *, settings_file: str 
             items.append(ReadinessItem("pass", "privacy-retention", "Privacy retention cleanup enabled", f"IP/UA retention={privacy_days} days; audit detail retention={audit_days} days."))
         else:
             items.append(ReadinessItem("fail", "privacy-retention", "Privacy retention cleanup disabled", "Old IP/user-agent and audit details would stay raw indefinitely.", "Enable privacy_retention_enabled and set positive retention windows."))
+        if stable_privacy_hash_key_material(settings):
+            items.append(ReadinessItem("pass", "privacy-hash-key", "Privacy-retention hash key is stable", "Old IP/user-agent hashes will remain consistent across restarts."))
+        else:
+            items.append(ReadinessItem("fail", "privacy-hash-key", "Privacy-retention hash key is missing", "Retention hashing would fall back to an unstable or fixed local salt.", "Set ECHOCHAT_PRIVACY_HASH_KEY before public beta."))
 
     if public_mode:
         if not _truthy(settings.get("torrent_scrape_enabled", False)):
@@ -485,6 +505,13 @@ def build_public_beta_readiness(settings: dict[str, Any], *, settings_file: str 
             items.append(ReadinessItem("warn", "proxy-headers", "Proxy headers are not trusted", "If Caddy/Nginx terminates HTTPS, Echo-Chat should trust exactly that proxy hop.", "Set trust_proxy_headers=true and proxy_fix_hops=1 when behind one local reverse proxy."))
 
     if public_mode:
+        forwarded_allow_ips = str(os.getenv("ECHOCHAT_FORWARDED_ALLOW_IPS") or settings.get("forwarded_allow_ips") or "127.0.0.1").strip()
+        if forwarded_allow_ips == "*":
+            items.append(ReadinessItem("warn", "forwarded-allow-ips", "Gunicorn trusts forwarded headers from all IPs", "ECHOCHAT_FORWARDED_ALLOW_IPS=*", "Use 127.0.0.1 or the exact reverse-proxy IP unless Gunicorn is unreachable from untrusted networks."))
+        else:
+            items.append(ReadinessItem("pass", "forwarded-allow-ips", "Gunicorn forwarded-header trust is scoped", forwarded_allow_ips or "127.0.0.1"))
+
+    if public_mode:
         try:
             socket_payload_max = int(settings.get("socketio_event_max_payload_bytes") or 65536)
         except Exception:
@@ -509,16 +536,16 @@ def build_public_beta_readiness(settings: dict[str, Any], *, settings_file: str 
             str(raw_item.get("fix") or ""),
         ))
 
-    secret = str(settings.get("secret_key") or "")
-    jwt = str(settings.get("jwt_secret") or settings.get("jwt_secret_key") or "")
-    if len(secret) >= 32 and "change-me" not in secret.lower():
+    secret = resolve_secret(settings, "secret_key")
+    jwt = resolve_secret(settings, "jwt_secret")
+    if is_strong_secret(secret):
         items.append(ReadinessItem("pass", "secret-key", "Secret key is set", "Length looks suitable."))
     elif public_mode:
         items.append(ReadinessItem("fail", "secret-key", "Secret key is missing or weak", "Public beta requires a strong secret_key.", "Run setup and rotate/generate secrets."))
     else:
         items.append(ReadinessItem("warn", "secret-key", "Secret key is missing or weak", "Generate before public beta."))
 
-    if len(jwt) >= 32 and "change-me" not in jwt.lower():
+    if is_strong_secret(jwt):
         items.append(ReadinessItem("pass", "jwt-secret", "JWT secret is set", "Length looks suitable."))
     elif public_mode:
         items.append(ReadinessItem("fail", "jwt-secret", "JWT secret is missing or weak", "Public beta requires a strong JWT secret.", "Run setup and rotate/generate JWT secret."))

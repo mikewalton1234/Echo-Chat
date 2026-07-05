@@ -2,7 +2,7 @@
 
 The generator is intentionally dependency-free and safe to run before the
 application database exists. It reads the saved setup values and produces
-beginner-friendly Caddy and Nginx examples for a single local Echo-Chat backend.
+beginner-friendly Caddy and Nginx examples for one or more local Echo-Chat backends.
 """
 
 from __future__ import annotations
@@ -128,8 +128,53 @@ def _format_backend_host(host: str) -> str:
 
 
 def backend_url(settings: dict[str, Any]) -> str:
-    return f"http://{_format_backend_host(_backend_host_from_settings(settings))}:{_backend_port_from_settings(settings)}"
+    return backend_urls(settings)[0]
 
+
+
+
+def _instance_count(settings: dict[str, Any]) -> int:
+    return max(1, min(10, _safe_int(settings.get("production_instance_count") or settings.get("production_instances") or settings.get("instance_count"), 1)))
+
+
+def _backend_base_port(settings: dict[str, Any]) -> int:
+    explicit = str(settings.get("reverse_proxy_backend_port") or "").strip()
+    if explicit:
+        return _safe_int(explicit, 5000)
+    if settings.get("production_instance_base_port") or settings.get("instance_base_port"):
+        return _safe_int(settings.get("production_instance_base_port") or settings.get("instance_base_port"), 5000)
+    return _backend_port_from_settings(settings)
+
+
+def backend_urls(settings: dict[str, Any]) -> list[str]:
+    host = _format_backend_host(_backend_host_from_settings(settings))
+    base_port = _backend_base_port(settings)
+    return [f"http://{host}:{base_port + offset}" for offset in range(_instance_count(settings))]
+
+
+def _caddy_reverse_proxy_block(settings: dict[str, Any], indent: str = "    ") -> str:
+    upstreams = " ".join(backend_urls(settings))
+    sticky = f"{indent}    lb_policy cookie echochat_lb\n" if _instance_count(settings) > 1 else ""
+    return (
+        f"{indent}reverse_proxy {upstreams} {{\n"
+        f"{sticky}"
+        f"{indent}    header_up Host {{host}}\n"
+        f"{indent}    header_up X-Real-IP {{remote_host}}\n"
+        f"{indent}    header_up X-Forwarded-For {{remote_host}}\n"
+        f"{indent}    header_up X-Forwarded-Proto {{scheme}}\n"
+        f"{indent}}}"
+    )
+
+
+def _nginx_proxy_target(settings: dict[str, Any]) -> str:
+    return "http://echochat_backend" if _instance_count(settings) > 1 else backend_urls(settings)[0]
+
+
+def _nginx_upstream_block(settings: dict[str, Any]) -> str:
+    if _instance_count(settings) <= 1:
+        return ""
+    servers = "\n".join(f"    server {url.replace('http://', '')};" for url in backend_urls(settings))
+    return f"upstream echochat_backend {{\n    ip_hash;\n{servers}\n}}\n\n"
 
 def _max_request_size(settings: dict[str, Any]) -> str:
     # Nginx accepts m/k suffixes. Round up so configured request limits are not
@@ -201,9 +246,9 @@ def generate_caddyfile(settings: dict[str, Any]) -> str:
     Without a real domain it becomes a LAN-only HTTP helper on port 8080 so
     admins do not accidentally publish a fake chat.example.com deployment.
     """
-    upstream = backend_url(settings)
     health_path = _health_path(settings)
     header = _generation_header(settings, "Caddy")
+    proxy_block = _caddy_reverse_proxy_block(settings)
     if not has_real_public_domain(settings):
         lan_port = _lan_proxy_port(settings)
         return f"""{header}
@@ -215,12 +260,7 @@ def generate_caddyfile(settings: dict[str, Any]) -> str:
 http://:{lan_port} {{
     encode zstd gzip
 
-    reverse_proxy {upstream} {{
-        header_up Host {{host}}
-        header_up X-Real-IP {{remote_host}}
-        header_up X-Forwarded-For {{remote_host}}
-        header_up X-Forwarded-Proto {{scheme}}
-    }}
+{proxy_block}
 
     @health path {health_path}
 }}
@@ -233,13 +273,9 @@ http://:{lan_port} {{
 
     # Caddy automatically manages HTTPS certificates for public DNS names.
     # Make sure DNS A/AAAA records point to this server and ports 80/443 are open.
+    # Multiple Echo-Chat instances use cookie stickiness so Socket.IO polling stays on one backend.
 
-    reverse_proxy {upstream} {{
-        header_up Host {{host}}
-        header_up X-Real-IP {{remote_host}}
-        header_up X-Forwarded-For {{remote_host}}
-        header_up X-Forwarded-Proto {{scheme}}
-    }}
+{proxy_block}
 
     # Optional health endpoint. Enable it in Echo-Chat before using uptime checks.
     @health path {health_path}
@@ -254,7 +290,8 @@ def generate_nginx_config(settings: dict[str, Any]) -> str:
     proxy headers. Without a real domain it generates a LAN-only port 8080
     template so the admin has a safe testing path.
     """
-    upstream = backend_url(settings)
+    proxy_target = _nginx_proxy_target(settings)
+    upstream_block = _nginx_upstream_block(settings)
     body_size = _max_request_size(settings)
     health_path = _health_path(settings)
     header = _generation_header(settings, "Nginx")
@@ -266,7 +303,7 @@ def generate_nginx_config(settings: dict[str, Any]) -> str:
 # Open http://SERVER-LAN-IP:{lan_port} from another device on the same LAN.
 # This is NOT public beta hosting and does not configure HTTPS.
 
-map $http_upgrade $connection_upgrade {{
+{upstream_block}map $http_upgrade $connection_upgrade {{
     default upgrade;
     '' close;
 }}
@@ -282,7 +319,7 @@ server {{
     proxy_connect_timeout 60s;
 
     location /socket.io/ {{
-        proxy_pass {upstream};
+        proxy_pass {proxy_target};
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
@@ -296,7 +333,7 @@ server {{
     }}
 
     location / {{
-        proxy_pass {upstream};
+        proxy_pass {proxy_target};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -307,7 +344,7 @@ server {{
     }}
 
     location = {health_path} {{
-        proxy_pass {upstream};
+        proxy_pass {proxy_target};
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
     }}
@@ -316,9 +353,9 @@ server {{
 
     host = _public_hostname(settings)
     return f"""{header}
-# Put this `map` block in the http {{ }} context. If your distro splits configs,
-# place it in /etc/nginx/conf.d/echochat-map.conf or above the server blocks.
-map $http_upgrade $connection_upgrade {{
+# Put the `upstream` and `map` blocks in the http {{ }} context. If your distro splits configs,
+# place them in /etc/nginx/conf.d/echochat-map.conf or above the server blocks.
+{upstream_block}map $http_upgrade $connection_upgrade {{
     default upgrade;
     '' close;
 }}
@@ -354,7 +391,7 @@ server {{
 
     # Socket.IO endpoint. Supports polling and WebSocket upgrade.
     location /socket.io/ {{
-        proxy_pass {upstream};
+        proxy_pass {proxy_target};
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
@@ -369,7 +406,7 @@ server {{
 
     # Normal HTTP app traffic.
     location / {{
-        proxy_pass {upstream};
+        proxy_pass {proxy_target};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -381,7 +418,7 @@ server {{
 
     # Optional health endpoint. Enable it in Echo-Chat before using uptime checks.
     location = {health_path} {{
-        proxy_pass {upstream};
+        proxy_pass {proxy_target};
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
     }}
@@ -443,7 +480,7 @@ def write_proxy_configs(settings: dict[str, Any], output_dir: str | Path, proxy:
             else "**Status: public-domain reverse proxy templates.**\n\n"
         )
         + f"Public URL: `{_public_url(settings) or '(not set)'}`\n\n"
-        + f"Backend: `{backend_url(settings)}`\n\n"
+        + f"Backend: `{backend_url(settings)}`" + (f" plus {len(backend_urls(settings))-1} more backend(s)" if len(backend_urls(settings)) > 1 else "") + "\n\n"
         + "Generated files:\n"
         + "".join(f"- `{Path(item.path).name}` ({item.proxy})\n" for item in written)
         + "\nRecommended Echo-Chat settings for public beta:\n\n"

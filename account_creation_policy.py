@@ -40,11 +40,13 @@ _COMMON_WEAK_PASSWORDS = {
     "defaultpassword",
     "echochat",
     "echochat123",
-    "iloveyous",
+    "mikeschatserver",
+    "mikeserver",
+    "iloveyou",
     "abc123",
     "12345678",
     "123456789",
-    "123456789012345",
+    "1234567890",
 }
 
 # These are not composition requirements. They are narrow server-side guards for

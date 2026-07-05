@@ -30,13 +30,14 @@ import requests
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import jsonify, request, send_file, redirect
+from flask import jsonify, request, send_file, redirect, abort, make_response
 from flask_jwt_extended import get_jwt_identity, get_jwt, jwt_required, verify_jwt_in_request, unset_jwt_cookies
 from werkzeug.utils import secure_filename
 
 from database import get_db, get_friends_for_user, get_auth_session_state, revoke_auth_session, touch_auth_session_activity, get_custom_room_meta, can_user_access_custom_room, ensure_users_profile_columns, ensure_profile_post_engagement_schema
 from security import log_audit_event, parse_rate_limit_value, simple_rate_limit, get_request_ip, safe_existing_file_under, sanitize_user_visible_text, apply_safe_download_headers
 from moderation import is_user_sanctioned
+from emoticon_catalog import emoticon_catalog, local_emoticon_root, local_emoticon_roots
 from permissions import get_user_permissions
 from realtime.state import shared_state_summary
 from health_status import build_health_payload, normalize_public_probe_path
@@ -52,6 +53,15 @@ def register_main_routes(app, settings, socketio):
     os.makedirs(profile_banner_folder, exist_ok=True)
     profile_post_folder = os.path.join(upload_folder, "profile_posts")
     os.makedirs(profile_post_folder, exist_ok=True)
+    # Server-hosted code-based emoticon assets. Admins can place files such as
+    # emoticons/1.gif in the project root; the catalog uses matching names.
+    try:
+        os.makedirs(local_emoticon_root(settings), exist_ok=True)
+        for _emo_root in local_emoticon_roots(settings):
+            if _emo_root.name == "emoticons" and str(_emo_root).endswith("/emoticons"):
+                _emo_root.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
     max_profile_avatar_bytes = int(settings.get("max_profile_avatar_bytes") or (5 * 1024 * 1024))
     max_profile_banner_bytes = int(settings.get("max_profile_banner_bytes") or (8 * 1024 * 1024))
     max_profile_post_image_bytes = int(settings.get("max_profile_post_image_bytes") or (8 * 1024 * 1024))
@@ -77,9 +87,34 @@ def register_main_routes(app, settings, socketio):
         if _profile_runtime_schema_checked.get("ok"):
             return
         try:
-            ensure_users_profile_columns()
-            ensure_profile_post_engagement_schema()
-            _ensure_profile_notification_settings_schema()
+            conn = get_db()
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT to_regclass('public.profile_posts'),
+                           to_regclass('public.user_profile_notification_settings'),
+                           to_regclass('public.notifications');
+                    """
+                )
+                row = cur.fetchone() or (None, None, None)
+                if not all(row):
+                    raise RuntimeError(
+                        "Profile schema is missing required tables. Run `python main.py --migrate` before serving requests."
+                    )
+                cur.execute(
+                    """
+                    SELECT 1
+                      FROM information_schema.columns
+                     WHERE table_schema='public'
+                       AND table_name='users'
+                       AND column_name='profile_post_default_visibility'
+                     LIMIT 1;
+                    """
+                )
+                if cur.fetchone() is None:
+                    raise RuntimeError(
+                        "Profile schema is missing users.profile_post_default_visibility. Run `python main.py --migrate`."
+                    )
             _profile_runtime_schema_checked["ok"] = True
         except Exception:
             logging.exception("Profile runtime schema check failed")
@@ -97,73 +132,13 @@ def register_main_routes(app, settings, socketio):
 
 
     def _ensure_profile_notification_settings_schema() -> None:
-        conn = get_db()
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS user_profile_notification_settings (
-                    username              TEXT PRIMARY KEY,
-                    notify_likes          BOOLEAN NOT NULL DEFAULT TRUE,
-                    notify_comments       BOOLEAN NOT NULL DEFAULT TRUE,
-                    notify_admin_notices  BOOLEAN NOT NULL DEFAULT TRUE,
-                    notify_report_updates BOOLEAN NOT NULL DEFAULT TRUE,
-                    notify_profile_views  BOOLEAN NOT NULL DEFAULT FALSE,
-                    notify_friend_posts   BOOLEAN NOT NULL DEFAULT TRUE,
-                    updated_at            TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
-                );
-                """
-            )
-            cur.execute(
-                """
-                SELECT column_name
-                  FROM information_schema.columns
-                 WHERE table_name = 'user_profile_notification_settings';
-                """
-            )
-            existing_settings_cols = {str(row[0]) for row in (cur.fetchall() or [])}
-            notification_settings_columns = {
-                "notify_likes": "ALTER TABLE user_profile_notification_settings ADD COLUMN notify_likes BOOLEAN NOT NULL DEFAULT TRUE;",
-                "notify_comments": "ALTER TABLE user_profile_notification_settings ADD COLUMN notify_comments BOOLEAN NOT NULL DEFAULT TRUE;",
-                "notify_admin_notices": "ALTER TABLE user_profile_notification_settings ADD COLUMN notify_admin_notices BOOLEAN NOT NULL DEFAULT TRUE;",
-                "notify_report_updates": "ALTER TABLE user_profile_notification_settings ADD COLUMN notify_report_updates BOOLEAN NOT NULL DEFAULT TRUE;",
-                "notify_profile_views": "ALTER TABLE user_profile_notification_settings ADD COLUMN notify_profile_views BOOLEAN NOT NULL DEFAULT FALSE;",
-                "notify_friend_posts": "ALTER TABLE user_profile_notification_settings ADD COLUMN notify_friend_posts BOOLEAN NOT NULL DEFAULT TRUE;",
-                "updated_at": "ALTER TABLE user_profile_notification_settings ADD COLUMN updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP;",
-            }
-            for column_name, ddl in notification_settings_columns.items():
-                if column_name not in existing_settings_cols:
-                    cur.execute(ddl)
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_profile_notification_settings_updated ON user_profile_notification_settings(updated_at DESC);")
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS notifications (
-                    id            SERIAL PRIMARY KEY,
-                    user_id       INTEGER NOT NULL,
-                    notification  TEXT NOT NULL,
-                    type          TEXT,
-                    is_read       BOOLEAN DEFAULT FALSE,
-                    timestamp     TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-                );
-                """
-            )
-            cur.execute(
-                """
-                SELECT column_name
-                  FROM information_schema.columns
-                 WHERE table_name = 'notifications';
-                """
-            )
-            existing_notification_cols = {str(row[0]) for row in (cur.fetchall() or [])}
-            notification_columns = {
-                "type": "ALTER TABLE notifications ADD COLUMN type TEXT;",
-                "is_read": "ALTER TABLE notifications ADD COLUMN is_read BOOLEAN DEFAULT FALSE;",
-                "timestamp": "ALTER TABLE notifications ADD COLUMN timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;",
-            }
-            for column_name, ddl in notification_columns.items():
-                if column_name not in existing_notification_cols:
-                    cur.execute(ddl)
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_profile_notifications_user_unread ON notifications(user_id, is_read, timestamp DESC) WHERE type LIKE 'profile_post_%';")
-        conn.commit()
+        """Ensure profile notification tables through the migration-backed schema helper.
+
+        Inline route-level CREATE/ALTER statements were removed so normal HTTP
+        requests do not race through DDL in multi-instance deployments.
+        """
+        ensure_profile_post_engagement_schema()
+
 
 
     def _coerce_profile_notification_bool(value, default: bool) -> bool:
@@ -177,6 +152,78 @@ def register_main_routes(app, settings, socketio):
         if text in {"0", "false", "no", "off", "n"}:
             return False
         return bool(default)
+
+
+    @app.get("/api/emoticons/catalog")
+    def api_emoticons_catalog():
+        """Return the neutral code-based emoticon catalog for the chat GUI."""
+        payload = emoticon_catalog(settings)
+        resp = jsonify({"success": True, **payload})
+        resp.headers["Cache-Control"] = "no-store, max-age=0"
+        return resp
+
+
+    @app.get("/api/emoticons/selftest")
+    def api_emoticons_selftest():
+        """Tiny non-sensitive asset/codes health check for the picker."""
+        payload = emoticon_catalog(settings)
+        entries = payload.get("entries") or []
+        first = next((e for e in entries if ":)" in (e.get("codes") or [])), None)
+        laugh = next((e for e in entries if ":))" in (e.get("codes") or [])), None)
+        roots = local_emoticon_roots(settings)
+
+        def _exists(name: str) -> list[str]:
+            hits = []
+            for root in roots:
+                path = safe_existing_file_under(root, name)
+                if path and path.is_file():
+                    hits.append(str(path))
+            return hits
+
+        checks = {
+            "catalog_enabled": bool(payload.get("enabled")),
+            "entries": int(payload.get("count") or len(entries)),
+            "code_count": int(payload.get("code_count") or 0),
+            "asset_mode": payload.get("asset_mode"),
+            "external_enabled": bool(payload.get("external_enabled")),
+            "external_asset_base_url": payload.get("external_asset_base_url"),
+            "local_roots_checked": [str(root) for root in roots],
+            "smile_src": (first or {}).get("src"),
+            "laugh_src": (laugh or {}).get("src"),
+            "smile_file_hits": _exists("1.gif"),
+            "laugh_file_hits": _exists("21.gif"),
+            "thumbup_file_hits": _exists("113.gif"),
+        }
+        ok = all([
+            checks["catalog_enabled"],
+            checks["entries"] > 0,
+            bool(checks["smile_file_hits"]),
+            bool(checks["laugh_file_hits"]),
+        ]) or bool(checks["external_enabled"])
+        resp = jsonify({"success": ok, "checks": checks})
+        resp.headers["Cache-Control"] = "no-store, max-age=0"
+        return resp
+
+
+    @app.get("/emoticons/<path:filename>")
+    def serve_local_emoticon(filename: str):
+        """Serve local emoticon images from safe project roots."""
+        if not bool(settings.get("emoticons_enabled", True)) or not bool(settings.get("emoticons_local_enabled", True)):
+            abort(404)
+        safe_name = str(filename or "").strip().replace("\\", "/")
+        if "/" in safe_name or safe_name.startswith("."):
+            abort(404)
+        ext = safe_name.rsplit(".", 1)[-1].lower() if "." in safe_name else ""
+        if ext not in {"gif", "webp", "png", "jpg", "jpeg"}:
+            abort(404)
+        for root in local_emoticon_roots(settings):
+            path = safe_existing_file_under(root, safe_name)
+            if path and path.is_file():
+                resp = make_response(send_file(path, mimetype=mimetypes.guess_type(str(path))[0] or "application/octet-stream", conditional=True))
+                resp.headers["Cache-Control"] = "public, max-age=3600"
+                resp.headers["X-Content-Type-Options"] = "nosniff"
+                return resp
+        abort(404)
 
 
     def _profile_notification_settings_for(username: str) -> dict:
@@ -367,6 +414,46 @@ def register_main_routes(app, settings, socketio):
             return None
         return text if re.fullmatch(r"[0-9a-f]{64}", text) else None
 
+    def _private_file_upload_denial(username: str, *, send_context: bool = True) -> tuple[dict, int] | None:
+        """Central account-sanction gate for all private/file-transfer uploads.
+
+        The dedicated ``upload`` sanction must apply to the newer ciphertext-only
+        DM/group file APIs too, not just legacy uploads/profile media/torrents.
+        ``send_context`` also applies normal chat send sanctions for DM/group
+        file cards because the upload creates a user-visible file message.
+        """
+        actor = str(username or "").strip()
+        if not actor:
+            return ({"success": False, "error": "Invalid user"}, 403)
+        if is_user_sanctioned(actor, "ban"):
+            return ({"success": False, "error": "You are banned."}, 403)
+        if is_user_sanctioned(actor, "upload"):
+            return ({"success": False, "error": "Uploads are disabled for this account"}, 403)
+        if send_context and is_user_sanctioned(actor, "mute"):
+            return ({"success": False, "error": "You are muted."}, 403)
+        return None
+
+    def _same_username(a: str | None, b: str | None) -> bool:
+        return str(a or "").strip().lower() == str(b or "").strip().lower() and bool(str(a or "").strip())
+
+    def _dm_file_key_for_user(sender: str, receiver: str, ek_to_b64: str, ek_from_b64: str, username: str) -> str | None:
+        """Return the wrapped DM file key for this participant, or None.
+
+        Blob access now uses this too, so malformed/corrupt DM file metadata
+        cannot serve ciphertext to a participant who lacks a valid wrapped key.
+        Comparisons are case-insensitive to match the rest of the auth/RBAC work.
+        """
+        if _same_username(username, receiver):
+            return str(ek_to_b64).strip() if _base64ish(str(ek_to_b64), max_len=32768) else None
+        if _same_username(username, sender):
+            return str(ek_from_b64).strip() if _base64ish(str(ek_from_b64), max_len=32768) else None
+        return None
+
+    def _participants_blocked(a: str, b: str) -> bool:
+        if _same_username(a, b):
+            return False
+        return bool(_either_blocked(a, b))
+
     def _current_private_file_storage_bytes(username: str) -> int:
         """Best-effort per-sender private-file storage total for quota checks."""
         username = str(username or "").strip()
@@ -546,6 +633,7 @@ def register_main_routes(app, settings, socketio):
             path == "/upload"
             or path == "/api/friends"
             or path.startswith("/api/profile/")
+            or path.startswith("/media/profile-posts/")
             or path.startswith("/api/gifs/")
             or path.startswith("/api/dm_files/")
             or path.startswith("/api/group_files/")
@@ -716,6 +804,22 @@ def register_main_routes(app, settings, socketio):
             row = cur.fetchone()
             return str(row[0]) if row and row[0] else None
 
+
+    def _profile_write_denial(username: str, *, action: str = "write") -> tuple[bool, str]:
+        """Return (denied, message) for profile write/visible-activity actions."""
+        if is_user_sanctioned(username, "ban"):
+            return True, "Profile changes are disabled for this account"
+        if action in {"post", "edit", "comment", "reaction", "pin", "feature", "media"} and is_user_sanctioned(username, "mute"):
+            return True, "Profile posting is disabled for this account"
+        if action in {"avatar", "banner", "media"} and is_user_sanctioned(username, "upload"):
+            return True, "Uploads are disabled for this account"
+        return False, ""
+
+    def _profile_write_denial_response(username: str, *, action: str = "write", status: int = 403):
+        denied, message = _profile_write_denial(username, action=action)
+        if denied:
+            return jsonify({"success": False, "error": message}), int(status)
+        return None
 
     def _profile_payload_for_user(username: str):
         _ensure_profile_runtime_schema()
@@ -1805,6 +1909,50 @@ def register_main_routes(app, settings, socketio):
         return candidate
 
 
+    def _local_avatar_media_belongs_to_user(filename: str, owner: str | None) -> bool:
+        owner = str(owner or "").strip()
+        if not owner:
+            return False
+        safe_owner = secure_filename(owner) or "user"
+        safe_name = secure_filename(filename or "")
+        return bool(safe_name and safe_name == filename and safe_name.startswith(f"{safe_owner}-"))
+
+
+    def _local_banner_media_belongs_to_user(filename: str, owner: str | None) -> bool:
+        owner = str(owner or "").strip()
+        if not owner:
+            return False
+        safe_owner = secure_filename(owner) or "user"
+        safe_name = secure_filename(filename or "")
+        return bool(safe_name and safe_name == filename and safe_name.startswith(f"{safe_owner}-"))
+
+
+    def _delete_local_avatar_media(url: str | None, *, owner: str | None = None) -> None:
+        value = str(url or "").strip()
+        prefixes = ("/media/avatars/", "/static/uploads/profile_avatars/")
+        if not value.startswith(prefixes):
+            return
+        filename = os.path.basename(value)
+        if owner and not _local_avatar_media_belongs_to_user(filename, owner):
+            return
+        avatar_path = _resolve_avatar_path(filename)
+        if avatar_path is not None and avatar_path.is_file():
+            avatar_path.unlink()
+
+
+    def _delete_local_banner_media(url: str | None, *, owner: str | None = None) -> None:
+        value = str(url or "").strip()
+        prefixes = ("/media/profile-banners/", "/static/uploads/profile_banners/")
+        if not value.startswith(prefixes):
+            return
+        filename = os.path.basename(value)
+        if owner and not _local_banner_media_belongs_to_user(filename, owner):
+            return
+        banner_path = _resolve_banner_path(filename)
+        if banner_path is not None and banner_path.is_file():
+            banner_path.unlink()
+
+
     def _resolve_profile_post_path(filename: str):
         safe_name = secure_filename(filename or "")
         if not safe_name or safe_name != filename:
@@ -2077,6 +2225,18 @@ def register_main_routes(app, settings, socketio):
         return parsed
 
 
+    def _profile_notification_visible_to_user(username: str, item: dict) -> bool:
+        actor = str((item or {}).get("actor") or "").strip()
+        username = str(username or "").strip()
+        if not actor or not username or actor.lower() == username.lower():
+            return True
+        try:
+            return not _either_blocked(username, actor)
+        except Exception:
+            # Fail closed for blocked-pair notification visibility.
+            return False
+
+
     def _profile_post_placeholders(values: list[int]) -> str:
         return ",".join(["%s"] * len(values))
 
@@ -2193,6 +2353,44 @@ def register_main_routes(app, settings, socketio):
         return {"id": int(row[0]), "author_username": author, "visibility": visibility}, bool(can_view), bool(is_self), bool(is_friend)
 
 
+    def _profile_post_media_visible_to_viewer(filename: str, viewer: str) -> bool:
+        """Require profile-post media to belong to the viewer or a post the viewer can see."""
+        safe_name = secure_filename(filename or "")
+        if not safe_name or safe_name != filename:
+            return False
+        if viewer and _profile_post_media_belongs_to_user(safe_name, viewer):
+            return True
+        media_url = f"/media/profile-posts/{safe_name}"
+        conn = get_db()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id
+                      FROM profile_posts
+                     WHERE deleted_at IS NULL
+                       AND (image_url = %s OR gif_url = %s)
+                     ORDER BY created_at DESC, id DESC
+                     LIMIT 12;
+                    """,
+                    (media_url, media_url),
+                )
+                rows = cur.fetchall() or []
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            return False
+        for row in rows:
+            try:
+                _post, can_view, _is_self, _is_friend = _get_visible_profile_post_for_viewer(int(row[0]), viewer)
+                if can_view:
+                    return True
+            except Exception:
+                continue
+        return False
+
     def _delete_local_profile_post_media(url: str | None, *, owner: str | None = None) -> None:
         value = str(url or "").strip()
         if not value.startswith("/media/profile-posts/"):
@@ -2211,9 +2409,13 @@ def register_main_routes(app, settings, socketio):
 
 
     @app.get("/media/profile-posts/<path:filename>")
+    @jwt_required()
     def serve_profile_post_media(filename: str):
+        viewer = get_jwt_identity()
         media_path = _resolve_profile_post_path(filename)
         if media_path is None:
+            return jsonify({"error": "not_found"}), 404
+        if not _profile_post_media_visible_to_viewer(filename, viewer):
             return jsonify({"error": "not_found"}), 404
         try:
             with open(media_path, "rb") as fh:
@@ -2242,8 +2444,9 @@ def register_main_routes(app, settings, socketio):
         guard = _route_rate_limit_guard("profile_post_image_upload", settings.get("rate_limit_profile_post_image_upload") or "20 per hour", default_limit=20, default_window=3600, user=user)
         if guard is not None:
             return guard
-        if is_user_sanctioned(user, "upload"):
-            return jsonify({"success": False, "error": "Uploads are disabled for this account"}), 403
+        denied = _profile_write_denial_response(user, action="media")
+        if denied is not None:
+            return denied
 
         f = request.files.get("file")
         if not f or not f.filename:
@@ -2512,6 +2715,9 @@ def register_main_routes(app, settings, socketio):
         guard = _route_rate_limit_guard("profile_post_create", settings.get("rate_limit_profile_post_create") or "30 per hour", default_limit=30, default_window=3600, user=user)
         if guard is not None:
             return guard
+        denied = _profile_write_denial_response(user, action="post")
+        if denied is not None:
+            return denied
 
         payload = request.get_json(silent=True) or {}
         body = _sanitize_profile_post_body(payload.get("body"), max_len=1800)
@@ -2564,8 +2770,9 @@ def register_main_routes(app, settings, socketio):
         guard = _route_rate_limit_guard("profile_post_edit", settings.get("rate_limit_profile_post_edit") or "40 per hour", default_limit=40, default_window=3600, user=user)
         if guard is not None:
             return guard
-        if is_user_sanctioned(user, "ban") or is_user_sanctioned(user, "mute"):
-            return jsonify({"success": False, "error": "Editing is disabled for this account"}), 403
+        denied = _profile_write_denial_response(user, action="edit")
+        if denied is not None:
+            return denied
 
         payload = request.get_json(silent=True) or {}
         body = _sanitize_profile_post_body(payload.get("body"), max_len=1800)
@@ -2708,7 +2915,10 @@ def register_main_routes(app, settings, socketio):
         params = [user]
         if unread_only:
             where += " AND COALESCE(n.is_read, FALSE) = FALSE"
-        params.append(limit)
+        # Fetch extra rows because blocked-pair notifications are filtered after
+        # JSON parsing. The returned list still honors the requested limit.
+        fetch_limit = max(limit, min(500, limit * 5))
+        params.append(fetch_limit)
         conn = get_db()
         with conn.cursor() as cur:
             cur.execute(
@@ -2722,21 +2932,31 @@ def register_main_routes(app, settings, socketio):
                 """,
                 tuple(params),
             )
-            rows = cur.fetchall() or []
+            raw_rows = cur.fetchall() or []
             cur.execute(
                 """
-                SELECT COUNT(*)
+                SELECT n.id, n.notification, n.type, COALESCE(n.is_read, FALSE), n.timestamp
                   FROM notifications n
                   JOIN users u ON u.id = n.user_id
                  WHERE n.user_id = u.id
                    AND u.username = %s
                    AND n.type LIKE 'profile_post_%%'
-                   AND COALESCE(n.is_read, FALSE) = FALSE;
+                   AND COALESCE(n.is_read, FALSE) = FALSE
+                 ORDER BY n.timestamp DESC, n.id DESC
+                 LIMIT 5000;
                 """,
                 (user,),
             )
-            unread_count = int((cur.fetchone() or [0])[0] or 0)
-        return _profile_api_json({"success": True, "notifications": [_serialize_profile_notification(r) for r in rows], "unread_count": unread_count})
+            unread_rows = cur.fetchall() or []
+        items = []
+        for row in raw_rows:
+            item = _serialize_profile_notification(row)
+            if _profile_notification_visible_to_user(user, item):
+                items.append(item)
+            if len(items) >= limit:
+                break
+        unread_count = sum(1 for row in unread_rows if _profile_notification_visible_to_user(user, _serialize_profile_notification(row)))
+        return _profile_api_json({"success": True, "notifications": items, "unread_count": unread_count})
 
 
     @app.route("/api/profile/notifications/read", methods=["POST"])
@@ -2822,12 +3042,12 @@ def register_main_routes(app, settings, socketio):
         guard = _route_rate_limit_guard("profile_post_react", settings.get("rate_limit_profile_post_react") or "120 per hour", default_limit=120, default_window=3600, user=user)
         if guard is not None:
             return guard
+        denied = _profile_write_denial_response(user, action="reaction")
+        if denied is not None:
+            return denied
         post, can_view, _is_self, _is_friend = _get_visible_profile_post_for_viewer(int(post_id), user)
         if not post or not can_view:
             return jsonify({"success": False, "error": "not_found"}), 404
-        if is_user_sanctioned(user, "ban"):
-            return jsonify({"success": False, "error": "Account is banned"}), 403
-
         payload = request.get_json(silent=True) or {}
         requested_state = payload.get("state", None)
         conn = get_db()
@@ -2872,12 +3092,12 @@ def register_main_routes(app, settings, socketio):
         guard = _route_rate_limit_guard("profile_post_comment", settings.get("rate_limit_profile_post_comment") or "60 per hour", default_limit=60, default_window=3600, user=user)
         if guard is not None:
             return guard
+        denied = _profile_write_denial_response(user, action="comment")
+        if denied is not None:
+            return denied
         post, can_view, _is_self, _is_friend = _get_visible_profile_post_for_viewer(int(post_id), user)
         if not post or not can_view:
             return jsonify({"success": False, "error": "not_found"}), 404
-        if is_user_sanctioned(user, "ban") or is_user_sanctioned(user, "mute"):
-            return jsonify({"success": False, "error": "Posting is disabled for this account"}), 403
-
         payload = request.get_json(silent=True) or {}
         body = _sanitize_profile_post_body(payload.get("body"), max_len=700)
         if not body:
@@ -3048,6 +3268,9 @@ def register_main_routes(app, settings, socketio):
         guard = _route_rate_limit_guard("profile_post_pin", settings.get("rate_limit_profile_post_pin") or "60 per hour", default_limit=60, default_window=3600, user=user)
         if guard is not None:
             return guard
+        denied = _profile_write_denial_response(user, action="pin")
+        if denied is not None:
+            return denied
         payload = request.get_json(silent=True) or {}
         state = bool(payload.get("state", True))
         conn = get_db()
@@ -3073,6 +3296,9 @@ def register_main_routes(app, settings, socketio):
         guard = _route_rate_limit_guard("profile_post_feature", settings.get("rate_limit_profile_post_feature") or "60 per hour", default_limit=60, default_window=3600, user=user)
         if guard is not None:
             return guard
+        denied = _profile_write_denial_response(user, action="feature")
+        if denied is not None:
+            return denied
         payload = request.get_json(silent=True) or {}
         state = bool(payload.get("state", True))
         conn = get_db()
@@ -3291,8 +3517,15 @@ def register_main_routes(app, settings, socketio):
         guard = _route_rate_limit_guard("profile_avatar_upload", settings.get("rate_limit_profile_avatar_upload") or "10 per hour", default_limit=10, default_window=3600, user=user)
         if guard is not None:
             return guard
-        if is_user_sanctioned(user, "upload"):
-            return jsonify({"success": False, "error": "Uploads are disabled for this account"}), 403
+        denied = _profile_write_denial_response(user, action="avatar")
+        if denied is not None:
+            return denied
+
+        try:
+            os.makedirs(profile_avatar_folder, exist_ok=True)
+        except Exception as e:
+            logging.error("[UPLOAD ERROR] profile avatar folder unavailable: %s", e)
+            return jsonify({"success": False, "error": "Avatar upload folder is not writable"}), 500
 
         f = request.files.get("file")
         if not f:
@@ -3313,7 +3546,7 @@ def register_main_routes(app, settings, socketio):
         if not sniffed_ext:
             return jsonify({"success": False, "error": "Avatar must be a real image file"}), 400
         if sniffed_ext == ".svg" and not allow_svg_avatars:
-            return jsonify({"success": False, "error": "SVG avatars are disabled for security; use PNG, JPG, GIF, or WEBP"}), 400
+            return jsonify({"success": False, "error": "SVG avatars are disabled for security; use PNG, JPG, JPEG, GIF, or WEBP"}), 400
 
         allowed_exts = {".png", ".jpg", ".gif", ".webp", ".bmp", ".ico"}
         if allow_svg_avatars:
@@ -3360,13 +3593,8 @@ def register_main_routes(app, settings, socketio):
             return jsonify({"success": False, "error": "Database error"}), 500
 
         try:
-            old_avatar_url = str(old_avatar_url or "")
-            old_prefixes = ("/media/avatars/", "/static/uploads/profile_avatars/")
-            if old_avatar_url != avatar_url and old_avatar_url.startswith(old_prefixes):
-                old_name = os.path.basename(old_avatar_url)
-                old_path = os.path.join(profile_avatar_folder, old_name)
-                if os.path.isfile(old_path):
-                    os.remove(old_path)
+            if str(old_avatar_url or "") != avatar_url:
+                _delete_local_avatar_media(old_avatar_url, owner=user)
         except Exception:
             pass
 
@@ -3384,8 +3612,9 @@ def register_main_routes(app, settings, socketio):
         guard = _route_rate_limit_guard("profile_banner_upload", settings.get("rate_limit_profile_banner_upload") or "10 per hour", default_limit=10, default_window=3600, user=user)
         if guard is not None:
             return guard
-        if is_user_sanctioned(user, "upload"):
-            return jsonify({"success": False, "error": "Uploads are disabled for this account"}), 403
+        denied = _profile_write_denial_response(user, action="banner")
+        if denied is not None:
+            return denied
 
         f = request.files.get("file")
         if not f:
@@ -3444,13 +3673,8 @@ def register_main_routes(app, settings, socketio):
             return jsonify({"success": False, "error": "Database error"}), 500
 
         try:
-            old_banner_url = str(old_banner_url or "")
-            old_prefixes = ("/media/profile-banners/", "/static/uploads/profile_banners/")
-            if old_banner_url != banner_url and old_banner_url.startswith(old_prefixes):
-                old_name = os.path.basename(old_banner_url)
-                old_path = os.path.join(profile_banner_folder, old_name)
-                if os.path.isfile(old_path):
-                    os.remove(old_path)
+            if str(old_banner_url or "") != banner_url:
+                _delete_local_banner_media(old_banner_url, owner=user)
         except Exception:
             pass
 
@@ -3497,12 +3721,11 @@ def register_main_routes(app, settings, socketio):
         if to_user == user:
             return _private_file_json({"success": False, "error": "Cannot send file to yourself"}, 400)
 
-        # Match Socket.IO DM policy: banned users can't do anything; muted users
-        # cannot send.
-        if is_user_sanctioned(user, "ban"):
-            return _private_file_json({"success": False, "error": "You are banned."}, 403)
-        if is_user_sanctioned(user, "mute"):
-            return _private_file_json({"success": False, "error": "You are muted."}, 403)
+        # Match Socket.IO DM policy and the dedicated upload-sanction policy.
+        denial = _private_file_upload_denial(user, send_context=True)
+        if denial is not None:
+            payload, status = denial
+            return _private_file_json(payload, status)
 
         # Block policy: either direction blocks file sends.
         if _either_blocked(user, to_user):
@@ -3626,16 +3849,16 @@ def register_main_routes(app, settings, socketio):
         if revoked:
             return _private_file_json({"success": False, "error": "Not found"}, 404)
 
-        if user != sender and user != receiver:
+        ek_b64 = _dm_file_key_for_user(sender, receiver, ek_to_b64, ek_from_b64, user)
+        if not ek_b64:
             return _private_file_json({"success": False, "error": "Forbidden"}, 403)
 
         # Block policy applies to stored encrypted DM files too. If either side
         # blocks the other after upload, the server stops serving metadata so
         # stale file cards cannot be used as a post-block communication path.
-        if _either_blocked(sender, receiver):
+        if _participants_blocked(sender, receiver):
             return _private_file_json({"success": False, "error": "Forbidden"}, 403)
 
-        ek_b64 = ek_to_b64 if user == receiver else ek_from_b64
         return _private_file_json({
             "success": True,
             "file_id": file_id,
@@ -3663,11 +3886,11 @@ def register_main_routes(app, settings, socketio):
         if revoked:
             return _private_file_json({"success": False, "error": "Not found"}, 404)
 
-        if user != sender and user != receiver:
+        if not _dm_file_key_for_user(sender, receiver, ek_to_b64, ek_from_b64, user):
             return _private_file_json({"success": False, "error": "Forbidden"}, 403)
 
         # Block policy applies to stored encrypted DM files too.
-        if _either_blocked(sender, receiver):
+        if _participants_blocked(sender, receiver):
             return _private_file_json({"success": False, "error": "Forbidden"}, 403)
 
         safe_storage_path = safe_existing_file_under(dm_upload_root, storage_path)
@@ -3841,11 +4064,11 @@ def register_main_routes(app, settings, socketio):
         except Exception:
             return _private_file_json({"success": False, "error": "Missing group_id"}, 400)
 
-        # Sanctions: banned users can't do anything; muted users cannot send.
-        if is_user_sanctioned(user, "ban"):
-            return _private_file_json({"success": False, "error": "You are banned."}, 403)
-        if is_user_sanctioned(user, "mute"):
-            return _private_file_json({"success": False, "error": "You are muted."}, 403)
+        # Sanctions: banned/upload-restricted users cannot upload; muted users cannot create visible file cards.
+        denial = _private_file_upload_denial(user, send_context=True)
+        if denial is not None:
+            payload, status = denial
+            return _private_file_json(payload, status)
         if _is_group_muted(group_id, user):
             return _private_file_json({"success": False, "error": "You are muted in this group."}, 403)
 
@@ -5099,8 +5322,10 @@ def register_main_routes(app, settings, socketio):
         guard = _route_rate_limit_guard("torrent_upload", settings.get("rate_limit_torrent_upload") or "5 per minute", default_limit=5, default_window=60, user=user)
         if guard is not None:
             return guard
-        if is_user_sanctioned(user, "upload"):
-            return jsonify({"success": False, "error": "Your account is restricted."}), 403
+        denial = _private_file_upload_denial(user, send_context=True)
+        if denial is not None:
+            payload, status = denial
+            return _no_store_json(payload, status)
 
         f = request.files.get("file")
         if not f or not getattr(f, "filename", ""):

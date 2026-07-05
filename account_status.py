@@ -116,10 +116,16 @@ def get_effective_account_status(username: str) -> str | None:
             )
             row = cur.fetchone()
         except Exception:
-            # Older/broken databases may be mid-migration. Fail safe for auth by
-            # reading the lifecycle column alone instead of crashing the route.
-            cur.execute("SELECT status FROM users WHERE LOWER(username) = LOWER(%s) LIMIT 1;", (clean,))
-            row = cur.fetchone()
+            # Older/broken databases may be mid-migration. psycopg2 leaves the
+            # transaction aborted after a failed query, so rollback before the
+            # fallback lifecycle-only read.
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            with conn.cursor() as fallback_cur:
+                fallback_cur.execute("SELECT status FROM users WHERE LOWER(username) = LOWER(%s) LIMIT 1;", (clean,))
+                row = fallback_cur.fetchone()
             if not row:
                 return None
             return normalize_stored_account_status(row[0])

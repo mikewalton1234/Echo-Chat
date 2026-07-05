@@ -24,6 +24,7 @@ from typing import Any
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from database import get_db
+from secret_manager import resolve_secret, stable_email_field_key_material, stable_profile_field_key_material, stable_secret_key_material
 
 BACKUP_ROOT = Path("backups/security")
 BACKUP_VERSION = 1
@@ -61,14 +62,9 @@ def security_backup_encryption_enabled(settings: dict | None = None) -> bool:
 def _security_backup_key_material(settings: dict | None = None) -> str:
     settings = settings or {}
     return (
-        os.getenv(_BACKUP_KEY_ENV)
-        or str(settings.get("security_backup_encryption_key") or "").strip()
-        or os.getenv("ECHOCHAT_PROFILE_FIELD_KEY")
-        or str(settings.get("profile_field_encryption_key") or "").strip()
-        or os.getenv("ECHOCHAT_EMAIL_FIELD_KEY")
-        or str(settings.get("email_field_encryption_key") or "").strip()
-        or os.getenv("SECRET_KEY")
-        or str(settings.get("secret_key") or "").strip()
+        resolve_secret(settings, "security_backup_encryption_key")
+        or stable_profile_field_key_material(settings)
+        or stable_email_field_key_material(settings)
     )
 
 

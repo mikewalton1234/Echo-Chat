@@ -29,14 +29,18 @@ from flask import jsonify, request, session, current_app, render_template, make_
 from flask_jwt_extended import get_jwt, get_jwt_identity, verify_jwt_in_request, unset_jwt_cookies
 
 from database import get_db, get_db_identity, get_schema_version, get_auth_session_state, touch_auth_session_activity, revoke_auth_session, create_room_if_missing, delete_custom_room_persisted_state, ensure_profile_post_engagement_schema
-from database import create_user_with_keys, user_exists, email_in_use, revoke_all_sessions_for_user, revoke_all_sessions_and_tokens_for_user, generate_user_keypair_for_password
+from database import create_user_with_keys, user_exists, email_in_use, revoke_all_sessions_for_user, revoke_all_sessions_and_tokens_for_user, generate_user_keypair_for_password, canonical_username
 from permissions import require_permission, get_user_permissions
-from security import hash_password, log_audit_event, verify_password_and_upgrade, get_request_ip, parse_rate_limit_value, simple_rate_limit, simple_rate_limit_clear
+from security import hash_password, log_audit_event, verify_password_and_upgrade, get_request_ip, parse_rate_limit_value, simple_rate_limit, simple_rate_limit_clear, is_local_request as _is_local_request
 from constants import CONFIG_FILE, redact_postgres_dsn, get_db_connection_string, normalize_sound_pack_identifier, sanitize_sound_pack_external_urls, sound_pack_local_builtins_enabled
 from preflight import run_preflight
 from secrets_policy import scrub_patch_for_persist, scrub_secrets_for_persist, persist_secrets_enabled
 from sensitive_fields_crypto import sensitive_field_key_available, sensitive_field_previous_keys_available, SENSITIVE_FIELD_PREFIX
 from privacy_retention import privacy_retention_counts, apply_privacy_retention
+try:
+    from janitor import janitor_status_snapshot
+except Exception:  # pragma: no cover - janitor may be unavailable during partial installs
+    janitor_status_snapshot = None
 from profile_field_migration import profile_field_encryption_counts, encrypt_plaintext_profile_fields, rotate_profile_field_envelopes
 from email_field_migration import email_encryption_counts, encrypt_plaintext_emails
 from email_at_rest import display_email, hash_email, email_field_key_available, email_hash_key_available
@@ -52,6 +56,7 @@ from security_backups import create_security_backup, list_security_backups, rest
 from public_room_e2ee_audit import public_room_e2ee_impact_report
 from media_mode import client_av_config, resolve_av_mode, webcam_policy
 from account_status import effective_account_status_sql, get_effective_account_status
+from moderation import add_ip_sanction, add_sanction, expire_ip_sanctions, expire_sanctions
 from webrtc_ice_config import (
     apply_turn_credentials,
     ice_server_summary,
@@ -418,13 +423,13 @@ def _admin_testlab_require_link_or_404(token: str) -> None:
 
 
 def _admin_testlab_require_admin_or_404() -> str:
-    """Require admin:basic while keeping the random Test Lab surface dark."""
+    """Require admin:test_lab while keeping the random Test Lab surface dark."""
     try:
         verify_jwt_in_request(optional=False)
         username = get_jwt_identity()
     except Exception:
         abort(404)
-    if not username or 'admin:basic' not in get_user_permissions(username):
+    if not username or 'admin:test_lab' not in get_user_permissions(username):
         abort(404)
     return str(username)
 
@@ -537,6 +542,41 @@ def _admin_like_pattern(raw: str, *, prefix: bool = False, max_len: int = 96) ->
     return f"{escaped}%" if prefix else f"%{escaped}%"
 
 
+def _admin_table_columns(cur, table_name: str) -> set[str]:
+    """Return known columns for a table without assuming every migration ran."""
+    safe_table = str(table_name or "").strip()
+    if not safe_table:
+        return set()
+    try:
+        cur.execute(
+            """
+            SELECT column_name
+              FROM information_schema.columns
+             WHERE table_name = %s
+               AND table_schema = ANY (current_schemas(false));
+            """,
+            (safe_table,),
+        )
+        return {str(r[0]) for r in (cur.fetchall() or []) if r and r[0]}
+    except Exception:
+        return set()
+
+
+def _admin_table_exists(cur, table_name: str) -> bool:
+    """Return whether a table exists in the active search path."""
+    safe_table = str(table_name or "").strip()
+    if not safe_table:
+        return False
+    try:
+        cur.execute("SELECT to_regclass(%s) IS NOT NULL;", (safe_table,))
+        row = cur.fetchone()
+        return bool(row and row[0])
+    except Exception:
+        return False
+
+
+
+
 def _admin_operation_error(action: str, exc: Exception | None = None, *, status: int = 500, ok_style: bool = False):
     """Return a generic admin error while logging the internal exception server-side.
 
@@ -551,6 +591,98 @@ def _admin_operation_error(action: str, exc: Exception | None = None, *, status:
     if ok_style:
         payload["ok"] = False
     return _admin_json_response(payload, status)
+
+
+_ADMIN_AUDIT_SECRET_VALUE_RE = re.compile(
+    r"(?i)\b(password|pass|secret|token|jwt|api[_-]?key|credential|authorization|cookie|session|sid)\b\s*[:=]\s*([^\s,;}&]+)"
+)
+_ADMIN_AUDIT_BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{12,}")
+_ADMIN_TESTLAB_URL_RE = re.compile(r"(/admin/test[-_]lab/)[A-Za-z0-9._~:-]{8,}")
+_ADMIN_ABSOLUTE_PATH_RE = re.compile(r"(?<![A-Za-z0-9_./-])(?:/[A-Za-z0-9_.@ -]+){3,}")
+
+
+def _admin_safe_audit_text(value, *, max_len: int = 500) -> str:
+    """Redact secret-like values before audit/diagnostic details hit admin JSON.
+
+    The raw audit table remains useful for incident response, but browser-facing
+    views should not casually expose credentials, session ids, tokenized Test Lab
+    URLs, or long filesystem paths.  This is intentionally conservative: normal
+    usernames, room names, IP addresses, short reasons, and counts still show.
+    """
+    text = str(value or "")
+    if not text:
+        return ""
+    text = _ADMIN_TESTLAB_URL_RE.sub(r"\1[redacted]", text)
+    text = _ADMIN_AUDIT_BEARER_RE.sub("Bearer [redacted]", text)
+    text = _ADMIN_AUDIT_SECRET_VALUE_RE.sub(lambda m: f"{m.group(1)}=[redacted]", text)
+    text = _ADMIN_ABSOLUTE_PATH_RE.sub("[path-redacted]", text)
+    return text[: max(1, min(int(max_len or 500), 2000))]
+
+
+def _admin_safe_audit_event(actor, action, target, timestamp, details) -> dict:
+    return {
+        "actor": _admin_safe_audit_text(actor, max_len=120),
+        "action": _admin_safe_audit_text(action, max_len=120),
+        "target": _admin_safe_audit_text(target, max_len=180) if target is not None else None,
+        "timestamp": timestamp.isoformat() if timestamp else None,
+        "details": _admin_safe_audit_text(details, max_len=500),
+    }
+
+
+def _admin_recover_query_error(conn, label: str = "admin_query") -> None:
+    """Recover a psycopg transaction after an optional diagnostics query fails."""
+    try:
+        conn.rollback()
+    except Exception:
+        logging.debug("%s rollback failed", label, exc_info=True)
+
+
+def _admin_sanitize_preflight_snapshot(snapshot):
+    """Return a browser-safe copy of a preflight/diagnostics snapshot.
+
+    Preflight is an admin tool, but the raw object can include absolute local
+    paths and redacted-but-still-topological DSNs/Redis URLs.  The panel needs
+    status, counts, and summaries; it does not need full server filesystem paths.
+    """
+    if snapshot is None:
+        return None
+    if isinstance(snapshot, list):
+        return [_admin_sanitize_preflight_snapshot(item) for item in snapshot]
+    if not isinstance(snapshot, dict):
+        return snapshot
+    safe = {}
+    for key, value in snapshot.items():
+        key_s = str(key)
+        low = key_s.lower()
+        if low in {"dsn", "database_url", "message_queue", "shared_state_url"}:
+            safe[key_s] = _admin_safe_audit_text(value, max_len=260) if value else value
+        elif low == "dsn_parts":
+            safe[key_s] = {"present": bool(value), "redacted": True}
+        elif low == "identity":
+            safe[key_s] = "available" if value else None
+        elif low == "schema_state":
+            safe[key_s] = str(value or "unknown")[:80]
+        elif low in {"settings_file", "path"}:
+            safe[key_s] = Path(str(value)).name if value else value
+        elif low == "paths" and isinstance(value, dict):
+            safe_paths = {}
+            for name, meta in value.items():
+                if isinstance(meta, dict):
+                    safe_paths[str(name)] = {
+                        "path_name": Path(str(meta.get("path") or "")).name if meta.get("path") else None,
+                        "writable": bool(meta.get("writable")),
+                        "error": _admin_safe_audit_text(meta.get("error"), max_len=220) if meta.get("error") else None,
+                    }
+                else:
+                    safe_paths[str(name)] = meta
+            safe[key_s] = safe_paths
+        elif isinstance(value, (dict, list)):
+            safe[key_s] = _admin_sanitize_preflight_snapshot(value)
+        elif isinstance(value, str):
+            safe[key_s] = _admin_safe_audit_text(value, max_len=1000)
+        else:
+            safe[key_s] = value
+    return safe
 
 
 # Process start time (best-effort) for uptime reporting in /admin/stats.
@@ -636,8 +768,15 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         return obj
 
     @app.get("/api/debug/config")
-    @require_permission("admin:basic")
+    @require_permission("admin:settings")
     def _debug_config():
+        # Config snapshots can expose deployment topology and redacted secret
+        # shape.  Keep them behind the settings permission and the same recent
+        # admin re-auth gate used by settings writers, even when the local-only
+        # default is relaxed for remote diagnostics.
+        status = _admin_reauth_status(_actor())
+        if not status.get("ok"):
+            return _admin_reauth_required_response(status)
         # In production we default to local-only. Can be overridden by setting:
         #   debug_config_allow_remote: true
         allow_remote = bool(settings.get("debug_config_allow_remote", False))
@@ -684,9 +823,38 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
     def _get_user_id(username: str) -> int | None:
         conn = get_db()
         with conn.cursor() as cur:
-            cur.execute("SELECT id FROM users WHERE username = %s;", (username,))
+            cur.execute("SELECT id FROM users WHERE LOWER(username) = LOWER(%s);", (username,))
             row = cur.fetchone()
         return row[0] if row else None
+
+    def _canonical_user_or_error(value: str):
+        """Return (stored_username, user_id, error_response) for admin account actions.
+
+        Admin tools accept usernames from routes, forms, and legacy UI actions.
+        Those inputs can differ in case from the stored account name.  Any action
+        that writes/deletes account-owned rows must resolve the target once and
+        then use that canonical spelling everywhere, otherwise ``alice`` can
+        update the account row for ``Alice`` but leave exact-match rows such as
+        messages, quotas, sanctions, reset tokens, or live sessions behind.
+        """
+        raw = str(value or "").strip()
+        if not raw:
+            return None, None, _admin_json_response({"ok": False, "error": "Username required"}, 400)
+        if len(raw) > 64 or any(ord(ch) < 32 for ch in raw):
+            return None, None, _admin_json_response({"ok": False, "error": "Invalid username"}, 400)
+        try:
+            conn = get_db()
+            stored = canonical_username(conn, raw)
+            if not stored:
+                return None, None, _admin_json_response({"ok": False, "error": "User not found"}, 404)
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM users WHERE username = %s LIMIT 1;", (stored,))
+                row = cur.fetchone()
+            if not row:
+                return None, None, _admin_json_response({"ok": False, "error": "User not found"}, 404)
+            return stored, int(row[0]), None
+        except Exception as exc:
+            return None, None, _admin_operation_error("resolve_user", exc, ok_style=True)
 
     def _ensure_admin_profile_runtime_schema() -> None:
         """Keep profile reports/badges admin routes safe on upgraded databases."""
@@ -722,8 +890,17 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
     _PERMISSION_DESCRIPTIONS = {
         "admin:basic": "Access the admin panel and general operations",
         "admin:settings": "Read and change server settings, media, file, torrent, and anti-abuse controls",
-        "admin:assign_role": "Assign roles to users",
-        "admin:manage_roles": "Create, delete, and edit roles / permissions",
+        "admin:audit": "Read admin audit, analytics, and moderation overview data",
+        "admin:test_lab": "Launch and run Admin Test Lab diagnostics",
+        "admin:create_user": "Create end-user accounts from the admin panel",
+        "admin:delete_user": "Delete user accounts and related data",
+        "admin:set_recovery_pin": "Set or reset a user's Recovery PIN",
+        "admin:set_user_status": "Change account status, suspension, and visibility states",
+        "admin:set_user_quota": "Change per-user quota limits",
+        "admin:revoke_2fa": "Revoke a user's two-factor setup",
+        "admin:broadcast": "Send a server-wide broadcast",
+        "admin:assign_role": "Assign non-privileged roles to users",
+        "admin:manage_roles": "Create, delete, and edit roles / permissions and privileged assignments",
         "admin:ban_ip": "Ban IP addresses and related sessions",
         "admin:reset_password": "Reset a user password",
         "admin:logout_user": "Force a user to sign out",
@@ -734,19 +911,32 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         "moderation:shadowban": "Shadowban a user",
         "room:lock": "Lock or unlock rooms",
         "room:readonly": "Toggle room read-only mode",
+        "room:clear": "Clear room chat history",
         "room:delete": "Delete rooms permanently",
+        "profile:moderate": "Moderate profile posts, comments, reports, warnings, and badges",
         "user:delete_self": "Allow self-delete workflow",
         "user:edit_profile": "Edit profile information",
     }
 
     _DANGEROUS_PERMISSIONS = {
-        "admin:basic", "admin:settings", "admin:manage_roles", "admin:ban_ip", "admin:reset_password", "admin:logout_user",
-        "moderation:suspend_user", "moderation:shadowban", "room:delete",
+        "admin:basic", "admin:settings", "admin:test_lab", "admin:create_user", "admin:delete_user",
+        "admin:set_recovery_pin", "admin:set_user_status", "admin:revoke_2fa", "admin:broadcast",
+        "admin:manage_roles", "admin:ban_ip", "admin:reset_password", "admin:logout_user",
+        "moderation:suspend_user", "moderation:shadowban", "room:clear", "room:delete", "profile:moderate",
     }
 
     _PRIVILEGE_ESCALATION_PERMISSIONS = {
         "admin:basic",
         "admin:settings",
+        "admin:audit",
+        "admin:test_lab",
+        "admin:create_user",
+        "admin:delete_user",
+        "admin:set_recovery_pin",
+        "admin:set_user_status",
+        "admin:set_user_quota",
+        "admin:revoke_2fa",
+        "admin:broadcast",
         "admin:assign_role",
         "admin:manage_roles",
         "admin:ban_ip",
@@ -804,7 +994,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                                AND p.name = ANY(%s)
                        )
                   FROM users u
-                 WHERE u.username = %s;
+                 WHERE LOWER(u.username) = LOWER(%s);
                 """,
                 (list(_PRIVILEGE_ESCALATION_PERMISSIONS), target),
             )
@@ -812,18 +1002,34 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         return bool(row and row[0])
 
     def _deny_privileged_target_without_admin(username: str, action: str):
-        """Prevent moderators/custom admins from taking action against admins."""
+        """Prevent lower-trust admins/moderators from acting on privileged accounts.
+
+        A custom role may have one narrow admin permission such as password reset
+        or forced logout.  That must not automatically permit changing an owner,
+        full admin, or any account carrying privilege-escalation permissions.
+        Privileged targets require role-management authority.
+        """
         try:
             privileged = _target_has_privileged_admin_permissions(username)
-        except Exception:
-            privileged = False
-        if privileged and not _actor_has_permission("admin:basic"):
+        except Exception as exc:
+            try:
+                log_audit_event(_actor(), "privileged_target_check_failed", username, f"action={action}; error={type(exc).__name__}")
+            except Exception:
+                pass
             return _admin_json_response({
                 "ok": False,
-                "error": "privileged_target_requires_admin",
-                "message": f"Cannot {action} an admin or privileged account without admin access.",
+                "error": "privileged_target_check_failed",
+                "message": f"Cannot {action} this account because the server could not verify whether it is privileged. The action was blocked safely.",
                 "target": username,
-                "required": "admin:basic",
+                "required_check": "admin:manage_roles_target_guard",
+            }, 500)
+        if privileged and not _actor_has_permission("admin:manage_roles"):
+            return _admin_json_response({
+                "ok": False,
+                "error": "privileged_target_requires_role_manager",
+                "message": f"Cannot {action} an admin or privileged account without role-management access.",
+                "target": username,
+                "required": "admin:manage_roles",
             }, 403)
         return None
 
@@ -914,6 +1120,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             "admin": "Admin Core",
             "moderation": "Moderation",
             "room": "Rooms",
+            "profile": "Profile Safety",
             "user": "Users",
         }.get(prefix, "Other")
 
@@ -943,6 +1150,46 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         if any(ord(ch) < 32 for ch in room):
             return None, _admin_json_response({"ok": False, "error": "Invalid room name"}, 400)
         return room, None
+
+    def _canonical_room_or_error(value: str, *, require_existing: bool = True):
+        """Return the stored room name for admin room/moderation actions.
+
+        Admin tools must not create policy or sanction rows for a wrong-case room
+        alias (for example ``general`` when the stored room is ``General``).  Room
+        joins, sends, file checks, and admin list output all rely on one canonical
+        room string, so privileged room actions resolve against ``chat_rooms``
+        case-insensitively before writing lock/read-only/slowmode/ban state.
+        """
+        room, err = _normalized_room_or_error(value)
+        if err is not None:
+            return None, err
+        if not require_existing:
+            return room, None
+        try:
+            conn = get_db()
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT name
+                      FROM chat_rooms
+                     WHERE LOWER(name) = LOWER(%s)
+                     ORDER BY CASE WHEN name = %s THEN 0 ELSE 1 END, name
+                     LIMIT 1;
+                    """,
+                    (room, room),
+                )
+                row = cur.fetchone()
+        except Exception as exc:
+            return None, _admin_operation_error("resolve_room", exc, ok_style=True)
+        if not row or not row[0]:
+            return None, _admin_json_response({"ok": False, "error": "Room not found", "room": room}, 404)
+        return str(row[0]).strip(), None
+
+    def _delete_casefold_room_policy_rows(cur, table: str, room: str) -> None:
+        """Remove wrong-case legacy policy rows before/while changing a room policy."""
+        if table not in {"room_locks", "room_readonly", "room_slowmode"}:
+            raise ValueError("unsupported room policy table")
+        cur.execute(f"DELETE FROM {table} WHERE LOWER(room)=LOWER(%s) AND room <> %s;", (room, room))
 
     def _revoke_sessions_for_ip(ip: str, actor: str) -> dict:
         """Revoke active auth sessions/tokens seen from a banned IP address."""
@@ -1116,7 +1363,13 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         try:
             conn = get_db()
             with conn.cursor() as cur:
-                cur.execute('SELECT locked FROM room_locks WHERE room = %s;', (room,))
+                cur.execute('''
+                    SELECT locked
+                      FROM room_locks
+                     WHERE LOWER(room) = LOWER(%s)
+                     ORDER BY CASE WHEN room = %s THEN 0 ELSE 1 END
+                     LIMIT 1;
+                ''', (room, room))
                 row = cur.fetchone()
                 if row is not None:
                     locked = bool(row[0])
@@ -1125,7 +1378,13 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         try:
             conn = get_db()
             with conn.cursor() as cur:
-                cur.execute('SELECT readonly FROM room_readonly WHERE room = %s;', (room,))
+                cur.execute('''
+                    SELECT readonly
+                      FROM room_readonly
+                     WHERE LOWER(room) = LOWER(%s)
+                     ORDER BY CASE WHEN room = %s THEN 0 ELSE 1 END
+                     LIMIT 1;
+                ''', (room, room))
                 row = cur.fetchone()
                 if row is not None:
                     readonly = bool(row[0])
@@ -1134,7 +1393,13 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         try:
             conn = get_db()
             with conn.cursor() as cur:
-                cur.execute('SELECT seconds FROM room_slowmode WHERE room = %s;', (room,))
+                cur.execute('''
+                    SELECT seconds
+                      FROM room_slowmode
+                     WHERE LOWER(room) = LOWER(%s)
+                     ORDER BY CASE WHEN room = %s THEN 0 ELSE 1 END
+                     LIMIT 1;
+                ''', (room, room))
                 row = cur.fetchone()
                 if row is not None and row[0] is not None:
                     slowmode_seconds = int(row[0])
@@ -1437,15 +1702,27 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
     def _fresh_admin_auth_window_seconds() -> int:
         try:
-            raw = settings.get("admin_fresh_auth_window_seconds", 600)
-            window = int(raw if raw is not None else 600)
+            raw = settings.get("admin_fresh_auth_window_seconds", 28800)
+            window = int(raw if raw is not None else 28800)
         except Exception:
-            window = 600
+            window = 28800
         if window < 0:
             window = 0
         if window > 86400:
             window = 86400
         return window
+
+    def _admin_reauth_once_per_session_enabled() -> bool:
+        """Return whether one password confirmation unlocks the current admin login.
+
+        This keeps the safety gate tied to the current auth-session id, but avoids
+        repeatedly prompting the same admin during one normal admin-panel session.
+        Set admin_reauth_once_per_session=false to restore the timed-window mode.
+        """
+        raw = settings.get("admin_reauth_once_per_session", True)
+        if isinstance(raw, str):
+            return raw.strip().lower() not in {"0", "false", "no", "off", "timed", "window"}
+        return bool(raw)
 
     def _clear_admin_reauth_state() -> None:
         for key in ("admin_reauth_user", "admin_reauth_sid", "admin_reauth_at"):
@@ -1466,6 +1743,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         actor = str(actor or _actor() or "")
         sid = str(_current_auth_session_id() or "")
         window = _fresh_admin_auth_window_seconds()
+        once_per_session = _admin_reauth_once_per_session_enabled()
         if window <= 0:
             return {
                 "ok": True,
@@ -1475,6 +1753,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 "remaining_seconds": None,
                 "confirmed_at": None,
                 "sid": sid or None,
+                "once_per_session": bool(once_per_session),
             }
 
         stored_user = str(session.get("admin_reauth_user") or "")
@@ -1491,6 +1770,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 "remaining_seconds": 0,
                 "confirmed_at": None,
                 "sid": sid or None,
+                "once_per_session": bool(once_per_session),
             }
 
         if stored_user != actor or stored_sid != sid:
@@ -1504,6 +1784,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 "remaining_seconds": 0,
                 "confirmed_at": None,
                 "sid": sid,
+                "once_per_session": bool(once_per_session),
             }
 
         try:
@@ -1518,11 +1799,12 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 "remaining_seconds": 0,
                 "confirmed_at": None,
                 "sid": sid,
+                "once_per_session": bool(once_per_session),
             }
 
         now_ts = int(datetime.now(timezone.utc).timestamp())
         age = max(0, now_ts - confirmed_at)
-        if age > window:
+        if not once_per_session and age > window:
             _clear_admin_reauth_state()
             return {
                 "ok": False,
@@ -1532,16 +1814,18 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 "remaining_seconds": 0,
                 "confirmed_at": confirmed_at,
                 "sid": sid,
+                "once_per_session": False,
             }
 
         return {
             "ok": True,
             "required": False,
-            "reason": "fresh",
-            "window_seconds": window,
-            "remaining_seconds": max(0, window - age),
+            "reason": "session_fresh" if once_per_session else "fresh",
+            "window_seconds": 0 if once_per_session else window,
+            "remaining_seconds": None if once_per_session else max(0, window - age),
             "confirmed_at": confirmed_at,
             "sid": sid,
+            "once_per_session": bool(once_per_session),
         }
 
     def _admin_reauth_required_response(status: dict):
@@ -1554,6 +1838,8 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 "reason": status.get("reason") or "missing",
                 "window_seconds": int(status.get("window_seconds") or 0),
                 "remaining_seconds": int(status.get("remaining_seconds") or 0),
+                "once_per_session": bool(status.get("once_per_session")),
+                "sid": status.get("sid"),
             },
             428,
         )
@@ -1585,6 +1871,8 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 "window_seconds": int(status.get("window_seconds") or 0),
                 "remaining_seconds": status.get("remaining_seconds"),
                 "confirmed_at": status.get("confirmed_at"),
+                "once_per_session": bool(status.get("once_per_session")),
+                "sid": status.get("sid"),
             }
         )
 
@@ -1613,7 +1901,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         conn = get_db()
         try:
             with conn.cursor() as cur:
-                cur.execute("SELECT password FROM users WHERE username = %s;", (actor,))
+                cur.execute("SELECT password FROM users WHERE LOWER(username) = LOWER(%s);", (actor,))
                 row = cur.fetchone()
             if not row or not row[0]:
                 _clear_admin_reauth_state()
@@ -1631,7 +1919,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             if upgraded_hash:
                 try:
                     with conn.cursor() as cur:
-                        cur.execute("UPDATE users SET password = %s WHERE username = %s;", (upgraded_hash, actor))
+                        cur.execute("UPDATE users SET password = %s WHERE LOWER(username) = LOWER(%s);", (upgraded_hash, actor))
                     conn.commit()
                 except Exception:
                     try:
@@ -1653,6 +1941,8 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                     "confirmed_at": confirmed_at,
                     "window_seconds": int(status.get("window_seconds") or 0),
                     "remaining_seconds": status.get("remaining_seconds"),
+                    "once_per_session": bool(status.get("once_per_session")),
+                    "sid": status.get("sid") or sid,
                 }
             )
         except Exception as exc:
@@ -1760,7 +2050,8 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
 
     @app.route("/admin/diagnostics")
-    @require_permission("admin:basic")
+    @require_permission("admin:audit")
+    @require_recent_admin_auth
     def admin_diagnostics():
         runtime_ctx = {
             "async_mode": current_app.config.get("ECHOCHAT_SOCKETIO_ASYNC_MODE"),
@@ -1778,10 +2069,11 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         return _admin_json_response(
             {
                 "ok": True,
-                "current": current,
-                "startup": startup_snapshot,
-                "db_identity": _safe_db_identity(),
+                "current": _admin_sanitize_preflight_snapshot(current),
+                "startup": _admin_sanitize_preflight_snapshot(startup_snapshot),
+                "db_identity": "available" if _safe_db_identity() else "unavailable",
                 "schema_state": _safe_schema_state(),
+                "redacted": True,
             }
         )
 
@@ -1896,11 +2188,11 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         add_check("dm_e2ee", "DM E2EE required", dm_required and not dm_plain_fallback, "Private messages fail closed unless encrypted.")
         add_check("group_e2ee", "Group E2EE required", group_required, "Group-chat plaintext messages are blocked server-side.")
         add_check("private_room_e2ee", "Private-room E2EE required", private_room_required, "Invite-only/private custom rooms block plaintext room messages.")
-        add_check("all_room_e2ee", "All-room E2EE strict mode", all_room_required, "Public rooms also require encrypted envelopes.", level=("ok" if all_room_required else "warn"))
+        add_check("all_room_e2ee", "All-room E2EE strict mode", all_room_required, "Public rooms are plaintext by default for moderation/search. Strict mode requires encrypted envelopes in every room.", level=("ok" if all_room_required else "warn"))
         previous_profile_keys = bool(sensitive_field_previous_keys_available(settings))
-        add_check("profile_field_key", "Profile-field encryption key", (not profile_encrypt) or profile_key, "Set ECHOCHAT_PROFILE_FIELD_KEY or a stable SECRET_KEY for phone/address/location encryption.")
-        add_check("email_at_rest", "Email encrypted at rest", (not email_encrypt) or (email_field_key and email_hash_key), "Set ECHOCHAT_EMAIL_FIELD_KEY/ECHOCHAT_EMAIL_HASH_KEY or a stable SECRET_KEY before encrypting stored emails.")
-        add_check("security_backup_encryption", "Encrypted security backups", (not backup_encrypt) or backup_key, "Set ECHOCHAT_SECURITY_BACKUP_KEY or a stable app encryption key; new security backups are .json.enc by default.")
+        add_check("profile_field_key", "Profile-field encryption key", (not profile_encrypt) or profile_key, "Set ECHOCHAT_PROFILE_FIELD_KEY or generated stable secrets for phone/address/location encryption.")
+        add_check("email_at_rest", "Email encrypted at rest", (not email_encrypt) or (email_field_key and email_hash_key), "Set ECHOCHAT_EMAIL_FIELD_KEY and ECHOCHAT_EMAIL_HASH_KEY before encrypting stored emails.")
+        add_check("security_backup_encryption", "Encrypted security backups", (not backup_encrypt) or backup_key, "Set ECHOCHAT_SECURITY_BACKUP_KEY or generated stable crypto keys; new security backups are .json.enc by default.")
         add_check("profile_field_previous_keys", "Profile-field previous keys", True, "During rotation, put old keys in ECHOCHAT_PROFILE_FIELD_PREVIOUS_KEYS until the rotation tool rewrites old envelopes.", level=("warn" if previous_profile_keys else "ok"))
         add_check("secret_persistence", "Config secret persistence", not secrets_persist, "Production should keep secrets in env/secret manager, not server_config.json.", level=("ok" if not secrets_persist else "warn"))
         add_check("testlab_random", "Test Lab randomized links", True, "Predictable Test Lab pages stay dark; random URLs are session-bound and short-lived.")
@@ -2000,12 +2292,49 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         p = (current_app.config.get("ECHOCHAT_SETTINGS_FILE") or CONFIG_FILE) if current_app else CONFIG_FILE
         return Path(str(p))
 
-    def _persist_settings_patch(patch: dict) -> bool:
-        """Persist a small patch into the settings JSON without clobbering other keys."""
+    _settings_persist_report: dict[str, object] = {}
+
+    def _json_equivalent(a, b) -> bool:
         try:
-            patch = scrub_patch_for_persist(patch or {}, settings)
-            if not patch:
+            return json.dumps(a, sort_keys=True, separators=(",", ":"), ensure_ascii=False) == json.dumps(b, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        except Exception:
+            return a == b
+
+    def _settings_persistence_meta(raw_patch: dict, safe_patch: dict, *, persisted: bool, error: str | None = None) -> dict:
+        raw_patch = dict(raw_patch or {})
+        safe_patch = dict(safe_patch or {})
+        runtime_only = sorted(k for k in raw_patch.keys() if k not in safe_patch)
+        redacted_nested = sorted(k for k in raw_patch.keys() if k in safe_patch and not _json_equivalent(raw_patch.get(k), safe_patch.get(k)))
+        meta = {
+            "persisted": bool(persisted),
+            "secret_persistence_enabled": bool(persist_secrets_enabled(settings)),
+            "persisted_keys": sorted(safe_patch.keys()) if persisted else [],
+            "runtime_only_keys": runtime_only,
+            "redacted_nested_keys": redacted_nested,
+        }
+        if runtime_only or redacted_nested:
+            meta["note"] = "Some secret or credential fields were applied to runtime but intentionally omitted or redacted from server_config.json unless secret persistence is explicitly enabled."
+        if error:
+            meta["error"] = str(error)[:160]
+        return meta
+
+    def _last_settings_persistence_meta() -> dict:
+        return dict(_settings_persist_report or {})
+
+    def _persist_settings_patch(patch: dict) -> bool:
+        """Persist a small patch into the settings JSON without clobbering other keys.
+
+        The return value stays boolean for older callers, while
+        ``_last_settings_persistence_meta()`` exposes which keys were actually
+        written and which secret/nested credential values were runtime-only.
+        """
+        nonlocal _settings_persist_report
+        raw_patch = dict(patch or {})
+        try:
+            safe_patch = scrub_patch_for_persist(raw_patch, settings)
+            if not safe_patch:
                 # Likely only secret keys were supplied while persistence is disabled.
+                _settings_persist_report = _settings_persistence_meta(raw_patch, safe_patch, persisted=False)
                 return False
             path = _settings_path()
             existing = {}
@@ -2025,15 +2354,17 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                     existing = {}
 
             merged = dict(existing)
-            merged.update(patch or {})
+            merged.update(safe_patch or {})
             path.parent.mkdir(parents=True, exist_ok=True)
             # Re-evaluate the persistence policy against the merged settings,
-            # not the old in-memory settings. This prevents a dev→production
-            # save from keeping secrets merely because the previous config still
-            # allowed secret persistence.
+            # not the old file. This prevents a dev→production save from
+            # keeping secrets merely because the previous config still allowed
+            # secret persistence.
             path.write_text(json.dumps(scrub_secrets_for_persist(merged), indent=2), encoding="utf-8")
+            _settings_persist_report = _settings_persistence_meta(raw_patch, safe_patch, persisted=True)
             return True
-        except Exception:
+        except Exception as exc:
+            _settings_persist_report = _settings_persistence_meta(raw_patch, {}, persisted=False, error=exc.__class__.__name__)
             return False
 
     def _enforce_voice_room_limit(max_peers: int) -> dict:
@@ -2230,6 +2561,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 "voice_default_push_to_talk": patch["voice_default_push_to_talk"],
                 "client_config": echo_voice_client_config(settings),
                 "persisted": bool(persisted),
+                "persistence": _last_settings_persistence_meta(),
                 "kicked": int(enforcement.get("kicked", 0) or 0),
                 "kicked_by_room": enforcement.get("kicked_by_room", {}),
             }
@@ -2314,6 +2646,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 "voice_ice_servers": redact_ice_servers(voice_servers),
                 "summary": ice_server_summary(settings),
                 "persisted": bool(persisted),
+                "persistence": _last_settings_persistence_meta(),
             }
         )
 
@@ -2438,6 +2771,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             {
                 "ok": True,
                 "persisted": bool(persisted),
+                "persistence": _last_settings_persistence_meta(),
                 "av_mode": mode,
                 "active_mode": decision.get("mode"),
                 "webcam_enabled": patch["webcam_enabled"],
@@ -2513,10 +2847,16 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             patch["giphy_enabled"] = bool(v) if isinstance(v, bool) else str(v).strip().lower() in {"1", "true", "yes", "on"}
 
         if "giphy_rating" in payload:
-            patch["giphy_rating"] = str(payload.get("giphy_rating") or "pg-13").strip()[:20] or "pg-13"
+            rating = str(payload.get("giphy_rating") or "pg-13").strip().lower()[:20] or "pg-13"
+            if rating not in {"y", "g", "pg", "pg-13", "r"}:
+                return _admin_json_response({"ok": False, "error": "giphy_rating must be y, g, pg, pg-13, or r"}, 400)
+            patch["giphy_rating"] = rating
 
         if "giphy_lang" in payload:
-            patch["giphy_lang"] = str(payload.get("giphy_lang") or "en").strip()[:10] or "en"
+            lang = str(payload.get("giphy_lang") or "en").strip().lower()[:10] or "en"
+            if not re.match(r"^[a-z]{2}(?:-[a-z0-9]{2,8})?$", lang):
+                return _admin_json_response({"ok": False, "error": "giphy_lang must be a short locale code like en or en-us"}, 400)
+            patch["giphy_lang"] = lang
 
         if "giphy_default_limit" in payload:
             try:
@@ -2526,8 +2866,11 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             patch["giphy_default_limit"] = max(1, min(lim, 48))
 
         if "giphy_api_key" in payload:
-            # Allow blanking the key.
-            patch["giphy_api_key"] = str(payload.get("giphy_api_key") or "").strip()
+            # Allow blanking the key, but reject control characters and huge values.
+            giphy_key = str(payload.get("giphy_api_key") or "").strip()
+            if len(giphy_key) > 256 or any(ord(ch) < 32 for ch in giphy_key):
+                return _admin_json_response({"ok": False, "error": "giphy_api_key is too long or contains invalid characters"}, 400)
+            patch["giphy_api_key"] = giphy_key
 
         # Apply runtime
         for k, v in patch.items():
@@ -2546,6 +2889,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             {
                 "ok": True,
                 "persisted": bool(persisted),
+                "persistence": _last_settings_persistence_meta(),
                 "giphy_enabled": bool(settings.get("giphy_enabled", True)),
                 "giphy_rating": str(settings.get("giphy_rating", "pg-13") or "pg-13"),
                 "giphy_lang": str(settings.get("giphy_lang", "en") or "en"),
@@ -2643,18 +2987,9 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
     def admin_user_search():
         """Search users by username/email/id with server-side pagination.
 
-        Query params:
-          - q: search string (optional only when at least one filter is active)
-          - mode: contains|prefix|exact|email|id (default contains)
-          - online: 1/0 (online only)
-          - admins: 1/0 (admins only)
-          - status: any|active|suspended|deactivated|shadowbanned (default any)
-          - limit: page size (default 50, max 100)
-          - page: one-based page number (default 1)
-
-        The unfiltered default intentionally returns no rows. A server with
-        100k+ accounts must not make the admin panel browse or sort the whole
-        user table just because the Users tab opened.
+        This route is intentionally schema-tolerant. Some upgraded installs may
+        not have every newer optional users column yet, but admin username search
+        must still work.
         """
 
         q = (request.args.get("q") or "").strip()
@@ -2686,6 +3021,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         if not q and not has_filter:
             return _admin_json_response(
                 {
+                    "ok": True,
                     "users": [],
                     "q": q,
                     "mode": mode,
@@ -2699,13 +3035,52 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 }
             )
 
+        conn = get_db()
+
+        try:
+            with conn.cursor() as cur:
+                user_cols = _admin_table_columns(cur, "users")
+                has_user_roles = _admin_table_exists(cur, "user_roles")
+                has_role_permissions = _admin_table_exists(cur, "role_permissions")
+                has_permissions = _admin_table_exists(cur, "permissions")
+                has_sanctions = _admin_table_exists(cur, "user_sanctions")
+        except Exception:
+            user_cols = set()
+            has_user_roles = has_role_permissions = has_permissions = has_sanctions = False
+
+        def has_col(name: str) -> bool:
+            return (not user_cols) or name in user_cols
+
+        email_col = has_col("email")
+        email_hash_col = has_col("email_hash")
+        email_encrypted_col = has_col("email_encrypted")
+        status_col = has_col("status")
+        is_admin_col = has_col("is_admin")
+        online_col = has_col("online")
+        last_seen_col = has_col("last_seen")
+        created_at_col = has_col("created_at")
+        presence_status_col = has_col("presence_status")
+        custom_status_col = has_col("custom_status")
+        two_factor_col = has_col("two_factor_enabled")
+
         where = []
         params = []
 
-        effective_admin_sql = _effective_admin_exists_sql("u")
-        effective_status_sql = effective_account_status_sql("u")
+        if has_user_roles and has_role_permissions and has_permissions and is_admin_col:
+            effective_admin_sql = _effective_admin_exists_sql("u")
+        elif is_admin_col:
+            effective_admin_sql = "COALESCE(u.is_admin, FALSE)"
+        else:
+            effective_admin_sql = "FALSE"
 
-        if online_only:
+        if status_col and has_sanctions:
+            effective_status_sql = effective_account_status_sql("u")
+        elif status_col:
+            effective_status_sql = "LOWER(COALESCE(u.status, 'active'))"
+        else:
+            effective_status_sql = "'active'"
+
+        if online_only and online_col:
             where.append("u.online = TRUE")
         if admins_only:
             where.append(f"{effective_admin_sql} = TRUE")
@@ -2714,40 +3089,137 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             params.append(status)
 
         if q:
-            q_hash = hash_email(q, settings)
-            if mode == "id" and q.isdigit():
+            q_hash = hash_email(q, settings) if email_hash_col else ""
+            if mode == "id" and q.isdigit() and has_col("id"):
                 where.append("u.id = %s")
                 params.append(int(q))
-            elif mode == "exact":
-                where.append("(u.username = %s OR LOWER(u.email) = LOWER(%s) OR u.email_hash = %s)")
-                params.extend([q, q, q_hash])
-            elif mode == "prefix":
-                where.append("(u.username ILIKE %s ESCAPE '\\\\' OR u.email ILIKE %s ESCAPE '\\\\' OR u.email_hash = %s)")
-                prefix_pattern = _admin_like_pattern(q, prefix=True)
-                params.extend([prefix_pattern, prefix_pattern, q_hash])
-            elif mode == "email":
-                where.append("(u.email ILIKE %s ESCAPE '\\\\' OR u.email_hash = %s)")
-                params.extend([_admin_like_pattern(q), q_hash])
-            else:  # contains
-                where.append("(u.username ILIKE %s ESCAPE '\\\\' OR u.email ILIKE %s ESCAPE '\\\\' OR u.email_hash = %s)")
-                contains_pattern = _admin_like_pattern(q)
-                params.extend([contains_pattern, contains_pattern, q_hash])
+            else:
+                search_clauses = []
+                search_params = []
+                if mode == "exact":
+                    search_clauses.append("u.username = %s")
+                    search_params.append(q)
+                    if email_col:
+                        search_clauses.append("LOWER(u.email) = LOWER(%s)")
+                        search_params.append(q)
+                    if email_hash_col and q_hash:
+                        search_clauses.append("u.email_hash = %s")
+                        search_params.append(q_hash)
+                elif mode == "prefix":
+                    pattern = _admin_like_pattern(q, prefix=True)
+                    search_clauses.append("u.username ILIKE %s ESCAPE '\\\\'")
+                    search_params.append(pattern)
+                    if email_col:
+                        search_clauses.append("u.email ILIKE %s ESCAPE '\\\\'")
+                        search_params.append(pattern)
+                    if email_hash_col and q_hash:
+                        search_clauses.append("u.email_hash = %s")
+                        search_params.append(q_hash)
+                elif mode == "email":
+                    if email_col:
+                        search_clauses.append("u.email ILIKE %s ESCAPE '\\\\'")
+                        search_params.append(_admin_like_pattern(q))
+                    if email_hash_col and q_hash:
+                        search_clauses.append("u.email_hash = %s")
+                        search_params.append(q_hash)
+                    # If an upgraded DB does not have email lookup columns yet,
+                    # fall back to username search instead of failing the panel.
+                    if not search_clauses:
+                        search_clauses.append("u.username ILIKE %s ESCAPE '\\\\'")
+                        search_params.append(_admin_like_pattern(q))
+                else:  # contains
+                    pattern = _admin_like_pattern(q)
+                    search_clauses.append("u.username ILIKE %s ESCAPE '\\\\'")
+                    search_params.append(pattern)
+                    if email_col:
+                        search_clauses.append("u.email ILIKE %s ESCAPE '\\\\'")
+                        search_params.append(pattern)
+                    if email_hash_col and q_hash:
+                        search_clauses.append("u.email_hash = %s")
+                        search_params.append(q_hash)
+
+                if search_clauses:
+                    where.append("(" + " OR ".join(search_clauses) + ")")
+                    params.extend(search_params)
+
+        email_select = "u.email" if email_col else "NULL::text"
+        email_encrypted_select = "u.email_encrypted" if email_encrypted_col else "NULL::text"
+        is_admin_select = "COALESCE(u.is_admin, FALSE)" if is_admin_col else "FALSE"
+        raw_status_select = "u.status" if status_col else "'active'"
+        online_select = "COALESCE(u.online, FALSE)" if online_col else "FALSE"
+        last_seen_select = "u.last_seen" if last_seen_col else "NULL::timestamptz"
+        created_at_select = "u.created_at" if created_at_col else "NULL::timestamptz"
+        presence_status_select = "u.presence_status" if presence_status_col else "NULL::text"
+        custom_status_select = "u.custom_status" if custom_status_col else "NULL::text"
+        two_factor_select = "COALESCE(u.two_factor_enabled, FALSE)" if two_factor_col else "FALSE"
 
         sql = (
-            f"SELECT u.id, u.username, u.email, u.email_encrypted, u.is_admin, {effective_admin_sql} AS effective_is_admin, "
-            f"{effective_status_sql} AS effective_status, u.status AS raw_status, "
-            "u.online, u.last_seen, u.created_at, u.presence_status, u.custom_status, u.two_factor_enabled "
+            f"SELECT u.id, u.username, {email_select} AS email, {email_encrypted_select} AS email_encrypted, "
+            f"{is_admin_select} AS is_admin, {effective_admin_sql} AS effective_is_admin, "
+            f"{effective_status_sql} AS effective_status, {raw_status_select} AS raw_status, "
+            f"{online_select} AS online, {last_seen_select} AS last_seen, {created_at_select} AS created_at, "
+            f"{presence_status_select} AS presence_status, {custom_status_select} AS custom_status, "
+            f"{two_factor_select} AS two_factor_enabled "
             "FROM users u "
         )
         if where:
             sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY u.online DESC, LOWER(u.username) ASC, u.id ASC LIMIT %s OFFSET %s;"
+        sql += " ORDER BY online DESC, LOWER(u.username) ASC, u.id ASC LIMIT %s OFFSET %s;"
         params.extend([limit + 1, offset])
 
-        conn = get_db()
-        with conn.cursor() as cur:
-            cur.execute(sql, tuple(params))
-            rows = cur.fetchall() or []
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql, tuple(params))
+                rows = cur.fetchall() or []
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            logging.exception("[ADMIN] enhanced user search failed; falling back to username-only search")
+            # Last-resort fallback: do not leave the admin GUI unusable if a
+            # migration/schema drift breaks an optional field expression.
+            fallback_where = []
+            fallback_params = []
+            if q:
+                if mode == "exact":
+                    fallback_where.append("u.username = %s")
+                    fallback_params.append(q)
+                elif mode == "prefix":
+                    fallback_where.append("u.username ILIKE %s ESCAPE '\\\\'")
+                    fallback_params.append(_admin_like_pattern(q, prefix=True))
+                elif mode == "id" and q.isdigit():
+                    fallback_where.append("u.id = %s")
+                    fallback_params.append(int(q))
+                else:
+                    fallback_where.append("u.username ILIKE %s ESCAPE '\\\\'")
+                    fallback_params.append(_admin_like_pattern(q))
+            if online_only and online_col:
+                fallback_where.append("COALESCE(u.online, FALSE) = TRUE")
+            if admins_only and is_admin_col:
+                fallback_where.append("COALESCE(u.is_admin, FALSE) = TRUE")
+            fallback_email_select = email_select
+            fallback_email_encrypted_select = email_encrypted_select
+            fallback_is_admin_select = is_admin_select
+            fallback_status_select = raw_status_select
+            fallback_online_select = online_select
+            fallback_last_seen_select = last_seen_select
+            fallback_created_at_select = created_at_select
+            fallback_sql = (
+                f"SELECT u.id, u.username, {fallback_email_select} AS email, {fallback_email_encrypted_select} AS email_encrypted, "
+                f"{fallback_is_admin_select} AS is_admin, {fallback_is_admin_select} AS effective_is_admin, "
+                f"{fallback_status_select} AS effective_status, {fallback_status_select} AS raw_status, "
+                f"{fallback_online_select} AS online, {fallback_last_seen_select} AS last_seen, {fallback_created_at_select} AS created_at, "
+                "NULL::text AS presence_status, NULL::text AS custom_status, FALSE AS two_factor_enabled "
+                "FROM users u "
+            )
+            if fallback_where:
+                fallback_sql += " WHERE " + " AND ".join(fallback_where)
+            fallback_sql += " ORDER BY online DESC, LOWER(u.username) ASC, u.id ASC LIMIT %s OFFSET %s;"
+            fallback_params.extend([limit + 1, offset])
+            with conn.cursor() as cur:
+                cur.execute(fallback_sql, tuple(fallback_params))
+                rows = cur.fetchall() or []
 
         has_more = len(rows) > limit
         rows = rows[:limit]
@@ -2784,6 +3256,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 "has_more": has_more,
                 "next_page": page + 1 if has_more else None,
                 "requires_query": False,
+                "schema_tolerant": True,
             }
         )
 
@@ -2791,11 +3264,9 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
     @require_permission("admin:basic")
     def admin_user_detail(username: str):
         """Return an enriched user snapshot for admin UX (no secrets)."""
-        username = (username or "").strip()
-        if not username:
-            return _admin_json_response({"ok": False, "error": "username required"}, 400)
-        if len(username) > 64:
-            return _admin_json_response({"ok": False, "error": "username too long"}, 400)
+        username, _target_user_id, target_err = _canonical_user_or_error(username)
+        if target_err is not None:
+            return target_err
 
         conn = get_db()
         with conn.cursor() as cur:
@@ -2809,7 +3280,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                        u.online, u.last_seen, u.created_at,
                        u.presence_status, u.custom_status, u.two_factor_enabled
                   FROM users u
-                 WHERE u.username = %s;
+                 WHERE LOWER(u.username) = LOWER(%s);
                 """,
                 (username,),
             )
@@ -2843,7 +3314,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                     """
                     SELECT sanction_type, reason, created_at, expires_at
                       FROM user_sanctions
-                     WHERE username = %s
+                     WHERE LOWER(username) = LOWER(%s)
                      ORDER BY created_at DESC
                      LIMIT 25;
                     """,
@@ -2865,7 +3336,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             quota = None
             try:
                 cur.execute(
-                    "SELECT messages_per_hour, updated_at FROM user_quotas WHERE username = %s;",
+                    "SELECT messages_per_hour, updated_at FROM user_quotas WHERE LOWER(username) = LOWER(%s);",
                     (username,),
                 )
                 qrow = cur.fetchone()
@@ -2936,7 +3407,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         )
 
     @app.route("/admin/users/<path:username>/activity_timeline")
-    @require_permission("admin:basic")
+    @require_permission("admin:audit")
     def admin_user_activity_timeline(username: str):
         """Return a merged, newest-first user activity timeline for admins.
 
@@ -2944,11 +3415,9 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         complete message bodies. Admins can see behavior patterns without the
         timeline becoming a raw chat transcript.
         """
-        username = str(username or "").strip()
-        if not username:
-            return _admin_json_response({"ok": False, "error": "username required"}, 400)
-        if len(username) > 64:
-            return _admin_json_response({"ok": False, "error": "username too long"}, 400)
+        username, user_id, target_err = _canonical_user_or_error(username)
+        if target_err is not None:
+            return target_err
         try:
             limit = max(1, min(200, int(request.args.get("limit") or 80)))
         except Exception:
@@ -2978,10 +3447,10 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             events.append({
                 "timestamp": iso(ts),
                 "category": str(category or "activity"),
-                "action": str(action or "activity"),
-                "summary": str(summary or "")[:280],
-                "details": str(details or "")[:500],
-                "source": str(source or ""),
+                "action": _admin_safe_audit_text(action or "activity", max_len=120),
+                "summary": _admin_safe_audit_text(summary, max_len=280),
+                "details": _admin_safe_audit_text(details, max_len=500),
+                "source": _admin_safe_audit_text(source, max_len=80),
             })
 
         # Live Socket.IO presence snapshot first, because it is not stored in DB.
@@ -3006,7 +3475,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                     """
                     SELECT created_at, last_activity_at, revoked_at, revoked_reason, ip_address, user_agent
                       FROM auth_sessions
-                     WHERE username = %s
+                     WHERE LOWER(username) = LOWER(%s)
                        AND COALESCE(last_activity_at, created_at) >= %s
                      ORDER BY COALESCE(last_activity_at, created_at) DESC
                      LIMIT %s;
@@ -3042,7 +3511,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                     summary = f"{actor or 'system'} {action or 'activity'}"
                     if target:
                         summary += f" → {target}"
-                    add_event(ts, "audit", str(action or "audit"), summary, details or direction, "audit_log")
+                    add_event(ts, "audit", str(action or "audit"), _admin_safe_audit_text(summary, max_len=280), _admin_safe_audit_text(details or direction, max_len=500), "audit_log")
             except Exception:
                 recover_query_error()
 
@@ -3080,7 +3549,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                     SELECT gm.joined_at, g.group_name, gm.role
                       FROM group_members gm
                       JOIN groups g ON g.id = gm.group_id
-                     WHERE gm.user_id = (SELECT id FROM users WHERE username = %s LIMIT 1)
+                     WHERE gm.user_id = (SELECT id FROM users WHERE LOWER(username) = LOWER(%s) LIMIT 1)
                        AND gm.joined_at >= %s
                      ORDER BY gm.joined_at DESC
                      LIMIT %s;
@@ -3098,7 +3567,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                     """
                     SELECT created_at, sanction_type, reason, expires_at
                       FROM user_sanctions
-                     WHERE username = %s
+                     WHERE LOWER(username) = LOWER(%s)
                        AND created_at >= %s
                      ORDER BY created_at DESC
                      LIMIT %s;
@@ -3151,7 +3620,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                     """
                     SELECT created_at, post_id, reaction
                       FROM profile_post_reactions
-                     WHERE username = %s
+                     WHERE LOWER(username) = LOWER(%s)
                        AND created_at >= %s
                      ORDER BY created_at DESC
                      LIMIT %s;
@@ -3322,12 +3791,20 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         except Exception:
             pass
 
+        janitor_status = {}
+        if janitor_status_snapshot is not None:
+            try:
+                janitor_status = janitor_status_snapshot()
+            except Exception:
+                janitor_status = {}
+
         return jsonify({
             "rooms": rooms,
             "ts": now_utc.isoformat(),
             "custom_room_idle_minutes": public_idle_ttl_minutes,
             "custom_private_room_idle_minutes": private_idle_ttl_minutes,
             "janitor_interval_seconds": janitor_interval_seconds,
+            "janitor_status": janitor_status,
         })
 
     # ── Room radio station editor (admin) ─────────────────────────
@@ -3424,9 +3901,9 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
         Safety: official rooms (from chat_rooms.json) are not deletable through this endpoint.
         """
-        room = (room or "").strip()
-        if not room:
-            return jsonify({"ok": False, "error": "missing_room"}), 400
+        room, room_error = _canonical_room_or_error(room)
+        if room_error is not None:
+            return room_error
 
         actor = _actor()
         reason = (request.form.get("reason") or "").strip()
@@ -3593,6 +4070,8 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             # room cleanup / session presence
             "allow_legacy_plaintext_room_history": "bool",
             "allow_legacy_plaintext_history": "bool",
+            "allow_legacy_numeric_group_history": "bool",
+            "disable_legacy_group_file_upload": "bool",
             "custom_room_idle_minutes": "int",
             "presence_idle_minutes": "int",
             "presence_offline_minutes": "int",
@@ -3600,6 +4079,19 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             "custom_private_room_idle_minutes": "int",
             "custom_private_room_idle_hours": "int",
             "janitor_interval_seconds": "int",
+            "cleanup_expired_auth_enabled": "bool",
+            "cleanup_orphan_auth_enabled": "bool",
+            "auth_token_retention_days": "int",
+            "revoked_session_retention_days": "int",
+            "password_reset_token_retention_days": "int",
+            "orphan_auth_retention_days": "int",
+            "auth_cleanup_batch_limit": "int",
+            "privacy_retention_batch_limit": "int",
+            "cleanup_revoked_private_files_enabled": "bool",
+            "cleanup_orphan_private_file_blobs_enabled": "bool",
+            "revoked_private_file_retention_days": "int",
+            "orphan_private_file_grace_minutes": "int",
+            "private_file_cleanup_batch_limit": "int",
 
             # public room autosplit / overflow shard controls
             "autoscale_rooms_enabled": "bool",
@@ -3641,6 +4133,15 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             "sound_event_room_join": "str",
             "sound_event_file": "str",
             "sound_event_error": "str",
+            # code-based emoticon catalog / asset source
+            "emoticons_enabled": "bool",
+            "emoticons_local_enabled": "bool",
+            "emoticons_external_enabled": "bool",
+            "emoticons_asset_mode": "str",
+            "emoticons_local_root": "rawstr",
+            "emoticons_external_asset_base_url": "rawstr",
+            "emoticons_animation_stop_ms": "rawstr",
+            "emoticons_custom_entries": "jsonlist",
             # client sender labels / message grouping
             "room_show_sender_every_message": "bool",
             "dm_show_sender_every_message": "bool",
@@ -3731,6 +4232,8 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 "require_dm_e2ee": True,
                 "allow_plaintext_dm_fallback": False,
                 "require_group_e2ee": True,
+                "allow_legacy_numeric_group_history": False,
+                "disable_legacy_group_file_upload": True,
                 "require_private_room_e2ee": True,
                 "require_room_e2ee": False,
                 "encrypt_sensitive_profile_fields": True,
@@ -3740,6 +4243,14 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 "privacy_ip_user_agent_retention_days": 30,
                 "privacy_audit_detail_retention_days": 90,
                 "all_room_e2ee_impact_acknowledged": False,
+                "cleanup_expired_auth_enabled": True,
+                "cleanup_orphan_auth_enabled": True,
+                "auth_token_retention_days": 30,
+                "revoked_session_retention_days": 30,
+                "password_reset_token_retention_days": 7,
+                "orphan_auth_retention_days": 1,
+                "auth_cleanup_batch_limit": 500,
+                "privacy_retention_batch_limit": 500,
             }
             for key, default_value in dm_e2ee_defaults.items():
                 if out.get(key) is None:
@@ -3787,6 +4298,21 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             for key, default_value in sound_defaults.items():
                 if out.get(key) is None:
                     out[key] = default_value
+
+            emoticon_defaults = {
+                "emoticons_enabled": True,
+                "emoticons_local_enabled": True,
+                "emoticons_external_enabled": True,
+                "emoticons_asset_mode": "local_first",
+                "emoticons_local_root": "emoticons",
+                "emoticons_external_asset_base_url": "https://github.com/chinhodado/ym_emo_fb",
+                "emoticons_animation_stop_ms": 4500,
+                "emoticons_custom_entries": [],
+            }
+            for key, default_value in emoticon_defaults.items():
+                if out.get(key) is None:
+                    out[key] = default_value
+
             out["sound_pack_load_local_builtins"] = sound_pack_local_builtins_enabled(out.get("sound_pack_load_local_builtins"), default=True)
             out["sound_pack_external_urls"] = sanitize_sound_pack_external_urls(out.get("sound_pack_external_urls"))
             out["sound_pack_default"] = normalize_sound_pack_identifier(out.get("sound_pack_default"), "echo_modern_generated")
@@ -3825,6 +4351,19 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                         patch[k] = str(v).strip().lower() in {"1", "true", "yes", "on"}
                 elif typ == "str":
                     patch[k] = str(v).strip().lower()
+                elif typ == "rawstr":
+                    patch[k] = str(v).strip()
+                elif typ == "jsonlist":
+                    if isinstance(v, str):
+                        try:
+                            parsed_json = json.loads(v)
+                        except Exception:
+                            parsed_json = []
+                        patch[k] = parsed_json if isinstance(parsed_json, list) else []
+                    elif isinstance(v, list):
+                        patch[k] = v
+                    else:
+                        patch[k] = []
                 elif typ == "liststr":
                     if isinstance(v, str):
                         try:
@@ -3880,6 +4419,22 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             patch["privacy_ip_user_agent_retention_days"] = max(0, min(int(patch["privacy_ip_user_agent_retention_days"]), 3650))
         if "privacy_audit_detail_retention_days" in patch:
             patch["privacy_audit_detail_retention_days"] = max(0, min(int(patch["privacy_audit_detail_retention_days"]), 3650))
+        for key, default_value in (
+            ("auth_token_retention_days", 30),
+            ("revoked_session_retention_days", 30),
+            ("password_reset_token_retention_days", 7),
+        ):
+            if key in patch:
+                patch[key] = max(1, min(int(patch[key]), 3650))
+        if "orphan_auth_retention_days" in patch:
+            patch["orphan_auth_retention_days"] = max(0, min(int(patch["orphan_auth_retention_days"]), 3650))
+        if "revoked_private_file_retention_days" in patch:
+            patch["revoked_private_file_retention_days"] = max(1, min(int(patch["revoked_private_file_retention_days"]), 3650))
+        if "orphan_private_file_grace_minutes" in patch:
+            patch["orphan_private_file_grace_minutes"] = max(5, min(int(patch["orphan_private_file_grace_minutes"]), 24 * 60 * 30))
+        for key in ("auth_cleanup_batch_limit", "privacy_retention_batch_limit", "private_file_cleanup_batch_limit"):
+            if key in patch:
+                patch[key] = max(1, min(int(patch[key]), 10000))
 
         if patch.get("require_room_e2ee") is True and not bool(settings.get("require_room_e2ee", False)):
             ack = bool(payload.get("confirm_all_room_e2ee_impact") or patch.get("all_room_e2ee_impact_acknowledged"))
@@ -3940,6 +4495,61 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         if "sound_pack_default" in patch:
             patch["sound_pack_default"] = normalize_sound_pack_identifier(patch.get("sound_pack_default"), "echo_modern_generated")
 
+        if "emoticons_asset_mode" in patch:
+            mode = str(patch.get("emoticons_asset_mode") or "local_first").strip().lower().replace("-", "_")
+            patch["emoticons_asset_mode"] = mode if mode in {"local_first", "external_first"} else "local_first"
+        if "emoticons_local_root" in patch:
+            root = str(patch.get("emoticons_local_root") or "emoticons").strip().replace("\\", "/")
+            if not root or root.startswith("/") or ".." in root.split("/"):
+                root = "emoticons"
+            patch["emoticons_local_root"] = root
+        if "emoticons_external_asset_base_url" in patch:
+            raw_url = str(patch.get("emoticons_external_asset_base_url") or "").strip()
+            if raw_url:
+                parsed = urlparse(raw_url)
+                if parsed.scheme not in {"https", "http"} or not parsed.netloc or parsed.username or parsed.password:
+                    return _admin_json_response({"ok": False, "error": "Emoticon external image base must be an http/https URL without embedded credentials"}, 400)
+                raw_url = raw_url.rstrip("/")
+            patch["emoticons_external_asset_base_url"] = raw_url
+        if "emoticons_animation_stop_ms" in patch:
+            try:
+                patch["emoticons_animation_stop_ms"] = max(0, min(60000, int(str(patch.get("emoticons_animation_stop_ms") or "4500").strip())))
+            except Exception:
+                patch["emoticons_animation_stop_ms"] = 4500
+        if "emoticons_custom_entries" in patch:
+            clean_custom = []
+            seen_names = set()
+            seen_codes = set()
+            for item in patch.get("emoticons_custom_entries") or []:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or "").strip().lower()
+                code = str(item.get("code") or "").strip()
+                if not re.match(r"^[a-z0-9][a-z0-9_-]{0,63}$", name or "", re.I):
+                    continue
+                if not code or len(code) > 32 or any(ch in code for ch in "\r\n\t"):
+                    continue
+                if name in seen_names or code.lower() in seen_codes:
+                    continue
+                seen_names.add(name)
+                seen_codes.add(code.lower())
+                entry = {"name": name, "code": code}
+                for field in ("label", "category", "filename"):
+                    if item.get(field) is not None:
+                        entry[field] = str(item.get(field) or "").strip()[:300]
+                if item.get("url") is not None:
+                    custom_url = str(item.get("url") or "").strip()[:500]
+                    if custom_url:
+                        parsed_custom_url = urlparse(custom_url)
+                        if parsed_custom_url.scheme not in {"https", "http"} or not parsed_custom_url.netloc or parsed_custom_url.username or parsed_custom_url.password:
+                            continue
+                        custom_url = custom_url.rstrip("/")
+                    entry["url"] = custom_url
+                clean_custom.append(entry)
+                if len(clean_custom) >= 250:
+                    break
+            patch["emoticons_custom_entries"] = clean_custom
+
         sound_defaults = {
             "sound_theme_default": "soft_chime",
             "sound_event_dm": "mellow_pluck",
@@ -3969,11 +4579,12 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         persisted = _persist_settings_patch(patch)
 
         try:
-            log_audit_event(actor, "set_general_settings", "*", json.dumps({"patch": patch, "persisted": bool(persisted)}))
+            safe_patch_meta = {k: ("[redacted]" if k in (_last_settings_persistence_meta().get("runtime_only_keys") or []) else v) for k, v in patch.items()}
+            log_audit_event(actor, "set_general_settings", "*", json.dumps({"patch": safe_patch_meta, "persisted": bool(persisted), "persistence": _last_settings_persistence_meta()}))
         except Exception:
             pass
 
-        return _admin_json_response({"ok": True, "persisted": bool(persisted), "patch": patch})
+        return _admin_json_response({"ok": True, "persisted": bool(persisted), "persistence": _last_settings_persistence_meta(), "patch": patch})
 
     # ── Settings: anti-abuse (persisted + runtime) ───────────────────
     @app.route("/admin/settings/antiabuse", methods=["GET", "POST"])
@@ -3994,6 +4605,13 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             "room_msg_rate_window_sec": "int",
             "dm_msg_rate_limit": "str",
             "dm_msg_rate_window_sec": "int",
+            "enable_room_typing_indicators": "bool",
+            "enable_dm_typing_indicators": "bool",
+            "enable_group_typing_indicators": "bool",
+            "dm_typing_rate_limit": "str",
+            "dm_typing_rate_window_sec": "int",
+            "group_typing_rate_limit": "str",
+            "group_typing_rate_window_sec": "int",
             "file_offer_rate_limit": "str",
             "file_offer_rate_window_sec": "int",
             "room_gif_rate_limit": "str",
@@ -4052,6 +4670,13 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
         if request.method == "GET":
             out = {k: settings.get(k) for k in allow_keys.keys()}
+            out["enable_room_typing_indicators"] = bool(settings.get("enable_room_typing_indicators", False))
+            out["enable_dm_typing_indicators"] = bool(settings.get("enable_dm_typing_indicators", True))
+            out["enable_group_typing_indicators"] = bool(settings.get("enable_group_typing_indicators", True))
+            out["dm_typing_rate_limit"] = str(settings.get("dm_typing_rate_limit") or "30@10")
+            out["dm_typing_rate_window_sec"] = int(settings.get("dm_typing_rate_window_sec") or 10)
+            out["group_typing_rate_limit"] = str(settings.get("group_typing_rate_limit") or "30@10")
+            out["group_typing_rate_window_sec"] = int(settings.get("group_typing_rate_window_sec") or 10)
             return _admin_json_response({"ok": True, "settings": out})
 
         actor = _actor()
@@ -4084,6 +4709,32 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 return _admin_json_response({"ok": False, "error": f"Invalid value for {k}"}, 400)
 
         # Bounds/sanity
+        def _normalize_admin_rate_limit(key: str, value) -> str | None:
+            text = str(value or "").strip().lower()
+            if not text:
+                return None
+            window_key = key.replace("_rate_limit", "_rate_window_sec")
+            try:
+                default_window = int(patch.get(window_key) or settings.get(window_key) or 60)
+            except Exception:
+                default_window = 60
+            if re.fullmatch(r"\d+", text):
+                limit = int(text)
+                window = max(1, min(default_window, 86400))
+            else:
+                if not re.fullmatch(r"\d+\s*@\s*\d+|\d+\s*(?:per\s*)?(?:second|sec|minute|min|hour|day)s?|\d+\s*/\s*(?:sec|second|min|minute|hour|day)s?", text):
+                    return None
+                limit, window = parse_rate_limit_value(text, default_limit=0, default_window=0)
+            if limit <= 0 or window <= 0 or limit > 100000 or window > 86400:
+                return None
+            return f"{int(limit)}@{int(window)}"
+
+        for rate_key in [k for k in patch.keys() if k.endswith("_rate_limit")]:
+            normalized_rate = _normalize_admin_rate_limit(rate_key, patch.get(rate_key))
+            if not normalized_rate:
+                return _admin_json_response({"ok": False, "error": f"Invalid rate-limit value for {rate_key}; use forms like 20@10, 10 per minute, or 10/min"}, 400)
+            patch[rate_key] = normalized_rate
+
         def clamp_int(key: str, lo: int, hi: int):
             if key in patch:
                 patch[key] = max(lo, min(int(patch[key]), hi))
@@ -4092,6 +4743,8 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         for w in (
             "room_msg_rate_window_sec",
             "dm_msg_rate_window_sec",
+            "dm_typing_rate_window_sec",
+            "group_typing_rate_window_sec",
             "file_offer_rate_window_sec",
             "room_gif_rate_window_sec",
             "room_torrent_rate_window_sec",
@@ -4133,15 +4786,15 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         persisted = _persist_settings_patch(patch)
 
         try:
-            log_audit_event(actor, "set_antiabuse_settings", "*", json.dumps({"patch": patch, "persisted": bool(persisted)}))
+            log_audit_event(actor, "set_antiabuse_settings", "*", json.dumps({"patch_keys": sorted(patch.keys()), "persisted": bool(persisted), "persistence": _last_settings_persistence_meta()}))
         except Exception:
             pass
 
-        return _admin_json_response({"ok": True, "persisted": bool(persisted), "patch": patch})
+        return _admin_json_response({"ok": True, "persisted": bool(persisted), "persistence": _last_settings_persistence_meta(), "patch": patch})
 
     # ── Audit log viewer ──────────────────────────────────────────
     @app.route("/admin/audit/recent")
-    @require_permission("admin:basic")
+    @require_permission("admin:audit")
     def admin_audit_recent():
         q = (request.args.get("q") or "").strip()
         actor = (request.args.get("actor") or "").strip()
@@ -4188,19 +4841,11 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
         out = []
         for r in rows:
-            out.append(
-                {
-                    "actor": r[0],
-                    "action": r[1],
-                    "target": r[2],
-                    "timestamp": r[3].isoformat() if r[3] else None,
-                    "details": r[4],
-                }
-            )
+            out.append(_admin_safe_audit_event(r[0], r[1], r[2], r[3], r[4]))
         return _admin_json_response({"ok": True, "events": out, "q": q, "actor": actor, "action": action, "target": target, "limit": limit})
 
     @app.route("/admin/analytics/overview")
-    @require_permission("admin:basic")
+    @require_permission("admin:audit")
     def admin_analytics_overview():
         now = _utcnow()
         window_24h = now - timedelta(hours=24)
@@ -4231,7 +4876,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 )
                 summary["audit_events_24h"] = int((cur.fetchone() or [0])[0] or 0)
             except Exception:
-                pass
+                _admin_recover_query_error(conn, "admin_analytics_overview")
             try:
                 cur.execute(
                     """
@@ -4243,7 +4888,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 )
                 summary["sanctions_24h"] = int((cur.fetchone() or [0])[0] or 0)
             except Exception:
-                pass
+                _admin_recover_query_error(conn, "admin_analytics_overview")
             try:
                 cur.execute(
                     """
@@ -4254,7 +4899,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 )
                 summary["active_sanctions"] = int((cur.fetchone() or [0])[0] or 0)
             except Exception:
-                pass
+                _admin_recover_query_error(conn, "admin_analytics_overview")
             try:
                 cur.execute(
                     """
@@ -4270,7 +4915,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 )
                 summary["incidents_7d"] = int((cur.fetchone() or [0])[0] or 0)
             except Exception:
-                pass
+                _admin_recover_query_error(conn, "admin_analytics_overview")
             try:
                 cur.execute(
                     """
@@ -4286,7 +4931,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 )
                 summary["room_actions_24h"] = int((cur.fetchone() or [0])[0] or 0)
             except Exception:
-                pass
+                _admin_recover_query_error(conn, "admin_analytics_overview")
             try:
                 cur.execute(
                     """
@@ -4304,6 +4949,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                     if row and row[0] is not None
                 }
             except Exception:
+                _admin_recover_query_error(conn, "admin_analytics_overview")
                 hourly = {}
             try:
                 cur.execute(
@@ -4322,6 +4968,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                     if row and row[0] is not None
                 }
             except Exception:
+                _admin_recover_query_error(conn, "admin_analytics_overview")
                 daily = {}
             try:
                 cur.execute(
@@ -4341,6 +4988,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                     for row in (cur.fetchall() or [])
                 ]
             except Exception:
+                _admin_recover_query_error(conn, "admin_analytics_overview")
                 action_types = []
             try:
                 cur.execute(
@@ -4356,6 +5004,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 )
                 top_targets = _analytics_bucketed_top_targets(cur.fetchall() or [], limit=6)
             except Exception:
+                _admin_recover_query_error(conn, "admin_analytics_overview")
                 top_targets = []
             try:
                 cur.execute(
@@ -4374,6 +5023,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                     for row in (cur.fetchall() or [])
                 ]
             except Exception:
+                _admin_recover_query_error(conn, "admin_analytics_overview")
                 top_actors = []
 
         try:
@@ -4424,7 +5074,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         )
 
     @app.route("/admin/moderation/overview")
-    @require_permission("admin:basic")
+    @require_permission("admin:audit")
     def admin_moderation_overview():
         summary = {}
         active = []
@@ -4443,12 +5093,14 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 )
                 summary = {str(row[0]): int(row[1] or 0) for row in (cur.fetchall() or [])}
             except Exception:
+                _admin_recover_query_error(conn, "admin_moderation_overview.summary")
                 summary = {}
             try:
                 cur.execute(
                     """
                     SELECT username, sanction_type, reason, created_at, expires_at
                       FROM user_sanctions
+                     WHERE expires_at IS NULL OR expires_at > NOW()
                      ORDER BY created_at DESC
                      LIMIT 20;
                     """
@@ -4464,6 +5116,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                     for row in (cur.fetchall() or [])
                 ]
             except Exception:
+                _admin_recover_query_error(conn, "admin_moderation_overview.active")
                 active = []
             try:
                 cur.execute(
@@ -4477,16 +5130,11 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                     """
                 )
                 recent = [
-                    {
-                        "actor": row[0],
-                        "action": row[1],
-                        "target": row[2],
-                        "timestamp": row[3].isoformat() if row[3] else None,
-                        "details": row[4],
-                    }
+                    _admin_safe_audit_event(row[0], row[1], row[2], row[3], row[4])
                     for row in (cur.fetchall() or [])
                 ]
             except Exception:
+                _admin_recover_query_error(conn, "admin_moderation_overview.recent")
                 recent = []
 
         suggestions = []
@@ -4536,7 +5184,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         return _admin_json_response({"ok": True, "incident": snapshot})
 
     @app.route("/admin/create_user", methods=["POST"])
-    @require_permission("admin:basic")
+    @require_permission("admin:create_user")
     @require_recent_admin_auth
     def admin_create_user():
         """Create a user (with RSA keys) from the admin panel."""
@@ -4546,6 +5194,12 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         email, email_err = _admin_normalize_account_email(request.form.get("email") or "")
         recovery_pin = (request.form.get("recovery_pin") or "").strip()
         is_admin_flag = (request.form.get("is_admin") or "0").strip() in {"1", "true", "yes", "on"}
+        if is_admin_flag and not _actor_has_permission("admin:manage_roles"):
+            return _admin_json_response({
+                "ok": False,
+                "error": "creating_admin_requires_role_manager",
+                "required": "admin:manage_roles",
+            }, 403)
 
         ok_username, username_err, _blocked_term = validate_registration_username(username, settings=settings)
         if ok_username:
@@ -4583,12 +5237,13 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 is_admin=bool(is_admin_flag),
                 recovery_pin_hash=hash_password(recovery_pin),
                 recovery_pin_set_at=datetime.now(timezone.utc),
+                commit=False,
             )
 
             # Ensure RBAC role assignment. Admin users get the seeded 'admin' role; others get 'viewer'.
             role_name = "admin" if is_admin_flag else "viewer"
             with conn.cursor() as cur:
-                cur.execute("SELECT id FROM users WHERE username = %s;", (username,))
+                cur.execute("SELECT id FROM users WHERE LOWER(username) = LOWER(%s);", (username,))
                 user_row = cur.fetchone()
                 cur.execute("SELECT id FROM roles WHERE name = %s;", (role_name,))
                 role_row = cur.fetchone()
@@ -4621,7 +5276,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
     
     @app.route("/admin/set_recovery_pin", methods=["POST"])
-    @require_permission("admin:basic")
+    @require_permission("admin:set_recovery_pin")
     @require_recent_admin_auth
     def admin_set_recovery_pin():
         """Admin: set/reset a user's 4-to-8 digit Recovery PIN."""
@@ -4629,8 +5284,14 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         username = (request.form.get("username") or "").strip()
         pin = (request.form.get("recovery_pin") or "").strip()
 
-        if not username:
-            return _admin_json_response({"ok": False, "error": "Username required"}, 400)
+        if _is_self_target(username):
+            return _deny_self_target("set the recovery PIN for")
+        username, _target_user_id, target_err = _canonical_user_or_error(username)
+        if target_err is not None:
+            return target_err
+        denied = _deny_privileged_target_without_admin(username, "set the recovery PIN for")
+        if denied is not None:
+            return denied
         ok_pin, pin_err = validate_recovery_pin(pin)
         if not ok_pin:
             return _admin_json_response({"ok": False, "error": pin_err or recovery_pin_policy_summary()}, 400)
@@ -4645,7 +5306,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                            recovery_pin_set_at = CURRENT_TIMESTAMP,
                            recovery_failed_attempts = 0,
                            recovery_locked_until = NULL
-                     WHERE username = %s;
+                     WHERE LOWER(username) = LOWER(%s);
                     """,
                     (hash_password(pin), username),
                 )
@@ -4664,18 +5325,18 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
 # ── User lifecycle ──────────────────────────────────────────────
     @app.route("/admin/delete_user/<username>", methods=["POST"])
-    @require_permission("admin:basic")
+    @require_permission("admin:delete_user")
     @require_recent_admin_auth
     def delete_user(username):
         actor = _actor()
         if _is_self_target(username):
             return _deny_self_target("delete")
+        username, user_id, target_err = _canonical_user_or_error(username)
+        if target_err is not None:
+            return target_err
         denied = _deny_privileged_target_without_admin(username, "delete")
         if denied is not None:
             return denied
-        user_id = _get_user_id(username)
-        if not user_id:
-            return _admin_json_response({"ok": False, "error": "User not found"}, 404)
 
         # Delete must first invalidate sessions/tokens. Otherwise a stale refresh
         # token can keep trying to resurrect a now-deleted account until its cookie
@@ -4686,17 +5347,32 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             return _admin_operation_error("delete_user_revoke", exc, status=500, ok_style=True)
 
         conn = get_db()
+        owned_custom_rooms: list[str] = []
         try:
             with conn.cursor() as cur:
                 # Messages / DMs
                 cur.execute(
-                    "DELETE FROM messages WHERE sender = %s OR receiver = %s;",
+                    "DELETE FROM messages WHERE LOWER(sender) = LOWER(%s) OR LOWER(receiver) = LOWER(%s);",
                     (username, username),
                 )
                 cur.execute(
-                    "DELETE FROM private_messages WHERE sender = %s OR recipient = %s;",
+                    "DELETE FROM offline_messages WHERE LOWER(sender) = LOWER(%s) OR LOWER(receiver) = LOWER(%s);",
                     (username, username),
                 )
+                cur.execute(
+                    "DELETE FROM pending_messages WHERE LOWER(sender_username) = LOWER(%s) OR LOWER(receiver_username) = LOWER(%s);",
+                    (username, username),
+                )
+                cur.execute(
+                    "DELETE FROM private_messages WHERE LOWER(sender) = LOWER(%s) OR LOWER(recipient) = LOWER(%s);",
+                    (username, username),
+                )
+                cur.execute(
+                    "DELETE FROM dm_files WHERE LOWER(sender) = LOWER(%s) OR LOWER(receiver) = LOWER(%s);",
+                    (username, username),
+                )
+                cur.execute("DELETE FROM message_reactions WHERE LOWER(username) = LOWER(%s);", (username,))
+                cur.execute("DELETE FROM message_reads WHERE LOWER(username) = LOWER(%s);", (username,))
 
                 # Social graph
                 cur.execute(
@@ -4704,11 +5380,11 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                     (user_id, user_id),
                 )
                 cur.execute(
-                    "DELETE FROM friend_requests WHERE from_user = %s OR to_user = %s;",
+                    "DELETE FROM friend_requests WHERE LOWER(from_user) = LOWER(%s) OR LOWER(to_user) = LOWER(%s);",
                     (username, username),
                 )
                 cur.execute(
-                    "DELETE FROM blocks WHERE blocker = %s OR blocked = %s;",
+                    "DELETE FROM blocks WHERE LOWER(blocker) = LOWER(%s) OR LOWER(blocked) = LOWER(%s);",
                     (username, username),
                 )
                 cur.execute(
@@ -4719,20 +5395,66 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 # Groups
                 cur.execute("DELETE FROM group_members WHERE user_id = %s;", (user_id,))
                 cur.execute(
-                    "DELETE FROM group_invites WHERE from_user = %s OR to_user = %s;",
+                    "DELETE FROM group_invites WHERE LOWER(from_user) = LOWER(%s) OR LOWER(to_user) = LOWER(%s);",
                     (username, username),
                 )
                 cur.execute(
-                    "DELETE FROM group_mutes WHERE username = %s;",
+                    "DELETE FROM group_mutes WHERE LOWER(username) = LOWER(%s);",
                     (username,),
                 )
+                cur.execute("DELETE FROM group_files WHERE LOWER(sender) = LOWER(%s);", (username,))
+
+                # Room invites / custom room access.  These tables store user names
+                # as text, not user_id FKs, so account deletion must clear both
+                # invites sent by the account and grants held by the account.
+                # Owned custom rooms are deleted with their persisted room state;
+                # otherwise a later re-created account with the same username could
+                # inherit creator/owner powers through custom_rooms.created_by.
+                cur.execute(
+                    "SELECT name FROM custom_rooms WHERE LOWER(created_by) = LOWER(%s);",
+                    (username,),
+                )
+                owned_custom_rooms = [str(row[0]) for row in (cur.fetchall() or []) if row and row[0]]
+                if owned_custom_rooms:
+                    delete_custom_room_persisted_state(cur, owned_custom_rooms)
+                    cur.execute("DELETE FROM custom_rooms WHERE name = ANY(%s);", (owned_custom_rooms,))
+                    cur.execute("DELETE FROM chat_rooms WHERE name = ANY(%s) AND room_kind='custom';", (owned_custom_rooms,))
+                cur.execute(
+                    "DELETE FROM room_invites WHERE LOWER(invited_user) = LOWER(%s) OR LOWER(invited_by) = LOWER(%s);",
+                    (username, username),
+                )
+                cur.execute(
+                    "DELETE FROM custom_room_invites WHERE LOWER(invited_user) = LOWER(%s) OR LOWER(invited_by) = LOWER(%s);",
+                    (username, username),
+                )
+                cur.execute(
+                    "DELETE FROM custom_room_members WHERE LOWER(member_user) = LOWER(%s) OR LOWER(invited_by) = LOWER(%s);",
+                    (username, username),
+                )
+
+                # Profile/social surface owned by username text.
+                cur.execute("DELETE FROM profile_post_reports WHERE LOWER(reporter_username) = LOWER(%s) OR LOWER(target_username) = LOWER(%s);", (username, username))
+                cur.execute("DELETE FROM profile_post_comments WHERE LOWER(author_username) = LOWER(%s);", (username,))
+                cur.execute("DELETE FROM profile_post_reactions WHERE LOWER(username) = LOWER(%s);", (username,))
+                cur.execute("DELETE FROM profile_posts WHERE LOWER(author_username) = LOWER(%s);", (username,))
+                cur.execute("DELETE FROM user_profile_badges WHERE LOWER(username) = LOWER(%s);", (username,))
+                cur.execute("DELETE FROM user_profile_notification_settings WHERE LOWER(username) = LOWER(%s);", (username,))
+                cur.execute("DELETE FROM user_recent_rooms WHERE LOWER(username) = LOWER(%s);", (username,))
 
                 # Moderation
-                cur.execute("DELETE FROM user_sanctions WHERE username = %s;", (username,))
+                cur.execute("DELETE FROM user_sanctions WHERE LOWER(username) = LOWER(%s);", (username,))
 
                 # Settings/notifications
                 cur.execute("DELETE FROM chat_settings WHERE user_id = %s;", (user_id,))
                 cur.execute("DELETE FROM notifications WHERE user_id = %s;", (user_id,))
+                cur.execute("DELETE FROM user_quotas WHERE LOWER(username) = LOWER(%s);", (username,))
+                cur.execute("DELETE FROM password_reset_tokens WHERE LOWER(username) = LOWER(%s);", (username,))
+
+                # Auth rows have already been revoked above.  Remove them too so a
+                # deleted account leaves no active-session/token or auth-history rows
+                # keyed to a now-nonexistent username.
+                cur.execute("DELETE FROM auth_tokens WHERE LOWER(username) = LOWER(%s);", (username,))
+                cur.execute("DELETE FROM auth_sessions WHERE LOWER(username) = LOWER(%s);", (username,))
 
                 # RBAC (user_roles is FK'd to users; explicit delete is fine)
                 cur.execute("DELETE FROM user_roles WHERE user_id = %s;", (user_id,))
@@ -4741,9 +5463,48 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 cur.execute("DELETE FROM users WHERE id = %s;", (user_id,))
 
             conn.commit()
+            forced_room_sessions = 0
+            if owned_custom_rooms and socketio is not None and _state_connected_room_targets is not None:
+                for deleted_room in owned_custom_rooms:
+                    try:
+                        targets = list(_state_connected_room_targets(deleted_room))
+                    except Exception:
+                        targets = []
+                    for sid, _uname in targets:
+                        try:
+                            socketio.emit(
+                                "room_forced_leave",
+                                {"room": deleted_room, "reason": "Room owner account deleted"},
+                                to=sid,
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            socketio.server.leave_room(sid, deleted_room)
+                        except Exception:
+                            pass
+                        if _state_update_connected_room is not None:
+                            try:
+                                _state_update_connected_room(sid, None)
+                            except Exception:
+                                pass
+                        forced_room_sessions += 1
+                    try:
+                        socketio.emit("rooms_changed", {"deleted": deleted_room, "reason": "owner_account_deleted", "by": actor})
+                    except Exception:
+                        pass
             disconnected = _disconnect_user(username)
             log_audit_event(actor, "delete_user", username, "Full account deleted")
-            return _admin_json_response({"ok": True, "status": "deleted", "user": username, "revoked_sessions": int(revocation.get("revoked_sessions", 0)), "revoked_tokens": int(revocation.get("revoked_tokens", 0)), "disconnected_sessions": disconnected})
+            return _admin_json_response({
+                "ok": True,
+                "status": "deleted",
+                "user": username,
+                "revoked_sessions": int(revocation.get("revoked_sessions", 0)),
+                "revoked_tokens": int(revocation.get("revoked_tokens", 0)),
+                "disconnected_sessions": disconnected,
+                "deleted_owned_custom_rooms": owned_custom_rooms,
+                "forced_room_sessions": int(forced_room_sessions or 0),
+            })
         except Exception as e:
             conn.rollback()
             return _admin_operation_error("admin_write", e)
@@ -4755,28 +5516,19 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         actor = _actor()
         if _is_self_target(username):
             return _deny_self_target("suspend")
+        username, _target_user_id, target_err = _canonical_user_or_error(username)
+        if target_err is not None:
+            return target_err
         denied = _deny_privileged_target_without_admin(username, "suspend")
         if denied is not None:
             return denied
-        if not _get_user_id(username):
-            return _admin_json_response({"ok": False, "error": "User not found"}, 404)
         minutes, err = _bounded_int_from_form("minutes", 60, 1, 60 * 24 * 365)
         if err is not None:
             return err
         reason = request.form.get("reason", "Suspended by admin")
-        expires_at = _utcnow() + timedelta(minutes=minutes)
 
-        conn = get_db()
         try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO user_sanctions (username, sanction_type, reason, expires_at)
-                    VALUES (%s, 'ban', %s, %s);
-                    """,
-                    (username, reason, expires_at),
-                )
-            conn.commit()
+            add_sanction(username, "ban", reason, minutes, actor=actor)
             revoked_sessions = _revoke_and_disconnect_user_sessions(
                 username,
                 reason="Your account was suspended by an admin.",
@@ -4787,7 +5539,6 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             log_audit_event(actor, "suspend_user", username, f"{minutes} min suspension")
             return _admin_json_response({"ok": True, "status": "suspended", "effective_status": get_effective_account_status(username), "user": username, "duration": minutes, "revoked_sessions": revoked_sessions})
         except Exception as e:
-            conn.rollback()
             return _admin_operation_error("admin_write", e)
 
     @app.route("/admin/deactivate_user/<username>", methods=["POST"])
@@ -4797,16 +5548,17 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         actor = _actor()
         if _is_self_target(username):
             return _deny_self_target("deactivate")
+        username, _target_user_id, target_err = _canonical_user_or_error(username)
+        if target_err is not None:
+            return target_err
         denied = _deny_privileged_target_without_admin(username, "deactivate")
         if denied is not None:
             return denied
-        if not _get_user_id(username):
-            return _admin_json_response({"ok": False, "error": "User not found"}, 404)
         conn = get_db()
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE users SET status = 'deactivated', online = FALSE WHERE username = %s;",
+                    "UPDATE users SET status = 'deactivated', online = FALSE WHERE LOWER(username) = LOWER(%s);",
                     (username,),
                 )
             conn.commit()
@@ -4830,11 +5582,12 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         actor = _actor()
         if _is_self_target(username):
             return _deny_self_target("force logout")
+        username, _target_user_id, target_err = _canonical_user_or_error(username)
+        if target_err is not None:
+            return target_err
         denied = _deny_privileged_target_without_admin(username, "force logout")
         if denied is not None:
             return denied
-        if not _get_user_id(username):
-            return _admin_json_response({"ok": False, "error": "User not found"}, 404)
         reason = (request.form.get("reason") or "Logged out by an admin").strip()
         log_audit_event(actor, "force_logout", username, reason)
 
@@ -4901,28 +5654,28 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
         conn = get_db()
         try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO user_sanctions (username, sanction_type, reason)
-                    VALUES (%s, 'ip_ban', %s);
-                    """,
-                    (ip, reason),
-                )
-                revocation = _revoke_sessions_for_ip(ip, actor)
+            add_ip_sanction(ip, reason, actor=actor)
+            revocation = _revoke_sessions_for_ip(ip, actor)
             conn.commit()
+            disconnected_sockets = 0
             try:
                 if socketio is not None:
                     payload = {
                         "reason": "Your session was closed because its IP address was banned.",
                         "by": actor,
                         "action": "ip_banned",
+                        "code": "ip_banned",
                     }
                     for uname in list((revocation or {}).get("affected_users") or []):
                         for sid in _user_sids(uname):
                             try:
                                 socketio.emit("force_logout", dict(payload, username=uname), to=sid)
                                 socketio.emit("admin_force_logout", dict(payload, username=uname), to=sid)
+                            except Exception:
+                                pass
+                            try:
+                                socketio.server.disconnect(sid)
+                                disconnected_sockets += 1
                             except Exception:
                                 pass
             except Exception:
@@ -4935,10 +5688,35 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 "revoked_sessions": int((revocation or {}).get("revoked_sessions") or 0),
                 "revoked_tokens": int((revocation or {}).get("revoked_tokens") or 0),
                 "affected_users": list((revocation or {}).get("affected_users") or []),
+                "disconnected_sockets": disconnected_sockets,
             })
         except Exception as e:
-            conn.rollback()
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             return _admin_operation_error("ban_ip", e, ok_style=True)
+
+    @app.route("/admin/unban_ip", methods=["POST"])
+    @require_permission("admin:ban_ip")
+    @require_recent_admin_auth
+    def unban_ip():
+        actor = _actor()
+        ip, ip_error = _normalized_ip_or_error(request.form.get("ip"))
+        if ip_error is not None:
+            return ip_error
+        reason = _admin_reason(request.form.get("reason"), "IP ban cleared by admin")
+        try:
+            cleared = expire_ip_sanctions(ip, actor=actor, reason=reason)
+        except Exception as exc:
+            return _admin_operation_error("unban_ip", exc, ok_style=True)
+        log_audit_event(actor, "unban_ip", ip, f"cleared={cleared}; reason={reason}")
+        return _admin_json_response({
+            "ok": True,
+            "status": "ip_unbanned",
+            "ip": ip,
+            "cleared": int(cleared or 0),
+        })
 
     @app.route("/admin/reset_password/<username>", methods=["POST"])
     @require_permission("admin:reset_password")
@@ -4947,11 +5725,12 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         actor = _actor()
         if _is_self_target(username):
             return _deny_self_target("reset the password for")
+        username, _target_user_id, target_err = _canonical_user_or_error(username)
+        if target_err is not None:
+            return target_err
         denied = _deny_privileged_target_without_admin(username, "reset the password for")
         if denied is not None:
             return denied
-        if not _get_user_id(username):
-            return _admin_json_response({"ok": False, "error": "User not found"}, 404)
         new_pw = request.form.get("new_password", "")
         if not new_pw:
             return _admin_json_response({"ok": False, "error": "Missing password"}, 400)
@@ -4959,7 +5738,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         try:
             conn = get_db()
             with conn.cursor() as cur:
-                cur.execute("SELECT email, email_encrypted FROM users WHERE username = %s LIMIT 1;", (username,))
+                cur.execute("SELECT email, email_encrypted FROM users WHERE LOWER(username) = LOWER(%s) LIMIT 1;", (username,))
                 email_row = cur.fetchone()
             if email_row:
                 target_email = display_email(email_row[0], email_row[1], settings) or None
@@ -4985,25 +5764,36 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                     UPDATE users
                        SET password = %s,
                            public_key = %s,
-                           encrypted_private_key = %s
-                     WHERE username = %s;
+                           encrypted_private_key = %s,
+                           auth_version = COALESCE(auth_version, 0) + 1,
+                           password_changed_at = CURRENT_TIMESTAMP,
+                           auth_changed_at = CURRENT_TIMESTAMP
+                     WHERE LOWER(username) = LOWER(%s);
                     """,
                     (hash_password(new_pw), new_public, new_enc_priv, username),
                 )
                 cur.execute(
-                    "UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE username = %s AND used_at IS NULL;",
+                    "UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE LOWER(username) = LOWER(%s) AND used_at IS NULL;",
                     (username,),
                 )
 
-            try:
-                revocation = revoke_all_sessions_and_tokens_for_user(username, reason="admin_password_reset")
-            except Exception as exc:
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                return _admin_operation_error("admin_reset_password_revoke", exc, status=500, ok_style=True)
+                cur.execute(
+                    """
+                    UPDATE auth_sessions
+                       SET revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP),
+                           revoked_reason = COALESCE(revoked_reason, 'admin_password_reset')
+                     WHERE LOWER(username)=LOWER(%s) AND revoked_at IS NULL;
+                    """,
+                    (username,),
+                )
+                revoked_sessions = cur.rowcount
+                cur.execute(
+                    "UPDATE auth_tokens SET revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP) WHERE LOWER(username)=LOWER(%s) AND revoked_at IS NULL;",
+                    (username,),
+                )
+                revoked_tokens = cur.rowcount
 
+            revocation = {"revoked_sessions": int(revoked_sessions or 0), "revoked_tokens": int(revoked_tokens or 0)}
             conn.commit()
 
             # Best-effort live disconnect + client-visible reason.
@@ -5038,9 +5828,12 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
     @app.route("/admin/view_logins/<username>")
     @require_permission("admin:basic")
     def view_logins(username):
+        username, _target_user_id, target_err = _canonical_user_or_error(username)
+        if target_err is not None:
+            return target_err
         conn = get_db()
         with conn.cursor() as cur:
-            cur.execute("SELECT last_seen FROM users WHERE username = %s;", (username,))
+            cur.execute("SELECT last_seen FROM users WHERE LOWER(username) = LOWER(%s);", (username,))
             row = cur.fetchone()
         return jsonify({"username": username, "last_seen": row[0] if row else None})
 
@@ -5052,6 +5845,9 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         actor = _actor()
         if _is_self_target(username):
             return _deny_self_target("change roles for")
+        username, user_id, target_err = _canonical_user_or_error(username)
+        if target_err is not None:
+            return target_err
         requested_role_name = (request.form.get("role") or "").strip().lower()
         role_name = _normalize_role_name(requested_role_name)
         if not role_name:
@@ -5059,9 +5855,6 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         if not _valid_role_name(role_name):
             return _admin_json_response({"ok": False, "error": "Invalid role name"}, 400)
 
-        user_id = _get_user_id(username)
-        if not user_id:
-            return _admin_json_response({"ok": False, "error": "User not found"}, 404)
         target_denied = _deny_privileged_target_without_admin(username, "change roles for")
         if target_denied is not None:
             return target_denied
@@ -5075,7 +5868,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             if not role:
                 return _admin_json_response({"ok": False, "error": "Role does not exist"}, 404)
             if _role_has_privilege_escalation_permissions(cur, role_name):
-                denied = _require_actor_permission("admin:basic", action="assign privileged role")
+                denied = _require_actor_permission("admin:manage_roles", action="assign privileged role")
                 if denied is not None:
                     return denied
 
@@ -5163,32 +5956,22 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         actor = _actor()
         if _is_self_target(username):
             return _deny_self_target("mute")
+        username, _target_user_id, target_err = _canonical_user_or_error(username)
+        if target_err is not None:
+            return target_err
         denied = _deny_privileged_target_without_admin(username, "mute")
         if denied is not None:
             return denied
-        if not _get_user_id(username):
-            return _admin_json_response({"ok": False, "error": "User not found"}, 404)
         minutes, err = _bounded_int_from_form("minutes", 30, 1, 60 * 24 * 30)
         if err is not None:
             return err
         reason = _admin_reason(request.form.get("reason"), "Muted by admin")
-        expires_at = _utcnow() + timedelta(minutes=minutes)
 
-        conn = get_db()
         try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO user_sanctions (username, sanction_type, reason, expires_at)
-                    VALUES (%s, 'mute', %s, %s);
-                    """,
-                    (username, reason, expires_at),
-                )
-            conn.commit()
+            expires_at = add_sanction(username, "mute", reason, minutes, actor=actor)
             log_audit_event(actor, "mute_user", username, f"{minutes} min mute")
-            return _admin_json_response({"ok": True, "status": "muted", "user": username, "minutes": minutes, "expires_at": expires_at.isoformat()})
+            return _admin_json_response({"ok": True, "status": "muted", "user": username, "minutes": minutes, "expires_at": expires_at.isoformat() if expires_at else None})
         except Exception as e:
-            conn.rollback()
             return _admin_operation_error("mute_user", e, ok_style=True)
 
     @app.route("/admin/kick_from_room", methods=["POST"])
@@ -5197,18 +5980,19 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
     def kick_from_room():
         actor = _actor()
         username = (request.form.get("username") or "").strip()
-        room, room_error = _normalized_room_or_error(request.form.get("room"))
+        room, room_error = _canonical_room_or_error(request.form.get("room"))
         if not username:
             return _admin_json_response({"ok": False, "error": "Missing username"}, 400)
         if room_error is not None:
             return room_error
         if _is_self_target(username):
             return _deny_self_target("kick")
+        username, _target_user_id, target_err = _canonical_user_or_error(username)
+        if target_err is not None:
+            return target_err
         denied = _deny_privileged_target_without_admin(username, "kick")
         if denied is not None:
             return denied
-        if not _get_user_id(username):
-            return _admin_json_response({"ok": False, "error": "User not found"}, 404)
 
         log_audit_event(actor, "kick_from_room", f"{username}@{room}", "Manual kick issued")
         affected = 0
@@ -5237,7 +6021,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
     def ban_from_room():
         actor = _actor()
         username = (request.form.get("username") or "").strip()
-        room, room_error = _normalized_room_or_error(request.form.get("room"))
+        room, room_error = _canonical_room_or_error(request.form.get("room"))
         reason = _admin_reason(request.form.get("reason"), "Banned from room")
         if not username:
             return _admin_json_response({"ok": False, "error": "Missing username"}, 400)
@@ -5245,28 +6029,16 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             return room_error
         if _is_self_target(username):
             return _deny_self_target("ban from a room")
+        username, _target_user_id, target_err = _canonical_user_or_error(username)
+        if target_err is not None:
+            return target_err
         denied = _deny_privileged_target_without_admin(username, "ban from a room")
         if denied is not None:
             return denied
-        if not _get_user_id(username):
-            return _admin_json_response({"ok": False, "error": "User not found"}, 404)
 
-        conn = get_db()
         try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO user_sanctions (username, sanction_type, reason)
-                    VALUES (%s, %s, %s);
-                    """,
-                    (username, f"room_ban:{room}", reason),
-                )
-            conn.commit()
+            add_sanction(username, f"room_ban:{room}", reason, None, actor=actor)
         except Exception as e:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
             return _admin_operation_error("ban_from_room", e, ok_style=True)
 
         affected = 0
@@ -5295,28 +6067,103 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         actor = _actor()
         if _is_self_target(username):
             return _deny_self_target("shadowban")
+        username, _target_user_id, target_err = _canonical_user_or_error(username)
+        if target_err is not None:
+            return target_err
         denied = _deny_privileged_target_without_admin(username, "shadowban")
         if denied is not None:
             return denied
-        if not _get_user_id(username):
-            return _admin_json_response({"ok": False, "error": "User not found"}, 404)
         reason = _admin_reason(request.form.get("reason"), "Shadowban issued")
-        conn = get_db()
         try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO user_sanctions (username, sanction_type, reason)
-                    VALUES (%s, 'shadowban', %s);
-                    """,
-                    (username, reason),
-                )
-            conn.commit()
+            add_sanction(username, "shadowban", reason, None, actor=actor)
             log_audit_event(actor, "shadowban", username, reason)
             return _admin_json_response({"ok": True, "status": "shadowbanned", "effective_status": get_effective_account_status(username), "user": username})
         except Exception as e:
-            conn.rollback()
             return _admin_operation_error("shadowban_user", e, ok_style=True)
+
+
+
+    def _clear_user_sanctions_response(username: str, sanction_type: str | None, *, action: str, reason: str = "cleared by admin"):
+        """Expire active sanctions while preserving moderation history rows."""
+        actor = _actor()
+        if _is_self_target(username):
+            return _deny_self_target(action)
+        username, _target_user_id, target_err = _canonical_user_or_error(username)
+        if target_err is not None:
+            return target_err
+        denied = _deny_privileged_target_without_admin(username, action)
+        if denied is not None:
+            return denied
+        try:
+            cleared = expire_sanctions(username, sanction_type or "*", actor=actor, reason=reason)
+        except Exception as exc:
+            return _admin_operation_error(action.replace(" ", "_"), exc, ok_style=True)
+        log_audit_event(actor, action.replace(" ", "_"), username, f"type={sanction_type or '*'}; cleared={cleared}; reason={reason}")
+        return _admin_json_response({
+            "ok": True,
+            "status": "sanctions_cleared",
+            "user": username,
+            "sanction_type": sanction_type or "*",
+            "cleared": int(cleared or 0),
+            "effective_status": get_effective_account_status(username),
+        })
+
+    @app.route("/admin/unmute_user/<username>", methods=["POST"])
+    @require_permission("moderation:mute_user")
+    @require_recent_admin_auth
+    def unmute_user_admin(username):
+        reason = _admin_reason(request.form.get("reason"), "Unmuted by admin")
+        return _clear_user_sanctions_response(username, "mute", action="unmute_user", reason=reason)
+
+    @app.route("/admin/unsuspend_user/<username>", methods=["POST"])
+    @require_permission("moderation:suspend_user")
+    @require_recent_admin_auth
+    def unsuspend_user(username):
+        reason = _admin_reason(request.form.get("reason"), "Suspension cleared by admin")
+        return _clear_user_sanctions_response(username, "ban", action="unsuspend_user", reason=reason)
+
+    @app.route("/admin/unshadowban_user/<username>", methods=["POST"])
+    @require_permission("moderation:shadowban")
+    @require_recent_admin_auth
+    def unshadowban_user(username):
+        reason = _admin_reason(request.form.get("reason"), "Shadowban cleared by admin")
+        return _clear_user_sanctions_response(username, "shadowban", action="unshadowban_user", reason=reason)
+
+    @app.route("/admin/clear_user_sanctions/<username>", methods=["POST"])
+    @require_permission("admin:manage_roles")
+    @require_recent_admin_auth
+    def clear_user_sanctions(username):
+        sanction_type = (request.form.get("sanction_type") or request.form.get("type") or "*").strip() or "*"
+        reason = _admin_reason(request.form.get("reason"), "All matching sanctions cleared by role manager")
+        return _clear_user_sanctions_response(username, sanction_type, action="clear_user_sanctions", reason=reason)
+
+    @app.route("/admin/unban_from_room", methods=["POST"])
+    @require_permission("moderation:ban_room")
+    @require_recent_admin_auth
+    def unban_from_room():
+        username = (request.form.get("username") or "").strip()
+        room, room_error = _canonical_room_or_error(request.form.get("room"))
+        if not username:
+            return _admin_json_response({"ok": False, "error": "Missing username"}, 400)
+        if room_error is not None:
+            return room_error
+        reason = _admin_reason(request.form.get("reason"), "Room ban cleared by admin")
+        actor = _actor()
+        if _is_self_target(username):
+            return _deny_self_target("unban from a room")
+        username, _target_user_id, target_err = _canonical_user_or_error(username)
+        if target_err is not None:
+            return target_err
+        denied = _deny_privileged_target_without_admin(username, "unban from a room")
+        if denied is not None:
+            return denied
+        sanction_type = f"room_ban:{room}"
+        try:
+            cleared = expire_sanctions(username, sanction_type, actor=actor, reason=reason)
+        except Exception as exc:
+            return _admin_operation_error("unban_from_room", exc, ok_style=True)
+        log_audit_event(actor, "unban_from_room", f"{username}@{room}", f"cleared={cleared}; reason={reason}")
+        return _admin_json_response({"ok": True, "status": "room_unbanned", "user": username, "room": room, "cleared": int(cleared or 0)})
 
     # ── Room controls ───────────────────────────────────────────────
     @app.route("/admin/lock_room/<room>", methods=["POST"])
@@ -5324,11 +6171,12 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
     @require_recent_admin_auth
     def lock_room(room):
         actor = _actor()
-        room, room_error = _normalized_room_or_error(room)
+        room, room_error = _canonical_room_or_error(room)
         if room_error is not None:
             return room_error
         conn = get_db()
         with conn.cursor() as cur:
+            _delete_casefold_room_policy_rows(cur, "room_locks", room)
             cur.execute(
                 """
                 INSERT INTO room_locks (room, locked, locked_by)
@@ -5350,12 +6198,12 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
     @require_recent_admin_auth
     def unlock_room(room):
         actor = _actor()
-        room, room_error = _normalized_room_or_error(room)
+        room, room_error = _canonical_room_or_error(room)
         if room_error is not None:
             return room_error
         conn = get_db()
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM room_locks WHERE room = %s;", (room,))
+            cur.execute("DELETE FROM room_locks WHERE LOWER(room) = LOWER(%s);", (room,))
         conn.commit()
         log_audit_event(actor, "unlock_room", room, "Room unlocked")
         try:
@@ -5365,11 +6213,11 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         return _admin_json_response({"ok": True, "status": "unlocked", "room": room})
 
     @app.route("/admin/clear_room/<room>", methods=["POST"])
-    @require_permission("admin:basic")
+    @require_permission("room:clear")
     @require_recent_admin_auth
     def clear_room(room):
         actor = _actor()
-        room, room_error = _normalized_room_or_error(room)
+        room, room_error = _canonical_room_or_error(room)
         if room_error is not None:
             return room_error
         conn = get_db()
@@ -5411,7 +6259,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
     @require_recent_admin_auth
     def set_room_readonly(room):
         actor = _actor()
-        room, room_error = _normalized_room_or_error(room)
+        room, room_error = _canonical_room_or_error(room)
         if room_error is not None:
             return room_error
         mode, mode_error = _admin_form_bool_or_error("readonly", True)
@@ -5419,6 +6267,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             return mode_error
         conn = get_db()
         with conn.cursor() as cur:
+            _delete_casefold_room_policy_rows(cur, "room_readonly", room)
             cur.execute(
                 """
                 INSERT INTO room_readonly (room, readonly, set_by)
@@ -5446,7 +6295,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
           - seconds: integer >= 0 (0 disables)
         """
         actor = _actor()
-        room, room_error = _normalized_room_or_error(room)
+        room, room_error = _canonical_room_or_error(room)
         if room_error is not None:
             return room_error
         raw = request.form.get("seconds") or request.form.get("slowmode") or "0"
@@ -5459,6 +6308,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
         conn = get_db()
         with conn.cursor() as cur:
+            _delete_casefold_room_policy_rows(cur, "room_slowmode", room)
             cur.execute(
                 """
                 INSERT INTO room_slowmode (room, seconds, set_by)
@@ -5502,7 +6352,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
     # ── Broadcast ───────────────────────────────────────────────────
     @app.route("/admin/global_broadcast", methods=["POST"])
-    @require_permission("admin:basic")
+    @require_permission("admin:broadcast")
     @require_recent_admin_auth
     def global_broadcast():
         actor = _actor()
@@ -5545,38 +6395,102 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
     # ── Account flags ───────────────────────────────────────────────
     @app.route("/admin/revoke_2fa/<username>", methods=["POST"])
-    @require_permission("admin:basic")
+    @require_permission("admin:revoke_2fa")
     @require_recent_admin_auth
     def revoke_2fa(username):
         actor = _actor()
         if _is_self_target(username):
             return _deny_self_target("revoke 2FA for")
-        if not _get_user_id(username):
-            return _admin_json_response({"ok": False, "error": "User not found"}, 404)
+        username, _target_user_id, target_err = _canonical_user_or_error(username)
+        if target_err is not None:
+            return target_err
+        denied = _deny_privileged_target_without_admin(username, "revoke 2FA for")
+        if denied is not None:
+            return denied
         conn = get_db()
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE users
-                   SET two_factor_secret = NULL,
-                       two_factor_enabled = FALSE
-                 WHERE username = %s;
-                """,
-                (username,),
-            )
-        conn.commit()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE users
+                       SET two_factor_secret = NULL,
+                           two_factor_enabled = FALSE,
+                           auth_version = COALESCE(auth_version, 0) + 1,
+                           auth_changed_at = CURRENT_TIMESTAMP
+                     WHERE LOWER(username) = LOWER(%s);
+                    """,
+                    (username,),
+                )
+                cur.execute(
+                    """
+                    UPDATE auth_sessions
+                       SET revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP),
+                           revoked_reason = COALESCE(revoked_reason, 'admin_revoke_2fa')
+                     WHERE LOWER(username)=LOWER(%s) AND revoked_at IS NULL;
+                    """,
+                    (username,),
+                )
+                revoked_sessions = cur.rowcount
+                cur.execute(
+                    "UPDATE auth_tokens SET revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP) WHERE LOWER(username)=LOWER(%s) AND revoked_at IS NULL;",
+                    (username,),
+                )
+                revoked_tokens = cur.rowcount
+            conn.commit()
+        except Exception as e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            return _admin_operation_error("revoke_2fa", e, ok_style=True)
+
+        # 2FA reset changes the trust state of the account.  Existing browser and
+        # Socket.IO sessions must be forced through a fresh login instead of being
+        # allowed to continue until the next HTTP token check.
+        emitted_sessions = 0
+        try:
+            if socketio is not None:
+                payload = {
+                    "username": username,
+                    "reason": "Your two-factor setup was reset by an admin. Please log in again.",
+                    "by": actor,
+                    "action": "2fa_revoked",
+                    "code": "admin_revoke_2fa",
+                }
+                for sid in _user_sids(username):
+                    try:
+                        socketio.emit("force_logout", payload, to=sid)
+                        socketio.emit("admin_force_logout", payload, to=sid)
+                        emitted_sessions += 1
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        disconnected = _disconnect_user(username)
         log_audit_event(actor, "revoke_2fa", username, "2FA revoked")
-        return _admin_json_response({"ok": True, "status": "2fa_revoked", "user": username})
+        return _admin_json_response({
+            "ok": True,
+            "status": "2fa_revoked",
+            "user": username,
+            "revoked_sessions": int(revoked_sessions or 0),
+            "revoked_tokens": int(revoked_tokens or 0),
+            "emitted_sessions": int(emitted_sessions or 0),
+            "disconnected_sessions": int(disconnected or 0),
+        })
 
     @app.route("/admin/set_user_quota/<username>", methods=["POST"])
-    @require_permission("admin:basic")
+    @require_permission("admin:set_user_quota")
     @require_recent_admin_auth
     def set_user_quota(username):
         actor = _actor()
         if _is_self_target(username):
             return _deny_self_target("change quota for")
-        if not _get_user_id(username):
-            return _admin_json_response({"ok": False, "error": "User not found"}, 404)
+        username, _target_user_id, target_err = _canonical_user_or_error(username)
+        if target_err is not None:
+            return target_err
+        denied = _deny_privileged_target_without_admin(username, "change quota for")
+        if denied is not None:
+            return denied
         limit, err = _bounded_int_from_form("messages_per_hour", 60, 0, 100000)
         if err is not None:
             return err
@@ -5584,9 +6498,17 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         try:
             with conn.cursor() as cur:
                 if int(limit) == 0:
-                    cur.execute("DELETE FROM user_quotas WHERE username = %s;", (username,))
+                    cur.execute("DELETE FROM user_quotas WHERE LOWER(username) = LOWER(%s);", (username,))
                     status = "quota_cleared"
                 else:
+                    # Older builds could write duplicate quota rows that differed
+                    # only by username case.  Collapse those stale rows before the
+                    # exact-case primary-key upsert so the canonical row is the only
+                    # row future lookups can see.
+                    cur.execute(
+                        "DELETE FROM user_quotas WHERE LOWER(username) = LOWER(%s) AND username <> %s;",
+                        (username, username),
+                    )
                     cur.execute(
                         """
                         INSERT INTO user_quotas (username, messages_per_hour)
@@ -5607,14 +6529,18 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         return _admin_json_response({"ok": True, "status": status, "limit": limit, "user": username})
 
     @app.route("/admin/set_user_status/<username>", methods=["POST"])
-    @require_permission("admin:basic")
+    @require_permission("admin:set_user_status")
     @require_recent_admin_auth
     def set_user_status(username):
         actor = _actor()
         if _is_self_target(username):
             return _deny_self_target("override status for")
-        if not _get_user_id(username):
-            return _admin_json_response({"ok": False, "error": "User not found"}, 404)
+        username, _target_user_id, target_err = _canonical_user_or_error(username)
+        if target_err is not None:
+            return target_err
+        denied = _deny_privileged_target_without_admin(username, "override status for")
+        if denied is not None:
+            return denied
         raw_presence = (
             request.form.get("presence_status")
             or request.form.get("presence")
@@ -5639,7 +6565,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         conn = get_db()
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE users SET presence_status = %s, custom_status = %s WHERE username = %s;",
+                "UPDATE users SET presence_status = %s, custom_status = %s WHERE LOWER(username) = LOWER(%s);",
                 (presence, custom_value, username),
             )
         conn.commit()
@@ -5707,7 +6633,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         conn = get_db()
         with conn.cursor() as cur:
             if _role_has_privilege_escalation_permissions(cur, name):
-                denied = _require_actor_permission("admin:basic", action="delete privileged role")
+                denied = _require_actor_permission("admin:manage_roles", action="delete privileged role")
                 if denied is not None:
                     return denied
             cur.execute("DELETE FROM roles WHERE name = %s;", (name,))
@@ -5734,7 +6660,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         if not _valid_permission_name(perm):
             return _admin_json_response({"ok": False, "error": "Invalid permission name"}, 400)
         if _protected_role_change_requires_admin(role, perm):
-            denied = _require_actor_permission("admin:basic", action="add protected permission")
+            denied = _require_actor_permission("admin:manage_roles", action="add protected permission")
             if denied is not None:
                 return denied
 
@@ -5781,7 +6707,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         if role == "admin" and perm in _ADMIN_ROLE_MINIMUM_PERMISSIONS:
             return _admin_json_response({"ok": False, "error": "Cannot remove critical permissions from the protected admin role"}, 403)
         if _protected_role_change_requires_admin(role, perm):
-            denied = _require_actor_permission("admin:basic", action="remove protected permission")
+            denied = _require_actor_permission("admin:manage_roles", action="remove protected permission")
             if denied is not None:
                 return denied
 
@@ -5836,6 +6762,9 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
     def list_user_permissions(username):
         from permissions import get_user_permissions
 
+        username, _target_user_id, target_err = _canonical_user_or_error(username)
+        if target_err is not None:
+            return target_err
         perms = get_user_permissions(username)
         return _admin_json_response({"ok": True, "username": username, "permissions": sorted(list(perms))})
 
@@ -5915,6 +6844,9 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
     @app.route("/admin/user/<username>/roles", methods=["GET"])
     @require_permission("admin:manage_roles")
     def list_user_roles(username):
+        username, _target_user_id, target_err = _canonical_user_or_error(username)
+        if target_err is not None:
+            return target_err
         conn = get_db()
         with conn.cursor() as cur:
             cur.execute(
@@ -5923,7 +6855,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                   FROM user_roles ur
                   JOIN roles r ON r.id = ur.role_id
                   JOIN users u ON u.id = ur.user_id
-                 WHERE u.username = %s
+                 WHERE LOWER(u.username) = LOWER(%s)
                  ORDER BY LOWER(r.name);
                 """,
                 (username,),
@@ -5951,7 +6883,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             if not src_row:
                 return _admin_json_response({"ok": False, "error": "Source role not found"}, 404)
             if _role_has_privilege_escalation_permissions(cur, src):
-                denied = _require_actor_permission("admin:basic", action="clone privileged role")
+                denied = _require_actor_permission("admin:manage_roles", action="clone privileged role")
                 if denied is not None:
                     return denied
             cur.execute("INSERT INTO roles (name) VALUES (%s) ON CONFLICT (name) DO NOTHING;", (dst,))
@@ -5983,16 +6915,15 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         actor = _actor()
         if _is_self_target(username):
             return _deny_self_target("remove roles from")
+        username, user_id, target_err = _canonical_user_or_error(username)
+        if target_err is not None:
+            return target_err
         requested_role_name = (request.form.get("role") or "").strip().lower()
         role_name = _normalize_role_name(requested_role_name)
         if not role_name:
             return _admin_json_response({"ok": False, "error": "Missing role name"}, 400)
         if not _valid_role_name(role_name):
             return _admin_json_response({"ok": False, "error": "Invalid role name"}, 400)
-
-        user_id = _get_user_id(username)
-        if not user_id:
-            return _admin_json_response({"ok": False, "error": "User not found"}, 404)
 
         conn = get_db()
         with conn.cursor() as cur:
@@ -6011,7 +6942,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             )
             previous_effective_admin = bool((cur.fetchone() or [False])[0])
             if previous_effective_admin or _role_has_privilege_escalation_permissions(cur, role_name):
-                denied = _require_actor_permission("admin:basic", action="remove privileged role")
+                denied = _require_actor_permission("admin:manage_roles", action="remove privileged role")
                 if denied is not None:
                     return denied
             cur.execute(
@@ -6066,9 +6997,9 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             return _admin_json_response({"ok": False, "error": "username and permission are required"}, 400)
         if not _valid_permission_name(permission):
             return _admin_json_response({"ok": False, "error": "Invalid permission name"}, 400)
-        user_id = _get_user_id(username)
-        if not user_id:
-            return _admin_json_response({"ok": False, "error": "User not found"}, 404)
+        username, user_id, target_err = _canonical_user_or_error(username)
+        if target_err is not None:
+            return target_err
 
         conn = get_db()
         with conn.cursor() as cur:
@@ -6225,8 +7156,12 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 user_agent=ua,
                 ip_address=ip,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            try:
+                revoke_auth_session(sid, reason="admin_testlab_auth_setup_failed")
+            except Exception:
+                pass
+            raise RuntimeError("Admin Test Lab could not persist auth tokens; refusing to issue unusable cookies.") from exc
 
         resp = make_response("")
         set_access_cookies(resp, access_token)
@@ -6358,7 +7293,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         conn = get_db()
         try:
             with conn.cursor() as cur:
-                cur.execute("SELECT id FROM users WHERE username=%s;", (username,))
+                cur.execute("SELECT id FROM users WHERE LOWER(username)=LOWER(%s);", (username,))
                 row = cur.fetchone()
                 user_id = row[0] if row else None
 
@@ -6370,11 +7305,11 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 _admin_testlab_exec_optional(cur, "DELETE FROM private_messages WHERE sender=%s OR recipient=%s;", (username, username))
                 _admin_testlab_exec_optional(cur, "DELETE FROM friend_requests WHERE from_user=%s OR to_user=%s;", (username, username))
                 _admin_testlab_exec_optional(cur, "DELETE FROM group_invites WHERE from_user=%s OR to_user=%s;", (username, username))
-                _admin_testlab_exec_optional(cur, "DELETE FROM group_mutes WHERE username=%s;", (username,))
-                _admin_testlab_exec_optional(cur, "DELETE FROM user_profiles WHERE username=%s;", (username,))
-                _admin_testlab_exec_optional(cur, "DELETE FROM user_sanctions WHERE username=%s;", (username,))
-                _admin_testlab_exec_optional(cur, "DELETE FROM auth_tokens WHERE username=%s;", (username,))
-                _admin_testlab_exec_optional(cur, "DELETE FROM auth_sessions WHERE username=%s;", (username,))
+                _admin_testlab_exec_optional(cur, "DELETE FROM group_mutes WHERE LOWER(username)=LOWER(%s);", (username,))
+                _admin_testlab_exec_optional(cur, "DELETE FROM user_profiles WHERE LOWER(username)=LOWER(%s);", (username,))
+                _admin_testlab_exec_optional(cur, "DELETE FROM user_sanctions WHERE LOWER(username)=LOWER(%s);", (username,))
+                _admin_testlab_exec_optional(cur, "DELETE FROM auth_tokens WHERE LOWER(username)=LOWER(%s);", (username,))
+                _admin_testlab_exec_optional(cur, "DELETE FROM auth_sessions WHERE LOWER(username)=LOWER(%s);", (username,))
                 _admin_testlab_exec_optional(cur, "DELETE FROM dm_files WHERE sender=%s OR receiver=%s;", (username, username))
                 _admin_testlab_exec_optional(cur, "DELETE FROM group_files WHERE sender=%s;", (username,))
 
@@ -6389,7 +7324,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                     _admin_testlab_exec_optional(cur, "DELETE FROM user_roles WHERE user_id=%s;", (user_id,))
                     cur.execute("DELETE FROM users WHERE id=%s;", (user_id,))
                 else:
-                    cur.execute("DELETE FROM users WHERE username=%s;", (username,))
+                    cur.execute("DELETE FROM users WHERE LOWER(username)=LOWER(%s);", (username,))
             conn.commit()
         except Exception:
             try:
@@ -6416,9 +7351,10 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 is_admin=False,
                 recovery_pin_hash=hash_password("1234"),
                 recovery_pin_set_at=datetime.now(timezone.utc),
+                commit=False,
             )
             with conn.cursor() as cur:
-                cur.execute("SELECT id FROM users WHERE username=%s;", (username,))
+                cur.execute("SELECT id FROM users WHERE LOWER(username)=LOWER(%s);", (username,))
                 user_row = cur.fetchone()
                 cur.execute("SELECT id FROM roles WHERE name=%s;", (role_name,))
                 role_row = cur.fetchone()
@@ -7053,8 +7989,8 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
                 resp = _admin_testlab_post(admin_client, f"/admin/set_user_status/{uname2}", data={"status": "busy"}, headers=admin_headers)
                 status_json = _admin_testlab_response_json(resp) or {}
-                persisted_presence = scalar("SELECT presence_status FROM users WHERE username=%s;", (uname2,), default=None)
-                persisted_custom = scalar("SELECT custom_status FROM users WHERE username=%s;", (uname2,), default=None)
+                persisted_presence = scalar("SELECT presence_status FROM users WHERE LOWER(username)=LOWER(%s);", (uname2,), default=None)
+                persisted_custom = scalar("SELECT custom_status FROM users WHERE LOWER(username)=LOWER(%s);", (uname2,), default=None)
                 record(
                     "set test user status",
                     resp.status_code == 200
@@ -7067,12 +8003,12 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
                 resp = _admin_testlab_post(admin_client, f"/admin/set_user_quota/{uname2}", data={"messages_per_hour": "250"}, headers=admin_headers)
                 quota_json = _admin_testlab_response_json(resp) or {}
-                quota_value = scalar("SELECT messages_per_hour FROM user_quotas WHERE username=%s;", (uname2,), default=None)
+                quota_value = scalar("SELECT messages_per_hour FROM user_quotas WHERE LOWER(username)=LOWER(%s);", (uname2,), default=None)
                 record("set test user quota", resp.status_code == 200 and quota_json.get("status") == "quota_set" and int(quota_value or -1) == 250, details={**quota_json, "persisted_messages_per_hour": quota_value}, category="admin-actions")
 
                 resp = _admin_testlab_post(admin_client, f"/admin/set_recovery_pin", data={"username": uname2, "recovery_pin": "5678"}, headers=admin_headers)
                 pin_json = _admin_testlab_response_json(resp) or {}
-                pin_present = bool(scalar("SELECT recovery_pin_hash IS NOT NULL FROM users WHERE username=%s;", (uname2,), default=False))
+                pin_present = bool(scalar("SELECT recovery_pin_hash IS NOT NULL FROM users WHERE LOWER(username)=LOWER(%s);", (uname2,), default=False))
                 record("set recovery pin for test user", resp.status_code == 200 and pin_json.get("status") == "ok" and pin_present, details={**pin_json, "recovery_pin_present": pin_present}, category="admin-actions")
 
             # Admin creates custom rooms and tests room controls
@@ -8278,7 +9214,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 record(f"delete room {room}", not room_still_exists, details={"status": "deleted" if not room_still_exists else "still_exists", "exists_after_delete": room_still_exists}, category="cleanup")
             for username in list(created_users):
                 _admin_testlab_cleanup_username(username)
-                user_still_exists = bool(scalar("SELECT 1 FROM users WHERE username=%s;", (username,), default=0))
+                user_still_exists = bool(scalar("SELECT 1 FROM users WHERE LOWER(username)=LOWER(%s);", (username,), default=0))
                 record(f"delete user {username}", not user_still_exists, details={"status": "deleted" if not user_still_exists else "still_exists", "exists_after_delete": user_still_exists}, category="cleanup")
         finally:
             # Last-resort cleanup if admin endpoints failed.
@@ -8489,7 +9425,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
             for username, password, email in ((uname1, pwd1, email1), (uname2, pwd2, email2)):
                 created = _admin_testlab_create_user_direct(username, password, email, role_name="viewer")
-                exists = bool(scalar("SELECT 1 FROM users WHERE username=%s;", (username,), default=0))
+                exists = bool(scalar("SELECT 1 FROM users WHERE LOWER(username)=LOWER(%s);", (username,), default=0))
                 record(f"create normal test user {username}", created and exists, details={"created": created, "exists": exists})
                 if exists:
                     created_users.append(username)
@@ -8679,7 +9615,8 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
     @app.route('/admin/test_lab/link', methods=['POST'])
     @app.route('/admin/test-lab/link', methods=['POST'])
-    @require_permission('admin:basic')
+    @require_permission('admin:test_lab')
+    @require_recent_admin_auth
     def admin_test_lab_link():
         token, expires_at = _admin_testlab_issue_link()
         return _admin_json_response({
@@ -8804,25 +9741,13 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             return bool(default)
         conn = get_db()
         try:
+            # Schema is managed by startup migrations; this helper only reads.
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS user_profile_notification_settings (
-                        username              TEXT PRIMARY KEY,
-                        notify_likes          BOOLEAN NOT NULL DEFAULT TRUE,
-                        notify_comments       BOOLEAN NOT NULL DEFAULT TRUE,
-                        notify_admin_notices  BOOLEAN NOT NULL DEFAULT TRUE,
-                        notify_report_updates BOOLEAN NOT NULL DEFAULT TRUE,
-                        notify_profile_views  BOOLEAN NOT NULL DEFAULT FALSE,
-                        notify_friend_posts   BOOLEAN NOT NULL DEFAULT TRUE,
-                        updated_at            TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    );
-                    """
-                )
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_profile_notification_settings_updated ON user_profile_notification_settings(updated_at DESC);")
-                cur.execute("SELECT " + column_name + " FROM user_profile_notification_settings WHERE username = %s LIMIT 1;", (username,))
+                cur.execute("SELECT to_regclass('public.user_profile_notification_settings');")
+                if not (cur.fetchone() or [None])[0]:
+                    raise RuntimeError("Profile notification settings table is missing; run `python main.py --migrate`.")
+                cur.execute("SELECT " + column_name + " FROM user_profile_notification_settings WHERE LOWER(username) = LOWER(%s) LIMIT 1;", (username,))
                 row = cur.fetchone()
-            conn.commit()
             return bool(row[0]) if row else bool(default)
         except Exception:
             try:
@@ -8851,7 +9776,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                     INSERT INTO notifications (user_id, notification, type)
                     SELECT id, %s, 'profile_post_warning'
                       FROM users
-                     WHERE username = %s
+                     WHERE LOWER(username) = LOWER(%s)
                     RETURNING id, timestamp;
                     """,
                     (json.dumps(payload, separators=(',', ':')), username),
@@ -8895,7 +9820,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                     INSERT INTO notifications (user_id, notification, type)
                     SELECT id, %s, 'profile_post_report_update'
                       FROM users
-                     WHERE username = %s
+                     WHERE LOWER(username) = LOWER(%s)
                     RETURNING id, timestamp;
                     """,
                     (json.dumps(payload, separators=(',', ':')), username),
@@ -8961,7 +9886,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
     # ── Profile post moderation ───────────────────────────────
     @app.route('/admin/profile_posts', methods=['GET'])
-    @require_permission('admin:basic')
+    @require_permission('profile:moderate')
     def admin_profile_posts():
         _ensure_admin_profile_runtime_schema()
         q, like = _admin_profile_search(request.args.get('q') or request.args.get('query') or '', max_len=100)
@@ -9029,7 +9954,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
 
     @app.route('/admin/profile_posts/<int:post_id>/comments', methods=['GET'])
-    @require_permission('admin:basic')
+    @require_permission('profile:moderate')
     def admin_profile_post_comments(post_id):
         _ensure_admin_profile_runtime_schema()
         limit = _admin_profile_limit(request.args.get('limit'), default=50, maximum=200)
@@ -9067,7 +9992,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
 
     @app.route('/admin/profile_posts/<int:post_id>/delete', methods=['POST'])
-    @require_permission('moderation:suspend_user')
+    @require_permission('profile:moderate')
     @require_recent_admin_auth
     def admin_delete_profile_post(post_id):
         actor = _actor()
@@ -9104,7 +10029,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
 
     @app.route('/admin/profile_posts/<int:post_id>/restore', methods=['POST'])
-    @require_permission('moderation:suspend_user')
+    @require_permission('profile:moderate')
     @require_recent_admin_auth
     def admin_restore_profile_post(post_id):
         actor = _actor()
@@ -9139,7 +10064,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
 
     @app.route('/admin/profile_posts/<int:post_id>/comments/<int:comment_id>/delete', methods=['POST'])
-    @require_permission('moderation:suspend_user')
+    @require_permission('profile:moderate')
     @require_recent_admin_auth
     def admin_delete_profile_post_comment(post_id, comment_id):
         actor = _actor()
@@ -9175,7 +10100,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
     # ── Profile report queue ───────────────────────────────
     @app.route('/admin/profile_reports', methods=['GET'])
-    @require_permission('admin:basic')
+    @require_permission('profile:moderate')
     def admin_profile_reports():
         _ensure_admin_profile_runtime_schema()
         q, like = _admin_profile_search(request.args.get('q') or request.args.get('query') or '', max_len=100)
@@ -9216,7 +10141,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
 
     @app.route('/admin/profile_reports/<int:report_id>/dismiss', methods=['POST'])
-    @require_permission('moderation:suspend_user')
+    @require_permission('profile:moderate')
     @require_recent_admin_auth
     def admin_dismiss_profile_report(report_id):
         _ensure_admin_profile_runtime_schema()
@@ -9256,7 +10181,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
 
     @app.route('/admin/profile_reports/<int:report_id>/warn', methods=['POST'])
-    @require_permission('moderation:suspend_user')
+    @require_permission('profile:moderate')
     @require_recent_admin_auth
     def admin_warn_profile_report_target(report_id):
         _ensure_admin_profile_runtime_schema()
@@ -9300,7 +10225,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
 
     @app.route('/admin/profile_reports/<int:report_id>/delete_content', methods=['POST'])
-    @require_permission('moderation:suspend_user')
+    @require_permission('profile:moderate')
     @require_recent_admin_auth
     def admin_delete_profile_report_content(report_id):
         _ensure_admin_profile_runtime_schema()
@@ -9381,7 +10306,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
 
     @app.route('/admin/profile_badges/<path:username>', methods=['GET'])
-    @require_permission('admin:basic')
+    @require_permission('profile:moderate')
     def admin_profile_badges(username):
         _ensure_admin_profile_runtime_schema()
         username = str(username or '').strip()[:64]
@@ -9399,7 +10324,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                     """
                     SELECT badge_key, label, assigned_by, reason, created_at
                       FROM user_profile_badges
-                     WHERE username = %s
+                     WHERE LOWER(username) = LOWER(%s)
                      ORDER BY created_at DESC, id DESC;
                     """,
                     (canonical,),
@@ -9421,7 +10346,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
 
     @app.route('/admin/profile_badges/<path:username>', methods=['POST'])
-    @require_permission('moderation:suspend_user')
+    @require_permission('profile:moderate')
     @require_recent_admin_auth
     def admin_assign_profile_badge(username):
         _ensure_admin_profile_runtime_schema()
@@ -9461,7 +10386,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
 
     @app.route('/admin/profile_badges/<path:username>/<path:badge_key>/delete', methods=['POST'])
-    @require_permission('moderation:suspend_user')
+    @require_permission('profile:moderate')
     @require_recent_admin_auth
     def admin_remove_profile_badge(username, badge_key):
         _ensure_admin_profile_runtime_schema()
@@ -9480,7 +10405,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                     conn.rollback()
                     return _admin_json_response({'ok': False, 'error': 'not_found'}, 404)
                 canonical = str(urow[0])
-                cur.execute('DELETE FROM user_profile_badges WHERE username = %s AND badge_key = %s;', (canonical, key))
+                cur.execute('DELETE FROM user_profile_badges WHERE LOWER(username) = LOWER(%s) AND badge_key = %s;', (canonical, key))
             conn.commit()
             log_audit_event(actor, 'admin_profile_badge_remove', canonical, f'badge={key} reason={reason}')
             return jsonify({'ok': True, 'username': canonical, 'badge_key': key})

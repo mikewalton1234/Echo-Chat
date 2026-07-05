@@ -28,7 +28,8 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
     css = r"""
 
 /* Echo-Chat Admin Panel — injected (admin only) */
-/* v4: cleaner, more professional UI + high-contrast readability pass (drag, pin, max, toasts) */
+/* v6: UI08 deep recheck — CSRF retry freshness, modal accessibility, keyboard tabs, and broader duplicate-action guards */
+/* v8: UI08 admin reauth deep recheck — session confirmation race guard loaded */
 
 #ecAdminPanel{
   /* Readability-first admin palette. Keep the dark style, but avoid muddy dark-on-dark text. */
@@ -143,6 +144,22 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
 
 #ecAdminPanel .ecap-btn[disabled],
 #ecAdminPanel .ecap-iconBtn[disabled]{ opacity:.55; cursor:not-allowed; transform:none; }
+#ecAdminPanel .ecap-btn.isBusy,
+#ecAdminPanel .ecap-iconBtn.isBusy,
+#ecAdminPanel .ecap-btn[aria-busy="true"],
+#ecAdminPanel .ecap-iconBtn[aria-busy="true"]{
+  opacity:.72;
+  cursor:progress;
+  position:relative;
+}
+#ecAdminPanel .ecap-btn.isBusy::after,
+#ecAdminPanel .ecap-iconBtn.isBusy::after{
+  content:'…';
+  display:inline-block;
+  margin-left:4px;
+  animation: ecapBusyPulse 900ms ease-in-out infinite;
+}
+@keyframes ecapBusyPulse{ 0%,100%{ opacity:.35; transform:translateY(0); } 50%{ opacity:1; transform:translateY(-1px); } }
 
 #ecAdminPanel .ecap-radioStationRow{ align-items:flex-start; gap:10px; }
 #ecAdminPanel .ecap-radioStationFields{ min-width:0; flex:1 1 auto; }
@@ -294,6 +311,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
   text-align:left;
 }
 #ecAdminPanel .ecap-tab .ico{ opacity:.95; flex:0 0 auto; }
+#ecAdminPanel .ecap-tab:focus-visible{ outline:3px solid rgba(124,179,255,.26); outline-offset:2px; }
 #ecAdminPanel .ecap-tab.active{
   background: rgba(142,195,255,.22);
   border-color: rgba(142,195,255,.55);
@@ -473,7 +491,15 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
   display:flex; align-items:center; justify-content:space-between; gap:10px;
   padding: 9px 10px;
   border-bottom:1px solid rgba(226,238,255,.14);
+  min-width:0;
 }
+#ecAdminPanel .ecap-item > *{ min-width:0; }
+#ecAdminPanel .ecap-item .ecap-actions,
+#ecAdminPanel .ecap-item > div:last-child{ flex-wrap:wrap; max-width:100%; }
+#ecAdminPanel .ecap-item a,
+#ecAdminPanel .ecap-item code,
+#ecAdminPanel .ecap-item pre,
+#ecAdminPanel .ecap-item .ecap-muted{ overflow-wrap:anywhere; word-break:break-word; }
 #ecAdminPanel .ecap-item:last-child{ border-bottom:none; }
 #ecAdminPanel .ecap-item:hover{ background: rgba(232,240,255,.10); }
 
@@ -486,6 +512,9 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
   font-size: 12px;
   color: var(--ecap-text);
   font-weight:600;
+  max-width:100%;
+  overflow:hidden;
+  text-overflow:ellipsis;
 }
 #ecAdminPanel .ecap-pill.ok{ border-color: rgba(120,255,170,.35); }
 #ecAdminPanel .ecap-pill.warn{ border-color: rgba(255,199,107,.35); }
@@ -541,7 +570,22 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
 #ecAdminPanel .ecap-toast.ok{ border-color: rgba(120,255,170,.25); }
 #ecAdminPanel .ecap-toast.warn{ border-color: rgba(255,199,107,.25); }
 #ecAdminPanel .ecap-toast.err{ border-color: rgba(255,84,84,.25); }
-#ecAdminPanel .ecap-toast .x{ opacity:.8; cursor:pointer; padding:0 6px; }
+#ecAdminPanel .ecap-toast .x{
+  opacity:.8;
+  cursor:pointer;
+  padding:0 6px;
+  background:transparent;
+  border:0;
+  color:var(--ecap-text);
+  border-radius:8px;
+  min-width:28px;
+  min-height:28px;
+  line-height:1;
+}
+#ecAdminPanel .ecap-toast .x:hover,
+#ecAdminPanel .ecap-toast .x:focus-visible{ opacity:1; background:rgba(232,240,255,.12); }
+#ecAdminPanel .ecap-toast[role="status"]{ outline:0; }
+
 
 #ecAdminPanel .ecap-modalBackdrop{
   position:absolute;
@@ -553,9 +597,13 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
   background: rgba(6,8,12,.72);
   z-index:5;
 }
-#ecAdminPanel .ecap-modalBackdrop.open{ display:flex; }
+#ecAdminPanel .ecap-modalBackdrop.open,
+#ecAdminPanel .ecap-modalBackdrop[aria-hidden="false"]{ display:flex; }
+
 #ecAdminPanel .ecap-modal{
   width:min(420px, calc(100% - 8px));
+  max-height:calc(100vh - 72px);
+  overflow:auto;
   border-radius:16px;
   border:1px solid rgba(226,238,255,.30);
   background: linear-gradient(180deg, rgba(31,39,52,.99), rgba(16,22,31,.99));
@@ -678,6 +726,10 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
 }
 
 @media (max-width: 680px){
+  #ecAdminPanel .ecap-row{ flex-wrap:wrap; align-items:stretch; }
+  #ecAdminPanel .ecap-row > *{ flex:1 1 180px; }
+  #ecAdminPanel .ecap-actions{ align-items:stretch; }
+  #ecAdminPanel .ecap-actions .ecap-btn{ flex:1 1 auto; }
   #ecAdminPanel .ecap-userSearchBar{ grid-template-columns:1fr; }
   #ecAdminPanel .ecap-settingsSummary{ grid-template-columns:1fr; }
   #ecAdminPanel .ecap-settingsGroup .ecap-grid2{ grid-template-columns:1fr; }
@@ -941,6 +993,86 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
     };
   }
 
+  const ecapPendingActions = new Set();
+
+  function normalizeHeadersForAdminFetch(options){
+    options = options || {};
+    const src = options.headers;
+    const out = {};
+    try{
+      if (src instanceof Headers){
+        src.forEach((value, key)=>{ out[key] = value; });
+      } else if (Array.isArray(src)){
+        src.forEach((pair)=>{ if (pair && pair.length >= 2) out[String(pair[0])] = String(pair[1]); });
+      } else if (src && typeof src === 'object'){
+        Object.assign(out, src);
+      }
+    }catch(_){ }
+    options.headers = out;
+    return out;
+  }
+
+  function hasHeader(headers, name){
+    const want = String(name || '').toLowerCase();
+    return Object.keys(headers || {}).some(k => String(k).toLowerCase() === want);
+  }
+
+  function removeHeader(headers, name){
+    const want = String(name || '').toLowerCase();
+    for (const k of Object.keys(headers || {})){
+      if (String(k).toLowerCase() === want) delete headers[k];
+    }
+  }
+
+  function attachFreshAccessCsrf(options, force){
+    const headers = normalizeHeadersForAdminFetch(options || {});
+    if (force) removeHeader(headers, 'X-CSRF-TOKEN');
+    if (!force && hasHeader(headers, 'X-CSRF-TOKEN')) return headers;
+    const csrf = getCookie('csrf_access_token');
+    if (csrf) headers['X-CSRF-TOKEN'] = csrf;
+    return headers;
+  }
+
+  function setButtonBusy(btn, busy, label){
+    if (!btn) return;
+    if (busy){
+      if (btn.dataset.ecapOriginalText === undefined) btn.dataset.ecapOriginalText = btn.textContent || '';
+      if (btn.dataset.ecapOriginalHtml === undefined) btn.dataset.ecapOriginalHtml = btn.innerHTML || '';
+      btn.classList.add('isBusy');
+      btn.setAttribute('aria-busy', 'true');
+      btn.disabled = true;
+      if (label) btn.textContent = label;
+      return;
+    }
+    btn.classList.remove('isBusy');
+    btn.removeAttribute('aria-busy');
+    btn.disabled = false;
+    if (btn.dataset.ecapOriginalHtml !== undefined){
+      btn.innerHTML = btn.dataset.ecapOriginalHtml;
+      delete btn.dataset.ecapOriginalHtml;
+      delete btn.dataset.ecapOriginalText;
+    } else if (btn.dataset.ecapOriginalText !== undefined){
+      btn.textContent = btn.dataset.ecapOriginalText;
+      delete btn.dataset.ecapOriginalText;
+    }
+  }
+
+  async function withAdminAction(btn, key, busyLabel, fn){
+    const actionKey = String(key || (btn && btn.id) || 'admin-action');
+    if (ecapPendingActions.has(actionKey)){
+      toast('warn', 'Action already running', btn && btn.textContent ? btn.textContent : 'Please wait for the current admin action to finish.');
+      return null;
+    }
+    ecapPendingActions.add(actionKey);
+    setButtonBusy(btn, true, busyLabel || 'Working');
+    try{
+      return await fn();
+    } finally {
+      ecapPendingActions.delete(actionKey);
+      setButtonBusy(btn, false);
+    }
+  }
+
   async function refreshAccessToken(){
     try{
       const csrf = getCookie('csrf_refresh_token');
@@ -955,6 +1087,79 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
   }
 
   let adminReauthPromise = null;
+  let adminReauthStatusPromise = null;
+  let adminReauthSessionCache = {key:null, confirmedAt:0, oncePerSession:false};
+
+  function _adminReauthSessionKey(meta){
+    try{
+      const sid = meta && meta.sid ? String(meta.sid).trim() : '';
+      if (sid) return 'sid:' + sid;
+      const actor = meta && meta.actor ? String(meta.actor).trim().toLowerCase() : '';
+      if (actor) return 'actor:' + actor;
+    }catch(_){ }
+    return '';
+  }
+
+  function _markAdminReauthConfirmed(meta){
+    try{
+      const key = _adminReauthSessionKey(meta);
+      if (!key) return;
+      adminReauthSessionCache = {
+        key,
+        confirmedAt: Number(meta && meta.confirmed_at) || Math.floor(Date.now()/1000),
+        oncePerSession: !!(meta && meta.once_per_session)
+      };
+    }catch(_){ }
+  }
+
+  function _clearAdminReauthConfirmed(){
+    adminReauthSessionCache = {key:null, confirmedAt:0, oncePerSession:false};
+  }
+
+  function _adminReauthCacheMatches(meta){
+    try{
+      const key = _adminReauthSessionKey(meta);
+      return !!(key && adminReauthSessionCache && adminReauthSessionCache.key === key && adminReauthSessionCache.confirmedAt);
+    }catch(_){
+      return false;
+    }
+  }
+
+  async function ensureAdminReauthAlreadyFresh(meta){
+    // A 428 can race with another admin request that is already showing or just
+    // completed the password dialog.  Ask the server for the authoritative
+    // current-session state before opening another prompt.
+    if (adminReauthStatusPromise) return adminReauthStatusPromise;
+    adminReauthStatusPromise = (async ()=>{
+      try{
+        let r = await fetch('/admin/auth/status', {method:'GET', credentials:'include'});
+        if (r.status === 401){
+          const refreshed = await refreshAccessToken();
+          if (refreshed) r = await fetch('/admin/auth/status', {method:'GET', credentials:'include'});
+        }
+        if (r.status === 401 || r.status === 403){
+          _clearAdminReauthConfirmed();
+          return false;
+        }
+        const j = await r.json().catch(()=>null);
+        if (r.ok && j && (j.ok === true || j.status === 'ok' || j.success === true) && !j.reauth_required){
+          _markAdminReauthConfirmed(j);
+          return true;
+        }
+        if (j && j.reauth_required){
+          const statusKey = _adminReauthSessionKey(j);
+          const metaKey = _adminReauthSessionKey(meta);
+          if (statusKey && metaKey && statusKey !== metaKey) _clearAdminReauthConfirmed();
+        }
+        return false;
+      }catch(_){
+        return false;
+      }finally{
+        adminReauthStatusPromise = null;
+      }
+    })();
+    return adminReauthStatusPromise;
+  }
 
   async function confirmAdminPassword(message){
     if (adminReauthPromise) return adminReauthPromise;
@@ -1042,13 +1247,15 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
           try{
             const fd = new FormData();
             fd.append('current_password', pw);
-            const headers = {};
-            const csrf = getCookie('csrf_access_token');
-            if (csrf) headers['X-CSRF-TOKEN'] = csrf;
-            let r = await fetch('/admin/auth/confirm', {method:'POST', credentials:'include', headers, body:fd});
+            const confirmOpts = {method:'POST', credentials:'include', headers:{}, body:fd};
+            attachFreshAccessCsrf(confirmOpts, true);
+            let r = await fetch('/admin/auth/confirm', confirmOpts);
             if (r.status === 401){
               const refreshed = await refreshAccessToken();
-              if (refreshed) r = await fetch('/admin/auth/confirm', {method:'POST', credentials:'include', headers, body:fd});
+              if (refreshed){
+                attachFreshAccessCsrf(confirmOpts, true);
+                r = await fetch('/admin/auth/confirm', confirmOpts);
+              }
             }
             const j = await r.json().catch(()=>null);
             if (!r.ok || !(j && (j.ok === true || j.status === 'ok' || j.success === true))){
@@ -1060,9 +1267,11 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
               return;
             }
             const secs = Number(j && j.remaining_seconds);
+            _markAdminReauthConfirmed(j);
             cleanup();
-            panelToast('ok','Confirmed', Number.isFinite(secs) ? `Admin actions unlocked for ${secs}s` : 'Admin actions unlocked');
-            log('admin password confirmed for fresh-write window');
+            const oncePerSession = !!(j && j.once_per_session);
+            panelToast('ok','Confirmed', oncePerSession ? 'Admin actions unlocked for this login session' : (Number.isFinite(secs) ? `Admin actions unlocked for ${secs}s` : 'Admin actions unlocked'));
+            log(oncePerSession ? 'admin password confirmed for current login session' : 'admin password confirmed for fresh-write window');
             resolve(finish(true));
           }catch(err){
             const errMsg = err && err.message ? err.message : 'network error';
@@ -1112,11 +1321,9 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
     const method = (options.method || 'GET').toUpperCase();
 
     if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
-      options.headers = options.headers || {};
-      if (!options.headers['X-CSRF-TOKEN']) {
-        const csrf = getCookie('csrf_access_token');
-        if (csrf) options.headers['X-CSRF-TOKEN'] = csrf;
-      }
+      attachFreshAccessCsrf(options, false);
+    } else {
+      normalizeHeadersForAdminFetch(options);
     }
 
     let r = await fetch(u, options);
@@ -1135,15 +1342,30 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
 
     if (r.status === 401){
       const ok = await refreshAccessToken();
-      if (ok) r = await fetch(u, options);
+      if (ok){
+        if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') attachFreshAccessCsrf(options, true);
+        r = await fetch(u, options);
+      } else {
+        _clearAdminReauthConfirmed();
+      }
     }
 
     if (r.status === 428 && !String(u).includes('/admin/auth/confirm')){
       const meta = await r.clone().json().catch(()=>null);
       const needsConfirm = !!(meta && (meta.reauth_required || meta.code === 'admin_reauth_required'));
       if (needsConfirm){
-        const ok = await confirmAdminPassword(meta && meta.error ? meta.error : 'Confirm your password to continue this admin action:');
-        if (ok) r = await fetch(u, options);
+        const alreadyFresh = _adminReauthCacheMatches(meta) || await ensureAdminReauthAlreadyFresh(meta);
+        if (alreadyFresh){
+          if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') attachFreshAccessCsrf(options, true);
+          r = await fetch(u, options);
+        } else {
+          const onceText = meta && meta.once_per_session ? 'Confirm your password once to unlock admin actions for this login session.' : null;
+          const ok = await confirmAdminPassword(onceText || (meta && meta.error ? meta.error : 'Confirm your password to continue this admin action:'));
+          if (ok){
+            if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') attachFreshAccessCsrf(options, true);
+            r = await fetch(u, options);
+          }
+        }
       }
     }
     return r;
@@ -1691,7 +1913,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
   function panelToast(type, msg, meta, ms){
     const st = document.getElementById('ecapToastStack');
     if (!st) return;
-    const t = el('div', {class:`ecap-toast ${type||''}`});
+    const t = el('div', {class:`ecap-toast ${type||''}`, role:'status', 'aria-live':'polite'});
     const wrap = el('div');
     wrap.style.minWidth = '0';
     const msgEl = el('div', {class:'tmsg'});
@@ -1699,15 +1921,15 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
     msgEl.style.whiteSpace = 'nowrap';
     msgEl.style.overflow = 'hidden';
     msgEl.style.textOverflow = 'ellipsis';
-    msgEl.textContent = safe(msg);
+    msgEl.textContent = String(msg || '');
     const metaEl = el('div', {class:'tmeta'});
     metaEl.style.whiteSpace = 'nowrap';
     metaEl.style.overflow = 'hidden';
     metaEl.style.textOverflow = 'ellipsis';
-    metaEl.textContent = safe(meta || '');
+    metaEl.textContent = String(meta || '');
     wrap.appendChild(msgEl);
     wrap.appendChild(metaEl);
-    const close = el('div', {class:'x', title:'Dismiss', text:'✕'});
+    const close = el('button', {class:'x', type:'button', title:'Dismiss notification', 'aria-label':'Dismiss admin notification', text:'✕'});
     close.addEventListener('click', ()=>t.remove());
     t.appendChild(wrap);
     t.appendChild(close);
@@ -1729,7 +1951,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
     const box = el('div', {class:'ecap-modal', role:'dialog', 'aria-modal':'true', 'aria-labelledby':'ecapAdminReauthTitle'});
     const form = el('form', {novalidate:''});
     form.appendChild(el('div', {class:'ecap-modalTitle', id:'ecapAdminReauthTitle', text:'Admin password confirmation'}));
-    form.appendChild(el('div', {class:'ecap-modalText', text:'Confirm your password to continue this admin action.'}));
+    form.appendChild(el('div', {class:'ecap-modalText', text:'Confirm your password once to unlock admin actions for this login session.'}));
     form.appendChild(el('label', {class:'ecap-fieldLabel', for:'ecapAdminReauthPassword', text:'Current password'}));
     form.appendChild(el('input', {id:'ecapAdminReauthPassword', name:'current_password', type:'password', autocomplete:'current-password', spellcheck:'false'}));
     form.appendChild(el('div', {class:'ecap-errorText', 'aria-live':'polite'}));
@@ -1753,13 +1975,17 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
     const host = ensurePanel();
     if (!host) return Promise.resolve(null);
     const options = opts || {};
+    const priorFocus = document.activeElement;
     return new Promise((resolve)=>{
+      const dialogId = `ecapDialogTitle_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      const descId = `ecapDialogDesc_${Date.now()}_${Math.random().toString(16).slice(2)}`;
       const modal = el('div', {class:'ecap-modalBackdrop open', 'data-modal':'admin-action', 'aria-hidden':'false'});
-      const box = el('div', {class:'ecap-modal', role:'dialog', 'aria-modal':'true'});
+      const box = el('div', {class:'ecap-modal', role:'dialog', 'aria-modal':'true', 'aria-labelledby':dialogId});
+      if (options.message) box.setAttribute('aria-describedby', descId);
       if (options.danger) box.classList.add('danger');
       const form = el('form', {novalidate:''});
-      form.appendChild(el('div', {class:'ecap-modalTitle', text: options.title || 'Admin action'}));
-      if (options.message) form.appendChild(el('div', {class:'ecap-modalText', text: options.message}));
+      form.appendChild(el('div', {class:'ecap-modalTitle', id:dialogId, text: options.title || 'Admin action'}));
+      if (options.message) form.appendChild(el('div', {class:'ecap-modalText', id:descId, text: options.message}));
       const fieldsWrap = el('div', {class:'ecap-modalFields'});
       const controls = [];
       (options.fields || []).forEach((field)=>{
@@ -1804,6 +2030,9 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
         closed = true;
         document.removeEventListener('keydown', onKey);
         try{ modal.remove(); }catch(_){ }
+        try{
+          if (priorFocus && typeof priorFocus.focus === 'function') priorFocus.focus();
+        }catch(_){ }
         resolve(value);
       };
       const onKey = (e)=>{
@@ -1886,11 +2115,11 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
     titleRow.appendChild(titleBlock);
 
     const btns = el('div', {class:'ecap-headBtns'});
-    const btnRefresh = el('button', {class:'ecap-iconBtn', title:'Refresh', text:'⟳'});
-    const btnPin = el('button', {class:'ecap-iconBtn', title:'Pin/Unpin', text:'📌'});
-    const btnMax = el('button', {class:'ecap-iconBtn', title:'Maximize', text:'⛶'});
-    const btnMini = el('button', {class:'ecap-iconBtn', title:'Minimize', text:'▁'});
-    const btnClose = el('button', {class:'ecap-iconBtn danger', title:'Close', text:'✕'});
+    const btnRefresh = el('button', {class:'ecap-iconBtn', title:'Refresh', 'aria-label':'Refresh admin panel', text:'⟳'});
+    const btnPin = el('button', {class:'ecap-iconBtn', title:'Pin/Unpin', 'aria-label':'Pin or unpin admin panel', text:'📌'});
+    const btnMax = el('button', {class:'ecap-iconBtn', title:'Maximize', 'aria-label':'Maximize admin panel', text:'⛶'});
+    const btnMini = el('button', {class:'ecap-iconBtn', title:'Minimize', 'aria-label':'Minimize admin panel', text:'▁'});
+    const btnClose = el('button', {class:'ecap-iconBtn danger', title:'Close', 'aria-label':'Close admin panel', text:'✕'});
     btns.appendChild(btnRefresh);
     btns.appendChild(btnPin);
     btns.appendChild(btnMax);
@@ -1918,13 +2147,13 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
     ];
     const tabNames = tabGroups.flatMap(group => group[1]);
     const tabEls = {};
-    const tabGroupWrap = el('div', {class:'ecap-tabGroups'});
+    const tabGroupWrap = el('div', {class:'ecap-tabGroups', role:'tablist', 'aria-label':'Admin workspace tabs'});
     for (const [groupLabel, groupTabs] of tabGroups){
       const group = el('div', {class:'ecap-tabGroup'});
       group.appendChild(el('div', {class:'ecap-tabGroupTitle', text:groupLabel}));
       const btnWrap = el('div', {class:'ecap-tabGroupBtns'});
       for (const [key, ico, label] of groupTabs){
-        const t = el('button', {class:'ecap-tab', type:'button'});
+        const t = el('button', {class:'ecap-tab', type:'button', id:`ecapTab-${key}`, role:'tab', 'aria-selected':'false', 'aria-controls':`ecapSec-${key}`});
         t.appendChild(el('span', {class:'ico', text:ico}));
         t.appendChild(el('span', {text:label}));
         btnWrap.appendChild(t);
@@ -1935,16 +2164,16 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
     }
     tabs.appendChild(tabGroupWrap);
 
-    const secDash = el('div', {class:'ecap-section', 'data-sec':'dash'});
-    const secModeration = el('div', {class:'ecap-section', 'data-sec':'moderation'});
-    const secUsers = el('div', {class:'ecap-section', 'data-sec':'users'});
-    const secRooms = el('div', {class:'ecap-section', 'data-sec':'rooms'});
-    const secVoice = el('div', {class:'ecap-section', 'data-sec':'voice'});
-    const secAv = el('div', {class:'ecap-section', 'data-sec':'av'});
-    const secSafety = el('div', {class:'ecap-section', 'data-sec':'safety'});
-    const secRoles = el('div', {class:'ecap-section', 'data-sec':'roles'});
-    const secSettings = el('div', {class:'ecap-section', 'data-sec':'settings'});
-    const secAudit = el('div', {class:'ecap-section', 'data-sec':'audit'});
+    const secDash = el('div', {class:'ecap-section', 'data-sec':'dash', id:'ecapSec-dash', role:'tabpanel', 'aria-labelledby':'ecapTab-dash'});
+    const secModeration = el('div', {class:'ecap-section', 'data-sec':'moderation', id:'ecapSec-moderation', role:'tabpanel', 'aria-labelledby':'ecapTab-moderation'});
+    const secUsers = el('div', {class:'ecap-section', 'data-sec':'users', id:'ecapSec-users', role:'tabpanel', 'aria-labelledby':'ecapTab-users'});
+    const secRooms = el('div', {class:'ecap-section', 'data-sec':'rooms', id:'ecapSec-rooms', role:'tabpanel', 'aria-labelledby':'ecapTab-rooms'});
+    const secVoice = el('div', {class:'ecap-section', 'data-sec':'voice', id:'ecapSec-voice', role:'tabpanel', 'aria-labelledby':'ecapTab-voice'});
+    const secAv = el('div', {class:'ecap-section', 'data-sec':'av', id:'ecapSec-av', role:'tabpanel', 'aria-labelledby':'ecapTab-av'});
+    const secSafety = el('div', {class:'ecap-section', 'data-sec':'safety', id:'ecapSec-safety', role:'tabpanel', 'aria-labelledby':'ecapTab-safety'});
+    const secRoles = el('div', {class:'ecap-section', 'data-sec':'roles', id:'ecapSec-roles', role:'tabpanel', 'aria-labelledby':'ecapTab-roles'});
+    const secSettings = el('div', {class:'ecap-section', 'data-sec':'settings', id:'ecapSec-settings', role:'tabpanel', 'aria-labelledby':'ecapTab-settings'});
+    const secAudit = el('div', {class:'ecap-section', 'data-sec':'audit', id:'ecapSec-audit', role:'tabpanel', 'aria-labelledby':'ecapTab-audit'});
 
     body.appendChild(tabs);
     body.appendChild(secDash);
@@ -1964,21 +2193,44 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
     panelRef = panel;
 
     function setTab(key){
-      for (const [k, t] of Object.entries(tabEls)) t.classList.toggle('active', k===key);
-      secDash.classList.toggle('active', key==='dash');
-      secModeration.classList.toggle('active', key==='moderation');
-      secUsers.classList.toggle('active', key==='users');
-      secRooms.classList.toggle('active', key==='rooms');
-      secVoice.classList.toggle('active', key==='voice');
-      secAv.classList.toggle('active', key==='av');
-      secSafety.classList.toggle('active', key==='safety');
-      secRoles.classList.toggle('active', key==='roles');
-      secSettings.classList.toggle('active', key==='settings');
-      secAudit.classList.toggle('active', key==='audit');
+      for (const [k, t] of Object.entries(tabEls)){
+        const active = k === key;
+        t.classList.toggle('active', active);
+        t.setAttribute('aria-selected', active ? 'true' : 'false');
+        t.tabIndex = active ? 0 : -1;
+      }
+      const sections = {dash:secDash, moderation:secModeration, users:secUsers, rooms:secRooms, voice:secVoice, av:secAv, safety:secSafety, roles:secRoles, settings:secSettings, audit:secAudit};
+      for (const [k, section] of Object.entries(sections)){
+        const active = k === key;
+        section.classList.toggle('active', active);
+        section.hidden = !active;
+        section.setAttribute('aria-hidden', active ? 'false' : 'true');
+      }
       state.tab = key;
       saveState();
     }
     for (const [k,t] of Object.entries(tabEls)) t.addEventListener('click', ()=>setTab(k));
+    tabGroupWrap.addEventListener('keydown', (e)=>{
+      const keys = ['ArrowRight','ArrowDown','ArrowLeft','ArrowUp','Home','End'];
+      if (!keys.includes(e.key)) return;
+      const current = e.target && e.target.closest ? e.target.closest('.ecap-tab') : null;
+      if (!current) return;
+      const ordered = tabNames.map(([key]) => tabEls[key]).filter(Boolean);
+      const idx = ordered.indexOf(current);
+      if (idx < 0) return;
+      e.preventDefault();
+      let nextIdx = idx;
+      if (e.key === 'Home') nextIdx = 0;
+      else if (e.key === 'End') nextIdx = ordered.length - 1;
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') nextIdx = (idx - 1 + ordered.length) % ordered.length;
+      else nextIdx = (idx + 1) % ordered.length;
+      const next = ordered[nextIdx];
+      if (next){
+        const nextKey = Object.keys(tabEls).find(k => tabEls[k] === next);
+        if (nextKey) setTab(nextKey);
+        try{ next.focus(); }catch(_){ }
+      }
+    });
     body.addEventListener('click', (e)=>{
       const btn = e.target && e.target.closest ? e.target.closest('[data-ecap-goto]') : null;
       if (!btn) return;
@@ -2253,7 +2505,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
     }
 
 
-    secDash.querySelector('#ecapDashVoiceApply').addEventListener('click', ()=>applyVoiceSettings('dash'));
+    secDash.querySelector('#ecapDashVoiceApply').addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'dash:voice-limit', 'Saving', ()=>applyVoiceSettings('dash')));
     const diagBtn = document.getElementById('ecapOpenWebrtcDiag');
     if (diagBtn) diagBtn.addEventListener('click', () => { window.open('/webrtc-diagnostics', '_blank', 'noopener'); });
 
@@ -2350,7 +2602,12 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       return reason || actionLabel || 'Admin moderation';
     }
 
+    let profilePostModerationSeq = 0;
+    let profileReportsSeq = 0;
+    let profileBadgesSeq = 0;
+
     async function refreshProfilePostModeration(){
+      const seq = ++profilePostModerationSeq;
       const list = secModeration.querySelector('#ecapProfilePostModerationList');
       if (!list) return;
       const q = (secModeration.querySelector('#ecapProfilePostQuery')?.value || '').trim();
@@ -2359,6 +2616,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       clearNode(list);
       list.appendChild(listStatusNode('Loading profile posts…'));
       const j = await getJSON('/admin/profile_posts?' + qs);
+      if (seq !== profilePostModerationSeq) return;
       clearNode(list);
       if (!j || j.ok === false){
         list.appendChild(listStatusNode('Profile post moderation unavailable.'));
@@ -2388,27 +2646,27 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
 
         const actions = el('div', {class:'ecap-actions'});
         const commentsBtn = el('button', {class:'ecap-btn tight', type:'button', text:'Comments'});
-        commentsBtn.addEventListener('click', async ()=>{
+        commentsBtn.addEventListener('click', (e)=> withAdminAction(e.currentTarget, `profile-post:${post.id}:comments`, 'Loading', async ()=>{
           await refreshProfilePostComments(row, Number(post.id || 0));
-        });
+        }));
         actions.appendChild(commentsBtn);
         if (post.deleted_at){
           const restoreBtn = el('button', {class:'ecap-btn tight', type:'button', text:'Restore'});
-          restoreBtn.addEventListener('click', async ()=>{
+          restoreBtn.addEventListener('click', (e)=> withAdminAction(e.currentTarget, `profile-post:${post.id}:restore`, 'Restoring', async ()=>{
             const reason = profilePostReasonInput('Restore profile post');
             const r = await postForm('/admin/profile_posts/' + encodeURIComponent(String(post.id)) + '/restore', {reason});
             if (r && r.ok){ toast('ok', 'Post restored', `#${post.id}`); await refreshProfilePostModeration(); }
             else toast('err', 'Restore failed', r && r.error ? r.error : 'unknown');
-          });
+          }));
           actions.appendChild(restoreBtn);
         } else {
           const deleteBtn = el('button', {class:'ecap-btn danger tight', type:'button', text:'Remove'});
-          deleteBtn.addEventListener('click', async ()=>{
+          deleteBtn.addEventListener('click', (e)=> withAdminAction(e.currentTarget, `profile-post:${post.id}:remove`, 'Removing', async ()=>{
             const reason = profilePostReasonInput('Remove profile post');
             const r = await postForm('/admin/profile_posts/' + encodeURIComponent(String(post.id)) + '/delete', {reason});
             if (r && r.ok){ toast('ok', 'Post removed', `#${post.id}`); await refreshProfilePostModeration(); }
             else toast('err', 'Remove failed', r && r.error ? r.error : 'unknown');
-          });
+          }));
           actions.appendChild(deleteBtn);
         }
         row.append(info, actions);
@@ -2451,12 +2709,12 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
         item.appendChild(info);
         if (!comment.deleted_at){
           const del = el('button', {class:'ecap-btn danger tight', type:'button', text:'Remove'});
-          del.addEventListener('click', async ()=>{
+          del.addEventListener('click', (e)=> withAdminAction(e.currentTarget, `profile-post:${postId}:comment:${comment.id}:remove`, 'Removing', async ()=>{
             const reason = profilePostReasonInput('Remove profile comment');
             const r = await postForm('/admin/profile_posts/' + encodeURIComponent(String(postId)) + '/comments/' + encodeURIComponent(String(comment.id)) + '/delete', {reason});
             if (r && r.ok){ toast('ok', 'Comment removed', `#${comment.id}`); box.remove(); await refreshProfilePostComments(row, postId); }
             else toast('err', 'Comment remove failed', r && r.error ? r.error : 'unknown');
-          });
+          }));
           item.appendChild(del);
         }
         box.appendChild(item);
@@ -2472,6 +2730,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
     }
 
     async function refreshProfileReports(){
+      const seq = ++profileReportsSeq;
       const list = secModeration.querySelector('#ecapProfileReportsList');
       if (!list) return;
       const q = (secModeration.querySelector('#ecapProfileReportQuery')?.value || '').trim();
@@ -2480,6 +2739,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       clearNode(list);
       list.appendChild(listStatusNode('Loading profile reports…'));
       const j = await getJSON('/admin/profile_reports?' + qs);
+      if (seq !== profileReportsSeq) return;
       clearNode(list);
       if (!j || j.ok === false){
         list.appendChild(listStatusNode('Profile reports queue unavailable.'));
@@ -2511,26 +2771,26 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
         const actions = el('div', {class:'ecap-actions'});
         if (String(report.status || 'open') === 'open'){
           const dismiss = el('button', {class:'ecap-btn tight', type:'button', text:'Dismiss'});
-          dismiss.addEventListener('click', async ()=>{
+          dismiss.addEventListener('click', (e)=> withAdminAction(e.currentTarget, `profile-report:${report.id}:dismiss`, 'Dismissing', async ()=>{
             const reason = profileReportReasonInput('Dismiss profile report');
             const r = await postForm('/admin/profile_reports/' + encodeURIComponent(String(report.id)) + '/dismiss', {reason});
             if (r && r.ok){ toast('ok', 'Report dismissed', `#${report.id}`); await refreshProfileReports(); }
             else toast('err', 'Dismiss failed', r && r.error ? r.error : 'unknown');
-          });
+          }));
           const warn = el('button', {class:'ecap-btn warn tight', type:'button', text:'Warn user'});
-          warn.addEventListener('click', async ()=>{
+          warn.addEventListener('click', (e)=> withAdminAction(e.currentTarget, `profile-report:${report.id}:warn`, 'Warning', async ()=>{
             const reason = profileReportReasonInput('Your profile content was reported and reviewed by an admin. Please follow the chat rules.');
             const r = await postForm('/admin/profile_reports/' + encodeURIComponent(String(report.id)) + '/warn', {reason});
             if (r && r.ok){ toast('ok', 'Warning sent', report.target_username || 'user'); await refreshProfileReports(); }
             else toast('err', 'Warn failed', r && r.error ? r.error : 'unknown');
-          });
+          }));
           const remove = el('button', {class:'ecap-btn danger tight', type:'button', text:'Remove content'});
-          remove.addEventListener('click', async ()=>{
+          remove.addEventListener('click', (e)=> withAdminAction(e.currentTarget, `profile-report:${report.id}:remove-content`, 'Removing', async ()=>{
             const reason = profileReportReasonInput('Remove reported profile content');
             const r = await postForm('/admin/profile_reports/' + encodeURIComponent(String(report.id)) + '/delete_content', {reason});
             if (r && r.ok){ toast('ok', 'Reported content removed', `#${report.id}`); await refreshProfileReports(); await refreshProfilePostModeration(); }
             else toast('err', 'Remove failed', r && r.error ? r.error : 'unknown');
-          });
+          }));
           actions.append(dismiss, warn, remove);
         }
         row.append(info, actions);
@@ -2541,6 +2801,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
     function currentBadgeUsername(){ return String(secModeration.querySelector('#ecapProfileBadgeUser')?.value || '').trim(); }
 
     async function refreshProfileBadges(){
+      const seq = ++profileBadgesSeq;
       const list = secModeration.querySelector('#ecapProfileBadgeList');
       if (!list) return;
       const username = currentBadgeUsername();
@@ -2548,6 +2809,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       if (!username){ list.appendChild(listStatusNode('Enter a username to load badges.')); return; }
       list.appendChild(listStatusNode('Loading badges…'));
       const j = await getJSON('/admin/profile_badges/' + encodeURIComponent(username));
+      if (seq !== profileBadgesSeq || username !== currentBadgeUsername()) return;
       clearNode(list);
       if (!j || j.ok === false){
         list.appendChild(listStatusNode('Profile badge tools unavailable.'));
@@ -2562,11 +2824,11 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
         info.appendChild(el('div', {style:'font-weight:750', text:`${badge.label || badge.badge_key || 'Badge'} · ${badge.badge_key || ''}`}));
         info.appendChild(mutedNode(`assigned by ${badge.assigned_by || 'admin'}${badge.reason ? ` • ${badge.reason}` : ''}`));
         const del = el('button', {class:'ecap-btn danger tight', type:'button', text:'Remove'});
-        del.addEventListener('click', async ()=>{
+        del.addEventListener('click', (e)=> withAdminAction(e.currentTarget, `profile-badge:${username}:${badge.badge_key}:remove`, 'Removing', async ()=>{
           const r = await postForm('/admin/profile_badges/' + encodeURIComponent(username) + '/' + encodeURIComponent(String(badge.badge_key || '')) + '/delete', {reason:String(secModeration.querySelector('#ecapProfileBadgeReason')?.value || '').trim()});
           if (r && r.ok){ toast('ok', 'Badge removed', badge.badge_key || 'badge'); await refreshProfileBadges(); }
           else toast('err', 'Badge remove failed', r && r.error ? r.error : 'unknown');
-        });
+        }));
         row.append(info, del);
         list.appendChild(row);
       });
@@ -2583,16 +2845,16 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       else toast('err', 'Badge assign failed', r && r.error ? r.error : 'unknown');
     }
 
-    secModeration.querySelector('#ecapModerationRefresh').addEventListener('click', refreshModeration);
+    secModeration.querySelector('#ecapModerationRefresh').addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'moderation:refresh', 'Loading', refreshModeration));
     secModeration.querySelector('#ecapOpenSafety').addEventListener('click', ()=>setTab('safety'));
-    secModeration.querySelector('#ecapProfilePostRefresh')?.addEventListener('click', refreshProfilePostModeration);
+    secModeration.querySelector('#ecapProfilePostRefresh')?.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'profile-posts:refresh', 'Loading', refreshProfilePostModeration));
     secModeration.querySelector('#ecapProfilePostQuery')?.addEventListener('input', debounce(refreshProfilePostModeration, 320));
     secModeration.querySelector('#ecapProfilePostStatus')?.addEventListener('change', refreshProfilePostModeration);
-    secModeration.querySelector('#ecapProfileReportRefresh')?.addEventListener('click', refreshProfileReports);
+    secModeration.querySelector('#ecapProfileReportRefresh')?.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'profile-reports:refresh', 'Loading', refreshProfileReports));
     secModeration.querySelector('#ecapProfileReportQuery')?.addEventListener('input', debounce(refreshProfileReports, 320));
     secModeration.querySelector('#ecapProfileReportStatus')?.addEventListener('change', refreshProfileReports);
-    secModeration.querySelector('#ecapProfileBadgeLoad')?.addEventListener('click', refreshProfileBadges);
-    secModeration.querySelector('#ecapProfileBadgeAssign')?.addEventListener('click', assignProfileBadge);
+    secModeration.querySelector('#ecapProfileBadgeLoad')?.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'profile-badges:load', 'Loading', refreshProfileBadges));
+    secModeration.querySelector('#ecapProfileBadgeAssign')?.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'profile-badges:assign', 'Saving', assignProfileBadge));
     secModeration.querySelector('#ecapProfileBadgeUser')?.addEventListener('keydown', (ev)=>{ if (ev.key === 'Enter') refreshProfileBadges(); });
     refreshModeration();
     refreshProfilePostModeration();
@@ -2625,6 +2887,9 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
     const actMod = secUsers.querySelector('#ecapActMod');
 
     const userSearchState = { page: 1, hasMore: false, lastReturned: 0, loading: false };
+    let userSearchSeq = 0;
+    let userDetailSeq = 0;
+    let userTimelineSeq = 0;
 
     function updateUserPager(meta){
       const m = meta || {};
@@ -2804,7 +3069,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
     [cuPass, cuUser, cuEmail].forEach(elm => { if (elm) elm.addEventListener('input', updateCreatePasswordMeter); });
     updateCreatePasswordMeter();
 
-    if (cuBtn) cuBtn.addEventListener('click', async ()=>{
+    if (cuBtn) cuBtn.addEventListener('click', (ev)=> withAdminAction(cuBtn, 'create-user', 'Creating', async ()=>{
       const username = (cuUser?.value||'').trim();
       const password = cuPass?.value || '';
       const email = (cuEmail?.value||'').trim();
@@ -2826,7 +3091,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       } else {
         toast('err','Create user failed', j && j.error ? j.error : 'unknown');
       }
-    });
+    }));
 
     function appendUserBadges(host, u){
       if (!host) return;
@@ -2896,14 +3161,48 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       const limit = (qLimit && qLimit.value) ? qLimit.value : '50';
       const page = String(Math.max(1, userSearchState.page || 1));
       const qs = new URLSearchParams({q, mode, online, admins, status, limit, page}).toString();
+      const seq = ++userSearchSeq;
       userSearchState.loading = true;
       updateUserPager({page:userSearchState.page, returned:0, has_more:false});
-      const j = await getJSON('/admin/user_search?'+qs);
+      let j = await getJSON('/admin/user_search?'+qs);
+      if (seq !== userSearchSeq) return;
+
+      // beta.396: keep the admin Users panel usable on upgraded databases if
+      // the enhanced search endpoint hits schema drift. The backend is now
+      // schema-tolerant too, but this UI fallback gives admins a working
+      // username search even if an old server process or stale route is still loaded.
+      if (!j || !Array.isArray(j.users)) {
+        const legacyQs = new URLSearchParams({
+          prefix: q,
+          limit,
+          browse: q ? '0' : '1'
+        }).toString();
+        const legacy = await getJSON('/admin/users?' + legacyQs);
+        if (seq !== userSearchSeq) return;
+        if (legacy && Array.isArray(legacy.users)) {
+          j = {
+            ok: true,
+            users: legacy.users,
+            q,
+            mode: 'prefix',
+            limit: Number(limit) || 50,
+            page: userSearchState.page || 1,
+            returned: legacy.users.length,
+            has_more: !!legacy.has_more,
+            next_page: legacy.has_more ? ((userSearchState.page || 1) + 1) : null,
+            requires_query: false,
+            fallback: 'legacy_admin_users'
+          };
+          log(`admin user search fallback used for "${q || '*'}"`);
+        }
+      }
+
       userSearchState.loading = false;
-      if (j && j.users) renderSearchResults(j);
+      if (j && Array.isArray(j.users)) renderSearchResults(j);
       else {
         updateUserPager({page:userSearchState.page, returned:0, has_more:false});
-        setListStatus(resBox, 'User search unavailable.');
+        const detail = j && (j.error || j.message) ? ` (${j.error || j.message})` : '';
+        setListStatus(resBox, 'User search unavailable' + detail + '.');
       }
     }
 
@@ -2941,9 +3240,15 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
 
     async function loadUserDetail(u){
       if (!u) return;
-      selInp.value = u;
+      const requested = String(u || '').trim();
+      const seq = ++userDetailSeq;
+      selInp.value = requested;
+      clearNode(summaryBox);
+      summaryBox.appendChild(mutedNode(`Loading ${requested}…`));
+      [actSession,actAccount,actSecurity,actMod].forEach(clearNode);
 
-      const j = await getJSON('/admin/user_detail/' + encodeURIComponent(u));
+      const j = await getJSON('/admin/user_detail/' + encodeURIComponent(requested));
+      if (seq !== userDetailSeq || String(selInp.value || '').trim() !== requested) return;
       if (!j || !j.user){
         clearNode(summaryBox);
         summaryBox.appendChild(mutedNode('Not found.'));
@@ -2951,7 +3256,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
         return;
       }
       renderUserDetail(j);
-      refreshUserActivityTimeline(u);
+      refreshUserActivityTimeline(requested);
     }
 
     function timelineCategoryClass(category){
@@ -2995,6 +3300,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
 
     async function refreshUserActivityTimeline(username){
       const target = String(username || selInp?.value || '').trim();
+      const seq = ++userTimelineSeq;
       if (!target){
         clearNode(userTimelineBox);
         userTimelineBox.appendChild(listStatusNode('Load a user to view activity.'));
@@ -3007,6 +3313,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       if (userTimelineMeta) userTimelineMeta.textContent = `Loading ${target}…`;
       const qs = new URLSearchParams({days, limit:'100'}).toString();
       const j = await getJSON('/admin/users/' + encodeURIComponent(target) + '/activity_timeline?' + qs);
+      if (seq !== userTimelineSeq || String(selInp?.value || '').trim() !== target) return;
       if (!j || j.ok === false){
         clearNode(userTimelineBox);
         userTimelineBox.appendChild(listStatusNode('Activity timeline unavailable.'));
@@ -3053,7 +3360,11 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
 
       function addAction(group, label, fn, css){
         const b = el('button', {class:`ecap-btn tight ${css||''}`, text:label, type:'button'});
-        b.addEventListener('click', fn);
+        b.addEventListener('click', (ev)=>{
+          ev.preventDefault();
+          ev.stopPropagation();
+          withAdminAction(b, `user:${username}:${label}`, `${label}…`, ()=>fn(ev));
+        });
         group.appendChild(b);
       }
 
@@ -3195,6 +3506,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
     let roomsServerNowMs = 0;
     let roomsFetchedAtMs = 0;
     let roomsJanitorIntervalSeconds = 60;
+    let roomsRefreshSeq = 0;
 
     function parseAdminTimeMs(v){
       const ms = v ? new Date(v).getTime() : NaN;
@@ -3321,48 +3633,58 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
           left.appendChild(expiryEl);
         }
 
-        row.querySelector('[data-act="lock"]').addEventListener('click', async (e)=>{
+        row.querySelector('[data-act="lock"]').addEventListener('click', (e)=>{
           e.stopPropagation();
-          const j = await postForm((r.locked ? '/admin/unlock_room/' : '/admin/lock_room/') + encodeURIComponent(r.name), {});
-          if (j && j.ok){ log(`room ${r.name} lock=${!r.locked}`); toast('ok','Room updated', r.name); refreshRooms(); }
-          else toast('err','Room update failed', j && j.error ? j.error : 'unknown');
+          withAdminAction(e.currentTarget, `rooms:${r.name}:lock`, r.locked ? 'Unlocking' : 'Locking', async ()=>{
+            const j = await postForm((r.locked ? '/admin/unlock_room/' : '/admin/lock_room/') + encodeURIComponent(r.name), {});
+            if (j && j.ok){ log(`room ${r.name} lock=${!r.locked}`); toast('ok','Room updated', r.name); refreshRooms(); }
+            else toast('err','Room update failed', j && j.error ? j.error : 'unknown');
+          });
         });
-        row.querySelector('[data-act="ro"]').addEventListener('click', async (e)=>{
+        row.querySelector('[data-act="ro"]').addEventListener('click', (e)=>{
           e.stopPropagation();
-          const j = await postForm('/admin/set_room_readonly/' + encodeURIComponent(r.name), {readonly: r.readonly ? '0':'1'});
-          if (j && j.ok){ log(`room ${r.name} readonly=${!r.readonly}`); toast('ok','Room updated', r.name); refreshRooms(); }
-          else toast('err','Room update failed', j && j.error ? j.error : 'unknown');
+          withAdminAction(e.currentTarget, `rooms:${r.name}:readonly`, 'Saving', async ()=>{
+            const j = await postForm('/admin/set_room_readonly/' + encodeURIComponent(r.name), {readonly: r.readonly ? '0':'1'});
+            if (j && j.ok){ log(`room ${r.name} readonly=${!r.readonly}`); toast('ok','Room updated', r.name); refreshRooms(); }
+            else toast('err','Room update failed', j && j.error ? j.error : 'unknown');
+          });
         });
-        row.querySelector('[data-act="sm"]').addEventListener('click', async (e)=>{
+        row.querySelector('[data-act="sm"]').addEventListener('click', (e)=>{
           e.stopPropagation();
-          const cur = Number(r.slowmode_sec || 0) || 0;
-          const raw = await adminPrompt('Set room slowmode', `Slowmode seconds for ${r.name}. Use 0 to disable.`, {label:'Seconds', defaultValue:String(cur), inputmode:'numeric', required:true}, {confirmText:'Set slowmode', validate:(v)=> { const n = parseInt(String(v.value || '').trim(),10); return (!isFinite(n) || n < 0 || n > 3600) ? 'Seconds must be between 0 and 3600.' : ''; }});
-          if (raw === null) return;
-          const seconds = Math.max(0, Math.min(3600, parseInt(String(raw).trim()||'0',10) || 0));
-          const j = await postForm('/admin/set_room_slowmode/' + encodeURIComponent(r.name), {seconds: String(seconds)});
-          if (j && j.ok){ log(`room slowmode ${r.name}=${seconds}`); toast('ok','Slowmode updated', `${r.name} • ${seconds}s`); refreshRooms(); }
-          else toast('err','Slowmode update failed', j && j.error ? j.error : 'unknown');
+          withAdminAction(e.currentTarget, `rooms:${r.name}:slowmode`, 'Setting', async ()=>{
+            const cur = Number(r.slowmode_sec || 0) || 0;
+            const raw = await adminPrompt('Set room slowmode', `Slowmode seconds for ${r.name}. Use 0 to disable.`, {label:'Seconds', defaultValue:String(cur), inputmode:'numeric', required:true}, {confirmText:'Set slowmode', validate:(v)=> { const n = parseInt(String(v.value || '').trim(),10); return (!isFinite(n) || n < 0 || n > 3600) ? 'Seconds must be between 0 and 3600.' : ''; }});
+            if (raw === null) return;
+            const seconds = Math.max(0, Math.min(3600, parseInt(String(raw).trim()||'0',10) || 0));
+            const j = await postForm('/admin/set_room_slowmode/' + encodeURIComponent(r.name), {seconds: String(seconds)});
+            if (j && j.ok){ log(`room slowmode ${r.name}=${seconds}`); toast('ok','Slowmode updated', `${r.name} • ${seconds}s`); refreshRooms(); }
+            else toast('err','Slowmode update failed', j && j.error ? j.error : 'unknown');
+          });
         });
-        row.querySelector('[data-act="clear"]').addEventListener('click', async (e)=>{
+        row.querySelector('[data-act="clear"]').addEventListener('click', (e)=>{
           e.stopPropagation();
-          const ok = await adminConfirm('Clear room messages', `Clear messages in ${r.name}?`, {danger:true, confirmText:'Clear'});
-          if (!ok) return;
-          const j = await postForm('/admin/clear_room/' + encodeURIComponent(r.name), {});
-          if (j && j.ok){ log(`cleared room ${r.name}`); toast('ok','Room cleared', r.name); }
-          else toast('err','Clear failed', j && j.error ? j.error : 'unknown');
+          withAdminAction(e.currentTarget, `rooms:${r.name}:clear`, 'Clearing', async ()=>{
+            const ok = await adminConfirm('Clear room messages', `Clear messages in ${r.name}?`, {danger:true, confirmText:'Clear'});
+            if (!ok) return;
+            const j = await postForm('/admin/clear_room/' + encodeURIComponent(r.name), {});
+            if (j && j.ok){ log(`cleared room ${r.name}`); toast('ok','Room cleared', r.name); }
+            else toast('err','Clear failed', j && j.error ? j.error : 'unknown');
+          });
         });
         const delEl = row.querySelector('[data-act="del"]');
         if (delEl){
-          delEl.addEventListener('click', async (e)=>{
+          delEl.addEventListener('click', (e)=>{
             e.stopPropagation();
-            const form = await adminPromptFields('Delete room', `Delete room "${r.name}"? This cannot be undone.`, [
-              {name:'reason', label:'Reason (optional)', type:'textarea', required:false}
-            ], {danger:true, confirmText:'Delete room'});
-            if (!form) return;
-            const reason = form.reason || '';
-            const j = await postForm('/admin/rooms/delete/' + encodeURIComponent(r.name), {reason});
-            if (j && j.ok){ log(`deleted room ${r.name}`); toast('ok','Room deleted', r.name, 4500); refreshRooms(); }
-            else toast('err','Delete failed', (j && (j.message || j.error)) ? (j.message || j.error) : 'unknown');
+            withAdminAction(e.currentTarget, `rooms:${r.name}:delete`, 'Deleting', async ()=>{
+              const form = await adminPromptFields('Delete room', `Delete room "${r.name}"? This cannot be undone.`, [
+                {name:'reason', label:'Reason (optional)', type:'textarea', required:false}
+              ], {danger:true, confirmText:'Delete room'});
+              if (!form) return;
+              const reason = form.reason || '';
+              const j = await postForm('/admin/rooms/delete/' + encodeURIComponent(r.name), {reason});
+              if (j && j.ok){ log(`deleted room ${r.name}`); toast('ok','Room deleted', r.name, 4500); refreshRooms(); }
+              else toast('err','Delete failed', (j && (j.message || j.error)) ? (j.message || j.error) : 'unknown');
+            });
           });
         }
 
@@ -3375,19 +3697,25 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
     }
 
     async function refreshRooms(){
+      const seq = ++roomsRefreshSeq;
+      if (roomList) setListStatus(roomList, 'Loading rooms…');
       const j = await getJSON('/admin/rooms/list');
+      if (seq !== roomsRefreshSeq) return;
       if (j && j.rooms){
-        roomsCache = j.rooms || [];
+        roomsCache = Array.isArray(j.rooms) ? j.rooms : [];
         roomsServerNowMs = parseAdminTimeMs(j.ts);
         roomsFetchedAtMs = Date.now();
         roomsJanitorIntervalSeconds = Math.max(10, Number(j.janitor_interval_seconds || 60) || 60);
         renderRooms();
         updateRoomCountdowns();
+      } else if (roomList) {
+        roomsCache = [];
+        setListStatus(roomList, j && j.error ? j.error : 'Room list unavailable.');
       }
     }
 
     setInterval(updateRoomCountdowns, 1000);
-    secRooms.querySelector('#ecapRoomsReload').addEventListener('click', refreshRooms);
+    secRooms.querySelector('#ecapRoomsReload').addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'rooms:reload', 'Loading', refreshRooms));
     roomFilter.addEventListener('input', debounce(renderRooms, 80));
     refreshRooms();
 
@@ -3524,25 +3852,25 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       }
     }
 
-    secRooms.querySelector('#ecapRadioReload')?.addEventListener('click', refreshRadioCatalog);
+    secRooms.querySelector('#ecapRadioReload')?.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'rooms:radio-reload', 'Loading', refreshRadioCatalog));
     secRooms.querySelector('#ecapRadioAddStation')?.addEventListener('click', ()=>{
       if (radioStationList.querySelector('.ecap-item span.ecap-muted')) clearNode(radioStationList);
       addRadioStationRow({provider:'iHeartRadio'});
     });
-    secRooms.querySelector('#ecapRadioSave')?.addEventListener('click', saveRadioStations);
+    secRooms.querySelector('#ecapRadioSave')?.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'rooms:radio-save', 'Saving', saveRadioStations));
     radioRoomSelect?.addEventListener('change', renderRadioStationEditor);
     refreshRadioCatalog();
 
-    secRooms.querySelector('#ecapKickBtn').addEventListener('click', async ()=>{
+    secRooms.querySelector('#ecapKickBtn').addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'rooms:kick-user', 'Kicking', async ()=>{
       const username = (secRooms.querySelector('#ecapKRUser').value||'').trim();
       const room = (secRooms.querySelector('#ecapKRRoom').value||'').trim();
       if (!username || !room) return toast('warn','Missing fields','Enter username + room');
       const j = await postForm('/admin/kick_from_room', {username, room});
       if (j && j.ok){ log(`kicked ${username} from ${room}`); toast('ok','Kicked', `${username} • ${room}`); }
       else toast('err','Kick failed', j && j.error ? j.error : 'unknown');
-    });
+    }));
 
-    secRooms.querySelector('#ecapRoomBanBtn').addEventListener('click', async ()=>{
+    secRooms.querySelector('#ecapRoomBanBtn').addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'rooms:ban-user', 'Banning', async ()=>{
       const username = (secRooms.querySelector('#ecapKRUser').value||'').trim();
       const room = (secRooms.querySelector('#ecapKRRoom').value||'').trim();
       if (!username || !room) return toast('warn','Missing fields','Enter username + room');
@@ -3551,9 +3879,9 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       const j = await postForm('/admin/ban_from_room', {username, room, reason});
       if (j && j.ok){ log(`room ban ${username} in ${room}`); toast('ok','Room-banned', `${username} • ${room}`); }
       else toast('err','Room ban failed', j && j.error ? j.error : 'unknown');
-    });
+    }));
 
-    secRooms.querySelector('#ecapBroadcastBtn').addEventListener('click', async ()=>{
+    secRooms.querySelector('#ecapBroadcastBtn').addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'rooms:broadcast', 'Sending', async ()=>{
       const msg = (secRooms.querySelector('#ecapBroadcast').value||'').trim();
       if (!msg) return toast('warn','Missing message','Enter a broadcast message');
       const j = await postForm('/admin/global_broadcast', {message: msg});
@@ -3567,7 +3895,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       } else {
         toast('err','Broadcast failed', j && j.error ? j.error : 'unknown', 5200);
       }
-    });
+    }));
 
     // VOICE
     buildVoiceSection(secVoice);
@@ -3716,6 +4044,8 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
             ['Require DM E2EE','set_require_dm_e2ee','bool','Encrypted-only private messages.'],
             ['Allow plaintext DM fallback','set_allow_plaintext_dm_fallback','bool','Temporary legacy mode only; enabling it disables required DM E2EE.'],
             ['Require group chat E2EE','set_require_group_e2ee','bool','Blocks plaintext group messages server-side.'],
+            ['Allow legacy numeric group history','set_allow_legacy_numeric_group_history','bool','Off by default. Only enable temporarily to read old group rows stored under bare numeric room keys.'],
+            ['Disable legacy group attachment upload','set_disable_legacy_group_file_upload','bool','Keeps old attachment-message upload path disabled; use encrypted group files instead.'],
             ['Require private-room E2EE','set_require_private_room_e2ee','bool','Blocks plaintext messages in invite-only/private custom rooms.'],
             ['Require all room E2EE','set_require_room_e2ee','bool','Strict mode: blocks plaintext in every room except supported slash commands. Requires impact acknowledgement because public-room text moderation/search becomes limited.'],
             ['Encrypt sensitive profile fields at rest','set_encrypt_sensitive_profile_fields','bool','Encrypts new phone/address/location writes when a server key is available.'],
@@ -3832,7 +4162,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
           cdnBtn.title = 'Copy the tested Simple Notification Sounds CDN URL to paste into Online sound-pack .js URLs.';
           guideBtn.addEventListener('click', () => window.open('/admin/docs/online-sound-packs', '_blank', 'noopener,noreferrer'));
           sourceBtn.addEventListener('click', () => window.open('/admin/docs/online-chat-sound-sources', '_blank', 'noopener,noreferrer'));
-          cdnBtn.addEventListener('click', async () => {
+          cdnBtn.addEventListener('click', (e) => withAdminAction(e.currentTarget, 'settings:sound-cdn-copy', 'Copying', async () => {
             const url = 'https://cdn.jsdelivr.net/npm/simple-notification-sounds@1.0.0/dist/simple-notification-sounds.umd.js';
             try {
               await navigator.clipboard.writeText(url);
@@ -3840,7 +4170,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
             } catch {
               toast('warn', 'Copy failed', url, 7000);
             }
-          });
+          }));
           docRow.appendChild(guideBtn);
           docRow.appendChild(sourceBtn);
           docRow.appendChild(cdnBtn);
@@ -3925,7 +4255,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
         payload[key] = v;
       }
 
-      ['voice_enabled','p2p_file_enabled','giphy_enabled','disable_file_transfer_globally','disable_dm_files_globally','disable_group_files_globally','torrent_upload_enabled','torrent_scrape_enabled','torrent_public_fallback_scrape_enabled','torrent_dht_scrape_enabled','require_dm_e2ee','allow_plaintext_dm_fallback','require_group_e2ee','require_private_room_e2ee','require_room_e2ee','all_room_e2ee_impact_acknowledged','encrypt_sensitive_profile_fields','privacy_retention_enabled','privacy_ip_user_agent_retention_days','privacy_audit_detail_retention_days','room_show_sender_every_message','dm_show_sender_every_message','group_show_sender_every_message','sound_notifications_default','sound_pack_load_local_builtins','autoscale_rooms_enabled'].forEach(grabBool);
+      ['voice_enabled','p2p_file_enabled','giphy_enabled','disable_file_transfer_globally','disable_dm_files_globally','disable_group_files_globally','torrent_upload_enabled','torrent_scrape_enabled','torrent_public_fallback_scrape_enabled','torrent_dht_scrape_enabled','require_dm_e2ee','allow_plaintext_dm_fallback','require_group_e2ee','allow_legacy_numeric_group_history','disable_legacy_group_file_upload','require_private_room_e2ee','require_room_e2ee','all_room_e2ee_impact_acknowledged','encrypt_sensitive_profile_fields','privacy_retention_enabled','privacy_ip_user_agent_retention_days','privacy_audit_detail_retention_days','room_show_sender_every_message','dm_show_sender_every_message','group_show_sender_every_message','sound_notifications_default','sound_pack_load_local_builtins','autoscale_rooms_enabled'].forEach(grabBool);
       ['max_message_length','max_attachment_size','max_dm_file_bytes','max_group_upload_bytes','max_torrent_upload_bytes','max_user_file_storage_bytes','max_user_torrent_storage_bytes','max_torrent_total_size_bytes','torrent_dht_scrape_max_queries','group_msg_rate_limit','group_msg_rate_window_sec','presence_idle_minutes','presence_offline_minutes','custom_room_idle_minutes','custom_private_room_idle_minutes','janitor_interval_seconds','autoscale_room_capacity','autoscale_room_idle_minutes'].forEach(grabInt);
       ['torrent_dht_scrape_timeout_sec'].forEach(grabFloat);
       ['chat_text_animation','dm_text_animation','group_text_animation','sound_pack_default','sound_theme_default','sound_event_dm','sound_event_room_message','sound_event_group_message','sound_event_room_invite','sound_event_group_invite','sound_event_friend_request','sound_event_room_join','sound_event_file','sound_event_error'].forEach(grabText);
@@ -3951,8 +4281,8 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       }
     }
 
-    secSettings.querySelector('#ecapSettingsReload').addEventListener('click', loadGeneralSettings);
-    secSettings.querySelector('#ecapSettingsApply').addEventListener('click', applyGeneralSettings);
+    secSettings.querySelector('#ecapSettingsReload').addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'settings:reload', 'Loading', loadGeneralSettings));
+    secSettings.querySelector('#ecapSettingsApply').addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'settings:apply', 'Saving', applyGeneralSettings));
     loadGeneralSettings();
 
     // GIF SETTINGS (GIPHY)
@@ -4006,8 +4336,8 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       });
     }
 
-    secSettings.querySelector('#ecapGiphyReload')?.addEventListener('click', loadGifSettings);
-    secSettings.querySelector('#ecapGiphyApply')?.addEventListener('click', applyGifSettings);
+    secSettings.querySelector('#ecapGiphyReload')?.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'giphy:reload', 'Loading', loadGifSettings));
+    secSettings.querySelector('#ecapGiphyApply')?.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'giphy:apply', 'Saving', applyGifSettings));
     loadGifSettings();
 
     // ANTI-ABUSE SETTINGS
@@ -4027,6 +4357,13 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
         ['Room msg window seconds','anti_room_msg_rate_window_sec','int',''],
         ['DM msg rate limit','anti_dm_msg_rate_limit','text','Format: "N@seconds"'],
         ['DM msg window seconds','anti_dm_msg_rate_window_sec','int',''],
+        ['Room typing indicators','anti_enable_room_typing_indicators','bool','Default off; room chat typing indicators stay disabled unless enabled here'],
+        ['DM typing indicators','anti_enable_dm_typing_indicators','bool','Shows "user is typing" in private message windows'],
+        ['Group typing indicators','anti_enable_group_typing_indicators','bool','Shows typing status in group chat windows'],
+        ['DM typing rate limit','anti_dm_typing_rate_limit','text','Format: "N@seconds"; protects PM typing loops'],
+        ['DM typing window seconds','anti_dm_typing_rate_window_sec','int',''],
+        ['Group typing rate limit','anti_group_typing_rate_limit','text','Format: "N@seconds"; protects group typing loops'],
+        ['Group typing window seconds','anti_group_typing_rate_window_sec','int',''],
         ['File offer rate limit','anti_file_offer_rate_limit','text','Format: "N@seconds"'],
         ['File offer window seconds','anti_file_offer_rate_window_sec','int',''],
         ['Room GIF rate limit','anti_room_gif_rate_limit','text','Format: "N@seconds"'],
@@ -4114,9 +4451,9 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
         payload[realKey] = v;
       }
 
-      ['allow_user_create_rooms','dup_msg_normalize','block_custom_room_terms_enabled','block_registration_terms_enabled'].forEach(grabBool);
+      ['allow_user_create_rooms','dup_msg_normalize','block_custom_room_terms_enabled','block_registration_terms_enabled','enable_room_typing_indicators','enable_dm_typing_indicators','enable_group_typing_indicators'].forEach(grabBool);
       [
-        'room_msg_rate_window_sec','dm_msg_rate_window_sec','file_offer_rate_window_sec','room_gif_rate_window_sec','room_torrent_rate_window_sec',
+        'room_msg_rate_window_sec','dm_msg_rate_window_sec','dm_typing_rate_window_sec','group_typing_rate_window_sec','file_offer_rate_window_sec','room_gif_rate_window_sec','room_torrent_rate_window_sec',
         'room_typing_rate_window_sec','room_reaction_rate_window_sec','room_media_action_rate_window_sec','room_media_presence_rate_window_sec',
         'room_catalog_rate_window_sec','room_counts_rate_window_sec','wave_user_rate_window_sec','room_control_rate_window_sec','room_slowmode_default_sec',
         'antiabuse_strikes_before_mute','antiabuse_strike_window_sec','antiabuse_auto_mute_minutes',
@@ -4126,7 +4463,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
         'dup_msg_window_sec','dup_msg_max','dup_msg_min_length'
       ].forEach(grabInt);
       [
-        'room_msg_rate_limit','dm_msg_rate_limit','file_offer_rate_limit','room_gif_rate_limit','room_torrent_rate_limit',
+        'room_msg_rate_limit','dm_msg_rate_limit','dm_typing_rate_limit','group_typing_rate_limit','file_offer_rate_limit','room_gif_rate_limit','room_torrent_rate_limit',
         'room_typing_rate_limit','room_reaction_rate_limit','room_media_action_rate_limit','room_media_presence_rate_limit',
         'room_catalog_rate_limit','room_counts_rate_limit','wave_user_rate_limit','room_control_rate_limit',
         'room_join_rate_limit','room_create_rate_limit','friend_req_rate_limit','blocked_custom_room_terms','blocked_registration_terms'
@@ -4142,11 +4479,11 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       }
     }
 
-    secSafety.querySelector('#ecapAntiReload').addEventListener('click', loadAntiAbuseSettings);
-    secSafety.querySelector('#ecapAntiApply').addEventListener('click', applyAntiAbuseSettings);
+    secSafety.querySelector('#ecapAntiReload').addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'anti-abuse:reload', 'Loading', loadAntiAbuseSettings));
+    secSafety.querySelector('#ecapAntiApply').addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'anti-abuse:apply', 'Saving', applyAntiAbuseSettings));
     loadAntiAbuseSettings();
 
-    secSafety.querySelector('#ecapBanIpBtn')?.addEventListener('click', async ()=>{
+    secSafety.querySelector('#ecapBanIpBtn')?.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'safety:ban-ip', 'Banning', async ()=>{
       const ip = (secSafety.querySelector('#ecapBanIpAddress')?.value || '').trim();
       const reason = (secSafety.querySelector('#ecapBanIpReason')?.value || '').trim() || 'Manual IP ban';
       if (!ip) return toast('warn', 'Missing IP', 'Enter an IPv4 or IPv6 address first');
@@ -4165,7 +4502,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       } else {
         toast('err', 'IP ban failed', j && (j.message || j.error) ? (j.message || j.error) : 'unknown', 5200);
       }
-    });
+    }));
 
     async function refreshIncidentMode(){
       const j = await getJSON('/admin/incident_mode');
@@ -4176,7 +4513,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       node.textContent = `Incident mode: ${mode}${incident.enabled ? ' • active' : ''}`;
       node.className = `ecap-pill ${incident.enabled ? 'warn' : 'ok'}`;
     }
-    secSafety.querySelector('#ecapIncidentApply').addEventListener('click', async ()=>{
+    secSafety.querySelector('#ecapIncidentApply').addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'safety:incident-apply', 'Applying', async ()=>{
       const mode = (secSafety.querySelector('#ecapIncidentPreset').value || '').trim();
       const persist = !!secSafety.querySelector('#ecapIncidentPersist').checked;
       const j = await postForm('/admin/incident_mode/apply', {mode, persist: persist ? '1' : '0'});
@@ -4188,8 +4525,8 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       } else {
         toast('err', 'Incident mode failed', j && j.error ? j.error : 'unknown');
       }
-    });
-    secSafety.querySelector('#ecapIncidentDisable').addEventListener('click', async ()=>{
+    }));
+    secSafety.querySelector('#ecapIncidentDisable').addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'safety:incident-disable', 'Disabling', async ()=>{
       const persist = !!secSafety.querySelector('#ecapIncidentPersist').checked;
       const j = await postForm('/admin/incident_mode/disable', {persist: persist ? '1' : '0'});
       if (j && j.ok){
@@ -4200,13 +4537,17 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       } else {
         toast('err', 'Disable failed', j && j.error ? j.error : 'unknown');
       }
-    });
+    }));
     refreshIncidentMode();
 
     const rolesState = {roles: [], permissions: [], currentRole: null};
+    let rolesRefreshSeq = 0;
+    let rolePermissionSeq = 0;
     async function refreshRolesUI(){
+      const seq = ++rolesRefreshSeq;
       const rolesResp = await getJSON('/admin/roles');
       const permsResp = await getJSON('/admin/permissions');
+      if (seq !== rolesRefreshSeq) return;
       rolesState.roles = (rolesResp && rolesResp.roles) ? rolesResp.roles : [];
       rolesState.permissions = (permsResp && permsResp.permissions) ? permsResp.permissions : [];
       const list = secRoles.querySelector('#ecapRolesList');
@@ -4248,15 +4589,15 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
           row.appendChild(info);
           const btns = el('div', {class:'ecap-actions'});
           const inspect = el('button', {class:'ecap-btn tight', text:'Inspect', type:'button'});
-          inspect.addEventListener('click', ()=>selectRole(r.name));
+          inspect.addEventListener('click', (e)=> withAdminAction(e.currentTarget, `roles:${r.name}:inspect`, 'Loading', ()=>selectRole(r.name)));
           btns.appendChild(inspect);
           if (!r.protected){
             const del = el('button', {class:'ecap-btn danger tight', text:'Delete', type:'button'});
-            del.addEventListener('click', async ()=>{
+            del.addEventListener('click', (e)=> withAdminAction(e.currentTarget, `roles:${r.name}:delete`, 'Deleting', async ()=>{
               const j = await postForm('/admin/role/delete', {name: r.name});
               if (j && j.ok){ toast('ok', 'Role deleted', r.name); refreshRolesUI(); }
               else toast('err', 'Delete role failed', j && j.error ? j.error : 'unknown');
-            });
+            }));
             btns.appendChild(del);
           }
           row.appendChild(btns);
@@ -4266,12 +4607,14 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       if (!rolesState.currentRole && rolesState.roles.length) selectRole(rolesState.roles[0].name);
     }
     async function selectRole(roleName){
+      const seq = ++rolePermissionSeq;
       rolesState.currentRole = roleName;
       const head = secRoles.querySelector('#ecapRolesCurrentRole');
       if (head) head.textContent = `Role: ${roleName}`;
       const wrap = secRoles.querySelector('#ecapRolePermissions');
       if (!wrap) return;
       const roleResp = await getJSON('/admin/role/' + encodeURIComponent(roleName) + '/permissions');
+      if (seq !== rolePermissionSeq || rolesState.currentRole !== roleName) return;
       const current = new Set((roleResp && roleResp.permissions) ? roleResp.permissions : []);
       clearNode(wrap);
       rolesState.permissions.forEach(meta=>{
@@ -4298,30 +4641,38 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
         label.appendChild(info);
         row.appendChild(label);
         cb.addEventListener('change', async ()=>{
-          const url = cb.checked ? '/admin/role/add_permission' : '/admin/role/remove_permission';
-          const j = await postForm(url, {role: roleName, permission: meta.name});
-          if (j && j.ok){ toast('ok', cb.checked ? 'Permission added' : 'Permission removed', `${roleName} • ${meta.name}`); }
-          else { cb.checked = !cb.checked; toast('err', 'Permission update failed', j && j.error ? j.error : 'unknown'); }
+          const desired = !!cb.checked;
+          cb.disabled = true;
+          cb.setAttribute('aria-busy', 'true');
+          const url = desired ? '/admin/role/add_permission' : '/admin/role/remove_permission';
+          try{
+            const j = await postForm(url, {role: roleName, permission: meta.name});
+            if (j && j.ok){ toast('ok', desired ? 'Permission added' : 'Permission removed', `${roleName} • ${meta.name}`); }
+            else { cb.checked = !desired; toast('err', 'Permission update failed', j && j.error ? j.error : 'unknown'); }
+          } finally {
+            cb.disabled = false;
+            cb.removeAttribute('aria-busy');
+          }
         });
         wrap.appendChild(row);
       });
     }
-    secRoles.querySelector('#ecapRoleCreate').addEventListener('click', async ()=>{
+    secRoles.querySelector('#ecapRoleCreate').addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'roles:create', 'Creating', async ()=>{
       const name = (secRoles.querySelector('#ecapNewRoleName').value || '').trim().toLowerCase();
       if (!name) return toast('warn', 'Missing role name', 'Enter a role name first');
       const j = await postForm('/admin/role/create', {name});
       if (j && j.ok){ toast('ok', 'Role created', name); secRoles.querySelector('#ecapNewRoleName').value = ''; refreshRolesUI(); }
       else toast('err', 'Create role failed', j && j.error ? j.error : 'unknown');
-    });
-    secRoles.querySelector('#ecapRoleClone').addEventListener('click', async ()=>{
+    }));
+    secRoles.querySelector('#ecapRoleClone').addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'roles:clone', 'Cloning', async ()=>{
       const source = (secRoles.querySelector('#ecapRoleCloneSource').value || '').trim();
       const name = (secRoles.querySelector('#ecapRoleCloneName').value || '').trim().toLowerCase();
       if (!source || !name) return toast('warn', 'Missing clone fields', 'Choose a source role and clone name');
       const j = await postForm('/admin/role/clone', {source, name});
       if (j && j.ok){ toast('ok', 'Role cloned', `${source} → ${name}`); secRoles.querySelector('#ecapRoleCloneName').value = ''; refreshRolesUI(); }
       else toast('err', 'Clone failed', j && j.error ? j.error : 'unknown');
-    });
-    secRoles.querySelector('#ecapRolesLoadUser').addEventListener('click', async ()=>{
+    }));
+    secRoles.querySelector('#ecapRolesLoadUser').addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'roles:load-user', 'Loading', async ()=>{
       const username = (secRoles.querySelector('#ecapRolesUser').value || '').trim();
       if (!username) return toast('warn', 'Missing username', 'Enter a username first');
       const [rolesResp, permsResp] = await Promise.all([
@@ -4346,11 +4697,11 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
           row.appendChild(info);
           if (!['admin','moderator','viewer'].includes(roleName)){
             const btn = el('button', {class:'ecap-btn danger tight', text:'Remove', type:'button'});
-            btn.addEventListener('click', async ()=>{
+            btn.addEventListener('click', (e)=> withAdminAction(e.currentTarget, `roles:user:${username}:${roleName}:remove`, 'Removing', async ()=>{
               const j = await postForm('/admin/user/' + encodeURIComponent(username) + '/remove_role', {role: roleName});
               if (j && j.ok){ toast('ok', 'Role removed', `${username} • ${roleName}`); secRoles.querySelector('#ecapRolesLoadUser').click(); }
               else toast('err', 'Remove role failed', j && j.error ? j.error : 'unknown');
-            });
+            }));
             row.appendChild(btn);
           }
           summary.appendChild(row);
@@ -4369,8 +4720,8 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
           perms.appendChild(row);
         });
       }
-    });
-    secRoles.querySelector('#ecapExplainPermissionBtn')?.addEventListener('click', async ()=>{
+    }));
+    secRoles.querySelector('#ecapExplainPermissionBtn')?.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'roles:explain', 'Checking', async ()=>{
       const username = (secRoles.querySelector('#ecapRolesUser').value || '').trim();
       const permission = (secRoles.querySelector('#ecapExplainPermission').value || '').trim();
       const out = secRoles.querySelector('#ecapPermissionExplain');
@@ -4384,7 +4735,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
         if (out) out.textContent = j && j.error ? j.error : 'Explain failed.';
         toast('err', 'Explain failed', j && j.error ? j.error : 'unknown');
       }
-    });
+    }));
     refreshRolesUI();
 
     // AUDIT
@@ -4433,7 +4784,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
         auditList.appendChild(row);
       }
     }
-    secAudit.querySelector('#ecapAuditRefresh').addEventListener('click', refreshAudit);
+    secAudit.querySelector('#ecapAuditRefresh').addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'audit:refresh', 'Loading', refreshAudit));
     [auditQ, auditActor, auditAction, auditTarget].forEach(inp=>inp.addEventListener('input', debounce(refreshAudit, 260)));
     refreshAudit();
 
@@ -4925,64 +5276,66 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       }
     }
 
-    btnRefresh.addEventListener('click', ()=>{
-      refreshStats();
-      refreshModeration();
-      refreshRooms();
-      refreshIncidentMode();
-      refreshRolesUI();
-      refreshAudit();
-      runSearch();
-      refreshVoiceSettings();
-      refreshIceSettings();
-      refreshMediaStatus();
-      refreshDiagnostics();
-      refreshAnalytics();
+    btnRefresh.addEventListener('click', ()=> withAdminAction(btnRefresh, 'admin:refresh-all', 'Refreshing', async ()=>{
+      await Promise.allSettled([
+        refreshStats(),
+        refreshModeration(),
+        refreshRooms(),
+        refreshIncidentMode(),
+        refreshRolesUI(),
+        refreshAudit(),
+        runSearch(),
+        refreshVoiceSettings(),
+        refreshIceSettings(),
+        refreshMediaStatus(),
+        refreshDiagnostics(),
+        refreshAnalytics()
+      ]);
       toast('info','Refreshed','Stats + lists updated');
       log('manual refresh');
-    });
+    }));
 
     const voiceSettingsReloadBtn = secVoice.querySelector('#ecapVoiceSettingsReload');
-    if (voiceSettingsReloadBtn) voiceSettingsReloadBtn.addEventListener('click', refreshVoiceSettings);
+    if (voiceSettingsReloadBtn) voiceSettingsReloadBtn.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'voice:reload', 'Loading', refreshVoiceSettings));
     const voiceSettingsApplyBtn = secVoice.querySelector('#ecapVoiceSettingsApply');
-    if (voiceSettingsApplyBtn) voiceSettingsApplyBtn.addEventListener('click', ()=>applyVoiceSettings('voice'));
+    if (voiceSettingsApplyBtn) voiceSettingsApplyBtn.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'voice:apply', 'Saving', ()=>applyVoiceSettings('voice')));
     const iceReloadBtn = secVoice.querySelector('#ecapIceReload');
-    if (iceReloadBtn) iceReloadBtn.addEventListener('click', refreshIceSettings);
+    if (iceReloadBtn) iceReloadBtn.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'ice:reload', 'Loading', refreshIceSettings));
     const iceApplyBtn = secVoice.querySelector('#ecapIceApply');
-    if (iceApplyBtn) iceApplyBtn.addEventListener('click', applyIceSettings);
+    if (iceApplyBtn) iceApplyBtn.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'ice:apply', 'Saving', applyIceSettings));
 
     const mediaRefreshBtn = secAv.querySelector('#ecapMediaRefresh');
-    if (mediaRefreshBtn) mediaRefreshBtn.addEventListener('click', refreshMediaStatus);
+    if (mediaRefreshBtn) mediaRefreshBtn.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'media:refresh', 'Loading', refreshMediaStatus));
     const webcamEnabledToggle = secAv.querySelector('#ecapWebcamEnabled');
     if (webcamEnabledToggle) webcamEnabledToggle.addEventListener('change', () => {
       const modeSel = secAv.querySelector('#ecapAvModeSelect');
       if (webcamEnabledToggle.checked && modeSel && modeSel.value !== 'echo') modeSel.value = 'echo';
     });
     const mediaApplyBtn = secAv.querySelector('#ecapMediaApply');
-    if (mediaApplyBtn) mediaApplyBtn.addEventListener('click', applyMediaSettings);
+    if (mediaApplyBtn) mediaApplyBtn.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'media:apply', 'Saving', applyMediaSettings));
 
     const testLabBtn = secDash.querySelector('#ecapOpenTestLab');
-    if (testLabBtn) testLabBtn.addEventListener('click', openAdminTestLab);
+    if (testLabBtn) testLabBtn.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'test-lab:open', 'Opening', openAdminTestLab));
     const securityRefreshBtn = secDash.querySelector('#ecapSecurityRefresh');
-    if (securityRefreshBtn) securityRefreshBtn.addEventListener('click', refreshSecurityStatus);
+    if (securityRefreshBtn) securityRefreshBtn.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'security:refresh', 'Loading', refreshSecurityStatus));
     const securityFinishSetupBtn = secDash.querySelector('#ecapSecurityFinishSetup');
-    if (securityFinishSetupBtn) securityFinishSetupBtn.addEventListener('click', ()=>runProfileSecurityAction('finish_security_setup', 'Security setup finished'));
+    if (securityFinishSetupBtn) securityFinishSetupBtn.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'security:finish', 'Running', ()=>runProfileSecurityAction('finish_security_setup', 'Security setup finished')));
     const securityRetentionBtn = secDash.querySelector('#ecapSecurityRunRetention');
-    if (securityRetentionBtn) securityRetentionBtn.addEventListener('click', runPrivacyRetentionNow);
+    if (securityRetentionBtn) securityRetentionBtn.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'security:retention', 'Running', runPrivacyRetentionNow));
     const securityEncryptProfilesBtn = secDash.querySelector('#ecapSecurityEncryptProfiles');
-    if (securityEncryptProfilesBtn) securityEncryptProfilesBtn.addEventListener('click', ()=>runProfileSecurityAction('encrypt_plaintext_profile_fields', 'Profile field encryption complete'));
+    if (securityEncryptProfilesBtn) securityEncryptProfilesBtn.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'security:encrypt-profiles', 'Encrypting', ()=>runProfileSecurityAction('encrypt_plaintext_profile_fields', 'Profile field encryption complete')));
     const securityEncryptEmailsBtn = secDash.querySelector('#ecapSecurityEncryptEmails');
-    if (securityEncryptEmailsBtn) securityEncryptEmailsBtn.addEventListener('click', ()=>runProfileSecurityAction('encrypt_plaintext_emails', 'Email encryption complete'));
+    if (securityEncryptEmailsBtn) securityEncryptEmailsBtn.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'security:encrypt-emails', 'Encrypting', ()=>runProfileSecurityAction('encrypt_plaintext_emails', 'Email encryption complete')));
     const securityRotateProfilesBtn = secDash.querySelector('#ecapSecurityRotateProfiles');
-    if (securityRotateProfilesBtn) securityRotateProfilesBtn.addEventListener('click', ()=>runProfileSecurityAction('rotate_profile_field_key', 'Profile field rotation complete'));
+    if (securityRotateProfilesBtn) securityRotateProfilesBtn.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'security:rotate-profiles', 'Rotating', ()=>runProfileSecurityAction('rotate_profile_field_key', 'Profile field rotation complete')));
     const securityBackupBtn = secDash.querySelector('#ecapSecurityBackup');
-    if (securityBackupBtn) securityBackupBtn.addEventListener('click', ()=>runProfileSecurityAction('create_security_backup', 'Security backup created'));
+    if (securityBackupBtn) securityBackupBtn.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'security:backup', 'Backing up', ()=>runProfileSecurityAction('create_security_backup', 'Security backup created')));
     const securityRestoreBackupBtn = secDash.querySelector('#ecapSecurityRestoreBackup');
-    if (securityRestoreBackupBtn) securityRestoreBackupBtn.addEventListener('click', ()=>runProfileSecurityAction('restore_latest_security_backup', 'Security backup restored'));
+    if (securityRestoreBackupBtn) securityRestoreBackupBtn.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'security:restore-backup', 'Restoring', ()=>runProfileSecurityAction('restore_latest_security_backup', 'Security backup restored')));
     const diagRefreshBtn = secDash.querySelector('#ecapDiagRefresh');
-    if (diagRefreshBtn) diagRefreshBtn.addEventListener('click', refreshDiagnostics);
+    if (diagRefreshBtn) diagRefreshBtn.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'diagnostics:refresh', 'Running', refreshDiagnostics));
     const analyticsRefreshBtn = secDash.querySelector('#ecapAnalyticsRefresh');
-    if (analyticsRefreshBtn) analyticsRefreshBtn.addEventListener('click', refreshAnalytics);
+    if (analyticsRefreshBtn) analyticsRefreshBtn.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'analytics:refresh', 'Loading', refreshAnalytics));
 
     refreshVoiceSettings();
     refreshIceSettings();
@@ -5013,8 +5366,8 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
     // Initial population
     runSearch();
 
-    log('admin panel injected (v4 readability)');
-    toast('ok','Admin panel ready', 'v4 high-contrast UI loaded');
+    log('admin panel injected (v8 admin reauth deep recheck)');
+    toast('ok','Admin panel ready', 'Admin reauth deep race guards loaded');
   }
 
   function boot(){

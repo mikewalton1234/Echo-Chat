@@ -16,6 +16,8 @@ from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from secret_manager import resolve_secret, stable_secret_key_material
+
 SENSITIVE_FIELD_PREFIX = "ecenc:v1:"
 _FIELD_KEY_ENV = "ECHOCHAT_PROFILE_FIELD_KEY"
 _PREVIOUS_FIELD_KEYS_ENV = "ECHOCHAT_PROFILE_FIELD_PREVIOUS_KEYS"
@@ -58,10 +60,8 @@ def _split_key_list(raw: Any) -> list[str]:
 def _key_material(settings: dict | None = None) -> str:
     settings = settings or {}
     return (
-        os.getenv(_FIELD_KEY_ENV)
-        or str(settings.get("profile_field_encryption_key") or "").strip()
-        or os.getenv("SECRET_KEY")
-        or str(settings.get("secret_key") or "").strip()
+        resolve_secret(settings, "profile_field_encryption_key")
+        or stable_secret_key_material(settings)
     )
 
 

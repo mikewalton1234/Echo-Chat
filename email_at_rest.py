@@ -18,6 +18,8 @@ from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from secret_manager import resolve_secret, stable_profile_field_key_material, stable_secret_key_material
+
 EMAIL_ENCRYPTED_PREFIX = "ecemail:v1:"
 _EMAIL_FIELD_KEY_ENV = "ECHOCHAT_EMAIL_FIELD_KEY"
 _EMAIL_HASH_KEY_ENV = "ECHOCHAT_EMAIL_HASH_KEY"
@@ -47,20 +49,15 @@ def normalize_email(value: Any) -> str:
 def _email_key_material(settings: dict | None = None) -> str:
     settings = settings or {}
     return (
-        os.getenv(_EMAIL_FIELD_KEY_ENV)
-        or str(settings.get("email_field_encryption_key") or "").strip()
-        or os.getenv("ECHOCHAT_PROFILE_FIELD_KEY")
-        or str(settings.get("profile_field_encryption_key") or "").strip()
-        or os.getenv("SECRET_KEY")
-        or str(settings.get("secret_key") or "").strip()
+        resolve_secret(settings, "email_field_encryption_key")
+        or stable_profile_field_key_material(settings)
     )
 
 
 def _hash_key_material(settings: dict | None = None) -> str:
     settings = settings or {}
     return (
-        os.getenv(_EMAIL_HASH_KEY_ENV)
-        or str(settings.get("email_hash_key") or "").strip()
+        resolve_secret(settings, "email_hash_key")
         or _email_key_material(settings)
     )
 

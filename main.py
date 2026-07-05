@@ -11,6 +11,10 @@ credentials in environment variables or a secret manager, or explicitly set
 
 from __future__ import annotations
 
+from env_loader import load_project_dotenv
+
+load_project_dotenv()
+
 import os
 import shutil
 import subprocess
@@ -32,6 +36,16 @@ from pathlib import Path
 from constants import CONFIG_FILE, sanitize_postgres_dsn
 from constants import DEFAULT_SERVER_NAME, server_display_name
 from secrets_policy import persist_secrets_enabled, scrub_secrets_for_persist
+from secret_manager import (
+    ensure_core_runtime_secrets,
+    ensure_secret,
+    format_env_bundle,
+    generate_secret_bundle,
+    is_placeholder_secret,
+    resolve_secret,
+    write_env_secrets,
+)
+from scaled_redis_autoconfig import apply_scaled_runtime_safety_defaults, scaled_realtime_requested, scaled_redis_summary_lines
 
 
 def _load_setup_helpers():
@@ -70,6 +84,8 @@ def _fallback_default_settings() -> dict:
         "require_dm_e2ee": True,
         "allow_plaintext_dm_fallback": False,
         "require_group_e2ee": True,
+        "allow_legacy_numeric_group_history": False,
+        "disable_legacy_group_file_upload": True,
         "require_private_room_e2ee": True,
         "require_room_e2ee": False,
         "encrypt_sensitive_profile_fields": True,
@@ -78,6 +94,19 @@ def _fallback_default_settings() -> dict:
         "privacy_retention_enabled": True,
         "privacy_ip_user_agent_retention_days": 30,
         "privacy_audit_detail_retention_days": 90,
+        "privacy_retention_batch_limit": 500,
+        "cleanup_expired_auth_enabled": True,
+        "cleanup_orphan_auth_enabled": True,
+        "auth_token_retention_days": 30,
+        "revoked_session_retention_days": 30,
+        "password_reset_token_retention_days": 7,
+        "orphan_auth_retention_days": 1,
+        "auth_cleanup_batch_limit": 500,
+        "cleanup_revoked_private_files_enabled": True,
+        "cleanup_orphan_private_file_blobs_enabled": True,
+        "revoked_private_file_retention_days": 7,
+        "orphan_private_file_grace_minutes": 60,
+        "private_file_cleanup_batch_limit": 500,
         "all_room_e2ee_impact_acknowledged": False,
     }
 
@@ -85,19 +114,23 @@ def _fallback_default_settings() -> dict:
 def _safe_default_settings() -> dict:
     try:
         get_default_settings, _, _ = _load_setup_helpers()
-        return get_default_settings()
+        settings = get_default_settings()
     except Exception:
-        return _fallback_default_settings()
+        settings = _fallback_default_settings()
+    apply_scaled_runtime_safety_defaults(settings)
+    return settings
 
 
 def _safe_normalize_setup_settings(settings: dict) -> dict:
     try:
         _, _, normalize_setup_settings = _load_setup_helpers()
-        return normalize_setup_settings(settings)
+        out = normalize_setup_settings(settings)
     except Exception:
         fallback = _fallback_default_settings()
         fallback.update(settings or {})
-        return fallback
+        out = fallback
+    apply_scaled_runtime_safety_defaults(out)
+    return out
 
 
 def _build_postgres_dsn(parts: dict) -> str:
@@ -202,7 +235,7 @@ def save_settings(path: Path, settings: dict) -> None:
 
 
 def _env_any_present(*names: str) -> bool:
-    return any(str(os.getenv(name) or "").strip() for name in names)
+    return any((str(os.getenv(name) or "").strip() and not is_placeholder_secret(os.getenv(name))) for name in names)
 
 
 def _missing_runtime_env_after_secret_scrub(settings: dict) -> list[str]:
@@ -294,14 +327,13 @@ def apply_env_overrides(settings: dict) -> None:
     if db:
         settings["database_url"] = str(sanitize_postgres_dsn(db))
 
-    secret = os.getenv("SECRET_KEY")
+    secret = resolve_secret(settings, "secret_key")
     if secret:
         settings["secret_key"] = secret
 
-    jwt_secret = os.getenv("JWT_SECRET_KEY") or os.getenv("ECHOCHAT_JWT_SECRET")
+    jwt_secret = resolve_secret(settings, "jwt_secret")
     if jwt_secret:
-        # Note: server_init.py will also read JWT_SECRET_KEY directly.
-        # This assignment keeps behavior consistent across the codebase.
+        # Keep behavior consistent across the codebase while ignoring placeholder values.
         settings["jwt_secret"] = jwt_secret
 
     # Echo media env override.
@@ -446,8 +478,18 @@ def apply_env_overrides(settings: dict) -> None:
         settings["trust_proxy_headers"] = trust_proxy_headers
 
     proxy_fix_hops = _int_env("ECHOCHAT_PROXY_FIX_HOPS", "PROXY_FIX_HOPS")
-    if proxy_fix_hops is not None and proxy_fix_hops > 0:
+    if proxy_fix_hops is not None and proxy_fix_hops >= 0:
         settings["proxy_fix_hops"] = proxy_fix_hops
+    for _env_name, _setting_key in (
+        ("ECHOCHAT_PROXY_FIX_X_FOR", "proxy_fix_x_for"),
+        ("ECHOCHAT_PROXY_FIX_X_PROTO", "proxy_fix_x_proto"),
+        ("ECHOCHAT_PROXY_FIX_X_HOST", "proxy_fix_x_host"),
+        ("ECHOCHAT_PROXY_FIX_X_PORT", "proxy_fix_x_port"),
+        ("ECHOCHAT_PROXY_FIX_X_PREFIX", "proxy_fix_x_prefix"),
+    ):
+        _proxy_val = _int_env(_env_name)
+        if _proxy_val is not None and _proxy_val >= 0:
+            settings[_setting_key] = _proxy_val
 
     run_mode = _str_env("ECHOCHAT_RUN_MODE", "ECHOCHAT_SERVER_MODE", "ECHOCHAT_DEPLOYMENT_MODE")
     if run_mode:
@@ -462,9 +504,17 @@ def apply_env_overrides(settings: dict) -> None:
     if production_bind:
         settings["production_bind"] = production_bind
 
-    production_workers = _int_env("ECHOCHAT_PRODUCTION_WORKERS", "PRODUCTION_WORKERS", "WEB_CONCURRENCY")
+    production_workers = _int_env("ECHOCHAT_WORKERS", "ECHOCHAT_PRODUCTION_WORKERS", "PRODUCTION_WORKERS", "WEB_CONCURRENCY")
     if production_workers is not None and production_workers > 0:
         settings["production_workers"] = production_workers
+
+    production_instances = _int_env("ECHOCHAT_PRODUCTION_INSTANCES", "ECHOCHAT_INSTANCE_COUNT", "PRODUCTION_INSTANCES")
+    if production_instances is not None and production_instances > 0:
+        settings["production_instance_count"] = max(1, min(10, production_instances))
+
+    instance_base_port = _int_env("ECHOCHAT_INSTANCE_BASE_PORT", "PRODUCTION_INSTANCE_BASE_PORT")
+    if instance_base_port is not None and instance_base_port > 0:
+        settings["production_instance_base_port"] = instance_base_port
 
     enable_health_endpoint = _bool_env("ECHOCHAT_ENABLE_HEALTH_ENDPOINT", "ENABLE_HEALTH_CHECK_ENDPOINT")
     if enable_health_endpoint is not None:
@@ -483,6 +533,10 @@ def apply_env_overrides(settings: dict) -> None:
     if rate_limit_storage_uri:
         settings["rate_limit_storage_uri"] = rate_limit_storage_uri
         settings["rate_limit_storage"] = rate_limit_storage_uri
+
+    simple_rate_limit_storage_uri = _str_env("ECHOCHAT_SIMPLE_RATE_LIMIT_STORAGE_URI", "SIMPLE_RATE_LIMIT_STORAGE_URI")
+    if simple_rate_limit_storage_uri:
+        settings["simple_rate_limit_storage_uri"] = simple_rate_limit_storage_uri
 
     socketio_transports = _str_env("ECHOCHAT_SOCKETIO_TRANSPORTS", "SOCKETIO_TRANSPORTS")
     if socketio_transports:
@@ -539,6 +593,8 @@ def apply_env_overrides(settings: dict) -> None:
     systemd_env_file = _str_env("ECHOCHAT_SYSTEMD_ENV_FILE", "SYSTEMD_ENV_FILE")
     if systemd_env_file:
         settings["systemd_env_file"] = systemd_env_file
+
+    apply_scaled_runtime_safety_defaults(settings)
 
 
 def _default_local_postgres_parts(db_name: str = "echochat") -> dict:
@@ -684,6 +740,28 @@ def _production_workers_from_settings(settings: dict) -> int:
     return 1
 
 
+def _production_instance_count_from_settings(settings: dict) -> int:
+    for key in ("production_instance_count", "production_instances", "instance_count"):
+        try:
+            value = int(settings.get(key) or 0)
+        except Exception:
+            value = 0
+        if value > 0:
+            return max(1, min(10, value))
+    return 1
+
+
+def _production_instance_base_port_from_settings(settings: dict) -> int:
+    for key in ("production_instance_base_port", "instance_base_port", "server_port", "port"):
+        try:
+            value = int(settings.get(key) or 0)
+        except Exception:
+            value = 0
+        if value > 0:
+            return value
+    return 5000
+
+
 def _find_gunicorn_executable() -> str | None:
     local = Path(__file__).resolve().parent / ".venv" / "bin" / "gunicorn"
     if local.exists() and os.access(local, os.X_OK):
@@ -815,6 +893,14 @@ def _exec_production_server(settings: dict, settings_path: Path) -> None:
     env.setdefault("ECHOCHAT_SOCKETIO_ASYNC", str(settings.get("production_async_mode") or "threading"))
     env.setdefault("ECHOCHAT_BIND", _production_bind_from_settings(settings))
     env.setdefault("ECHOCHAT_WORKERS", str(_production_workers_from_settings(settings)))
+    env.setdefault("ECHOCHAT_PRODUCTION_WORKERS", env["ECHOCHAT_WORKERS"])
+    env.setdefault("ECHOCHAT_PRODUCTION_INSTANCES", str(_production_instance_count_from_settings(settings)))
+    env.setdefault("ECHOCHAT_INSTANCE_BASE_PORT", str(_production_instance_base_port_from_settings(settings)))
+    if str(settings.get("socketio_message_queue") or "").strip():
+        env.setdefault("ECHOCHAT_SOCKETIO_MESSAGE_QUEUE", str(settings.get("socketio_message_queue")).strip())
+    if str(settings.get("shared_state_redis_url") or "").strip():
+        env.setdefault("ECHOCHAT_SHARED_STATE_REDIS_URL", str(settings.get("shared_state_redis_url")).strip())
+    env.setdefault("ECHOCHAT_FORWARDED_ALLOW_IPS", str(settings.get("forwarded_allow_ips") or "127.0.0.1"))
     env.setdefault("ECHOCHAT_GUNICORN_LOGLEVEL", str(settings.get("production_loglevel") or "info"))
     env.setdefault("ECHOCHAT_GUNICORN_WORKER_CLASS", _production_worker_class_from_settings(settings, env))
 
@@ -849,9 +935,20 @@ def _exec_production_server(settings: dict, settings_path: Path) -> None:
     print(f"🚀  Starting {server_name} in production mode with Gunicorn.")
     print(f"   config:  {env['ECHOCHAT_CONFIG']}")
     print(f"   bind:    {env['ECHOCHAT_BIND']}")
-    print(f"   workers: {env['ECHOCHAT_WORKERS']}")
+    print(f"   workers: {env['ECHOCHAT_WORKERS']} per instance")
+    planned_instances = _production_instance_count_from_settings(settings)
+    if planned_instances > 1:
+        base_port = _production_instance_base_port_from_settings(settings)
+        end_port = base_port + planned_instances - 1
+        print(f"   scale:   {planned_instances} planned one-worker instance(s), ports {base_port}-{end_port}")
+        print("   note:    this command starts one instance; use the deployment kit/systemd template for all planned instances.")
     print(f"   async:   {env['ECHOCHAT_SOCKETIO_ASYNC']}")
     print(f"   worker:  {worker_class}")
+    print(f"   queue:   {'configured' if str(env.get('ECHOCHAT_SOCKETIO_MESSAGE_QUEUE') or '').strip() else 'not configured'}")
+    print(f"   shared:  {'configured' if str(env.get('ECHOCHAT_SHARED_STATE_REDIS_URL') or '').strip() else 'not configured'}")
+    if planned_instances > 1 and bool(settings.get("auto_configure_scaled_redis", True)):
+        print("   Redis:   auto-config enabled for scaled deployments")
+    print(f"   fwd IPs: {env.get('ECHOCHAT_FORWARDED_ALLOW_IPS')}")
     from redis_socketio_readiness import blocking_topology_errors, build_redis_socketio_report, format_redis_socketio_report
 
     topology_errors = blocking_topology_errors(settings)
@@ -895,6 +992,7 @@ def _setup_bypassing_cli_command(args: argparse.Namespace) -> bool:
         or args.migrate
         or args.list_migrations
         or args.schema_version
+        or getattr(args, "generate_secrets", False)
     )
 
 
@@ -906,8 +1004,9 @@ def _should_launch_setup(args: argparse.Namespace, *, config_missing_at_start: b
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="configurable chat server")
     p.add_argument("--setup", action="store_true", help="run the interactive setup wizard")
-    p.add_argument("--production", action="store_true", help="start with the production Gunicorn runner for this launch")
-    p.add_argument("--development", action="store_true", help="force the built-in development/LAN runner even when run_mode=production")
+    mode_group = p.add_mutually_exclusive_group()
+    mode_group.add_argument("--production", action="store_true", help="start with the production Gunicorn runner for this launch")
+    mode_group.add_argument("--development", action="store_true", help="force the built-in development/LAN runner even when run_mode=production")
     p.add_argument("--config", default=CONFIG_FILE, help="path to server config JSON")
     p.add_argument("--migrate", action="store_true", help="apply pending DB migrations and exit")
     p.add_argument("--list-migrations", action="store_true", help="list available DB migrations and exit")
@@ -924,6 +1023,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--deployment-kit-output-dir", default="deploy/generated-deployment", help="output directory for --write-deployment-kit")
     p.add_argument("--generate-proxy-config", choices=["all", "caddy", "nginx"], help="generate Caddy/Nginx reverse proxy config files and exit")
     p.add_argument("--proxy-output-dir", default="deploy/generated-proxy", help="output directory for --generate-proxy-config")
+    p.add_argument("--generate-secrets", action="store_true", help="print strong Echo-Chat .env secrets and exit")
+    p.add_argument("--write-env-secrets", action="store_true", help="with --generate-secrets, write/update .env with chmod 600")
     return p.parse_args()
 
 
@@ -951,11 +1052,38 @@ def main() -> None:
         _, interactive_setup, _ = _load_setup_helpers()
         settings = interactive_setup(settings)
         settings = _sync_run_mode_settings(settings)
+        scaled_changed = apply_scaled_runtime_safety_defaults(settings)
+        if scaled_realtime_requested(settings) and any(scaled_changed.values()):
+            print("ℹ️  Setup auto-filled Redis URLs for the selected multi-instance deployment:")
+            for line in scaled_redis_summary_lines(settings, scaled_changed):
+                print(f"   {line}")
+            print()
+        secret_result = ensure_core_runtime_secrets(settings, settings_file=settings_path)
+        # Generate stable at-rest/privacy keys automatically when the admin enables
+        # those features. Values are written to protected .env when JSON secret
+        # persistence is disabled, so restarts keep decrypting old data.
+        for _canonical in (
+            "profile_field_encryption_key",
+            "email_field_encryption_key",
+            "email_hash_key",
+            "security_backup_encryption_key",
+            "privacy_retention_hash_key",
+        ):
+            _value, _generated, _env_path = ensure_secret(settings, _canonical, settings_file=settings_path)
+            if _generated:
+                secret_result.setdefault("generated", []).append(_canonical)
+                if _env_path:
+                    secret_result["env_file"] = str(_env_path)
         missing_runtime_env = _missing_runtime_env_after_secret_scrub(settings)
         save_settings(settings_path, settings)
         print(f"✅ Saved settings to {settings_path}\n")
         if not persist_secrets_enabled(settings):
             print("🔐 Secret persistence is disabled for this mode; keep DB/API/SMTP/Twilio/TURN secrets in environment variables or .env.\n")
+        if secret_result.get("generated"):
+            print(f"🔐 Generated stable core secrets: {', '.join(secret_result.get("generated", []))}")
+            if secret_result.get("env_file"):
+                print(f"   Saved to protected env file: {secret_result.get("env_file")}")
+            print()
         if missing_runtime_env:
             print("⚠️  Setup saved successfully, but Echo-Chat will not auto-start yet because required runtime secrets were kept out of server_config.json:")
             for item in missing_runtime_env:
@@ -969,6 +1097,17 @@ def main() -> None:
     if settings.get("admin_pass"):
         print("ℹ️  Config-file admin_pass is no longer used by /login.")
         print(f"   {_server_display_name(settings)} now requires DB-backed user login; run --setup if you want to sync the admin account/password.")
+
+
+    if args.generate_secrets:
+        bundle = generate_secret_bundle(include_crypto=True)
+        if args.write_env_secrets:
+            env_path = write_env_secrets(bundle, path=Path(".env"))
+            print(f"✅ Wrote strong Echo-Chat secrets to {env_path} (chmod 600).")
+            print("Restart Echo-Chat so the new .env values are loaded.")
+        else:
+            print(format_env_bundle(bundle), end="")
+        return
 
     if args.public_beta_check:
         from public_beta_readiness import build_public_beta_readiness, format_public_beta_readiness_report
@@ -1045,18 +1184,69 @@ def main() -> None:
         print(format_proxy_generation_report(settings, written))
         return
 
+    if args.list_migrations and not (args.migrate or args.schema_version or args.preflight):
+        # Dependency-light listing: do not import psycopg2/database stack just to inspect files.
+        import ast
+        migrations_dir = Path(__file__).resolve().parent / "migrations"
+        items = []
+        for path in sorted(migrations_dir.glob("m*.py")):
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+                vals = {"VERSION": path.stem, "NAME": path.stem, "KIND": "python"}
+                for node in tree.body:
+                    if isinstance(node, ast.Assign):
+                        for target in node.targets:
+                            if isinstance(target, ast.Name) and target.id in vals and isinstance(node.value, ast.Constant):
+                                vals[target.id] = str(node.value.value)
+                items.append(vals | {"path": str(path)})
+            except Exception:
+                items.append({"VERSION": path.stem, "NAME": path.stem, "KIND": "python", "path": str(path)})
+        if not items:
+            print("No migrations found.")
+        else:
+            for item in sorted(items, key=lambda x: x.get("VERSION", "")):
+                print(f"{item.get('VERSION')}  {item.get('NAME')}  [{item.get('KIND')}]  {item.get('path')}")
+        return
+
     from database import init_db_pool, apply_migrations, list_available_migrations, get_schema_version
     from db.core import prepare_runtime_database
     from preflight import run_preflight, format_preflight_report
 
-    prepare_runtime_database(settings)
+    try:
+        prepare_runtime_database(settings)
+    except Exception as exc:
+        print("❌ Echo-Chat could not start because the PostgreSQL database setting is not usable.")
+        print(f"   {exc}")
+        print("\nFix options:")
+        print("   1. Run setup again: python main.py --setup")
+        print("   2. Or set a local PostgreSQL DSN, for example:")
+        print("      export DATABASE_URL=postgresql://$USER@localhost:5432/echochat")
+        print("   3. If setup needs to create/repair the DB, also set:")
+        print("      export ECHOCHAT_DB_BOOTSTRAP_URL=postgresql://$USER@localhost:5432/postgres")
+        raise SystemExit(2)
     configure_logging(settings)
 
     def _init_db_runtime() -> None:
-        cfg_min = int(settings.get("db_pool_min", 1))
-        cfg_max = int(settings.get("db_pool_max", 50))
-        if cfg_max < 50:
+        def _safe_int(value, default, minimum=1, maximum=100):
+            try:
+                out = int(value)
+            except Exception:
+                out = int(default)
+            return max(minimum, min(maximum, out))
+        try:
+            instances = int(settings.get("production_instance_count") or 1)
+        except Exception:
+            instances = 1
+        cfg_min = _safe_int(settings.get("db_pool_min", 1), 1, minimum=1, maximum=25)
+        raw_max = settings.get("db_pool_max")
+        if raw_max is None or str(raw_max).strip() == "":
+            cfg_max = 50 if instances <= 1 else (25 if instances <= 2 else 15 if instances <= 5 else 10)
+        else:
+            cfg_max = _safe_int(raw_max, 50 if instances <= 1 else 10, minimum=1, maximum=100)
+        if instances <= 1 and cfg_max < 50:
             cfg_max = 50
+        if cfg_min > cfg_max:
+            cfg_min = cfg_max
         init_db_pool(
             minconn=cfg_min,
             maxconn=cfg_max,

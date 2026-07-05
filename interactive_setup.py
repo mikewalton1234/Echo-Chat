@@ -36,6 +36,7 @@ from emailer import effective_smtp_settings, smtp_from_warning
 from dynamic_dns import dynamic_dns_setup_errors, build_dynamic_dns_report, format_dynamic_dns_report
 from sms_2fa_config import effective_twilio_settings, twilio_ready, twilio_setup_errors
 from email_at_rest import prepare_email_storage
+from secret_manager import ensure_secret, is_strong_secret, resolve_secret
 from webrtc_ice_config import (
     DEFAULT_ICE_SERVERS,
     apply_turn_credentials,
@@ -60,6 +61,15 @@ from health_status import normalize_public_probe_path
 from security import hash_password, verify_password
 from registration_name_policy import normalize_registration_username, validate_registration_username_format
 from account_creation_policy import validate_account_password, password_policy_summary, validate_account_username_style, validate_recovery_pin, recovery_pin_policy_summary
+from scaled_redis_autoconfig import (
+    RECOMMENDED_RATE_LIMIT_REDIS,
+    RECOMMENDED_SOCKETIO_QUEUE_REDIS,
+    RECOMMENDED_SHARED_STATE_REDIS,
+    apply_scaled_runtime_safety_defaults,
+    redis_install_hint,
+    scaled_realtime_requested,
+    scaled_redis_summary_lines,
+)
 from database import create_user_with_keys, ensure_user_has_keys, ensure_user_has_default_avatar, _seed_roles_permissions
 from public_beta_readiness import (
     apply_hosting_mode_preset,
@@ -143,7 +153,13 @@ _RUNTIME_CONFIG_DEFAULTS: Dict[str, Any] = {
     "rate_limit_logout_all": "5 per minute",
     "rate_limit_account_security": "30 per minute",
     "janitor_debug_custom_rooms": False,
-    "admin_fresh_auth_window_seconds": 600,
+    "cleanup_revoked_private_files_enabled": True,
+    "cleanup_orphan_private_file_blobs_enabled": True,
+    "revoked_private_file_retention_days": 7,
+    "orphan_private_file_grace_minutes": 60,
+    "private_file_cleanup_batch_limit": 500,
+    "admin_reauth_once_per_session": True,
+    "admin_fresh_auth_window_seconds": 28800,
     "rate_limit_upload": "20 per minute",
     "rate_limit_dm_file_upload": "10 per minute",
     "rate_limit_group_file_upload": "10 per minute",
@@ -164,7 +180,7 @@ _RUNTIME_CONFIG_DEFAULTS: Dict[str, Any] = {
     "shared_state_redis_url": "redis://127.0.0.1:6379/2",
     "shared_state_prefix": "echochat",
     "shared_state_session_ttl_seconds": 300,
-    "socketio_client_url": "https://cdn.socket.io/4.5.0/socket.io.min.js",
+    "socketio_client_url": "/static/vendor/socket.io.min.js",
     "api_rate_limit_write_guard": "300 per minute",
     "auth_rate_limit_write_guard": "60 per minute",
     "rate_limit_refresh_guard": "45 per minute",
@@ -269,6 +285,10 @@ def get_default_settings() -> Dict[str, Any]:
         "production_mode": False,
         "production_bind": "",
         "production_workers": 1,
+        "production_instance_count": 1,
+        "production_instance_base_port": 5000,
+        "production_instance_bind_host": "127.0.0.1",
+        "production_instance_port_step": 1,
         "production_async_mode": "threading",
         "production_loglevel": "info",
         "https": False,
@@ -393,6 +413,13 @@ def get_default_settings() -> Dict[str, Any]:
         "room_msg_rate_window_sec": 10,
         "dm_msg_rate_limit": "15@10",
         "dm_msg_rate_window_sec": 10,
+        "enable_room_typing_indicators": False,
+        "enable_dm_typing_indicators": True,
+        "enable_group_typing_indicators": True,
+        "dm_typing_rate_limit": "30@10",
+        "dm_typing_rate_window_sec": 10,
+        "group_typing_rate_limit": "30@10",
+        "group_typing_rate_window_sec": 10,
         # File transfer signaling flood control (offers per window)
         "file_offer_rate_limit": "5@60",
         "room_gif_rate_limit": "6@20",
@@ -431,6 +458,14 @@ def get_default_settings() -> Dict[str, Any]:
         "sound_notifications_default": True,
         "sound_pack_external_urls": [],
         "sound_pack_load_local_builtins": True,
+        "emoticons_enabled": True,
+        "emoticons_local_enabled": True,
+        "emoticons_external_enabled": True,
+        "emoticons_asset_mode": "local_first",
+        "emoticons_local_root": "emoticons",
+        "emoticons_external_asset_base_url": "https://github.com/chinhodado/ym_emo_fb",
+        "emoticons_animation_stop_ms": 4500,
+        "emoticons_custom_entries": [],
         "sound_pack_default": "echo_modern_generated",
         "sound_theme_default": "soft_chime",
         "sound_event_dm": "mellow_pluck",
@@ -449,6 +484,8 @@ def get_default_settings() -> Dict[str, Any]:
         "room_history_limit": 0,
         "room_history_page_size": 0,
         "allow_legacy_plaintext_room_history": False,
+        "allow_legacy_numeric_group_history": False,
+        "disable_legacy_group_file_upload": True,
         "require_private_room_e2ee": True,
         "require_room_e2ee": False,
         "privacy_retention_enabled": True,
@@ -777,6 +814,10 @@ def normalize_setup_settings(settings: Dict[str, Any] | None) -> Dict[str, Any]:
     except Exception:
         out["webcam_max_viewers"] = 0
     out["default_media_policy"] = str(out.get("default_media_policy") or "user_choice").strip() or "user_choice"
+
+    # Automatically fill the Redis DB split when the admin chooses multiple
+    # one-worker Echo-Chat instances. Admins should not need to memorize DB 0/1/2.
+    apply_scaled_runtime_safety_defaults(out)
 
     # Compatibility mirrors that are derived from current-minute controls.
     if not _setting_missing(out.get("custom_room_idle_minutes")) and _setting_missing(out.get("custom_room_idle_hours")):
@@ -1159,7 +1200,10 @@ def _ensure_users_table(conn) -> None:
                 avatar_url            TEXT,
                 online                BOOLEAN DEFAULT FALSE,
                 is_verified           BOOLEAN NOT NULL DEFAULT TRUE,
-                created_at            TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                created_at            TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                auth_version          INTEGER NOT NULL DEFAULT 0,
+                password_changed_at   TIMESTAMP WITH TIME ZONE,
+                auth_changed_at       TIMESTAMP WITH TIME ZONE
             );
             """
         )
@@ -1168,14 +1212,16 @@ def _ensure_users_table(conn) -> None:
         cur.execute(
             """
             SELECT column_name FROM information_schema.columns
-             WHERE table_name='users' AND column_name='password_hash';
+             WHERE table_schema = 'public'
+               AND table_name='users' AND column_name='password_hash';
             """
         )
         if cur.fetchone() is not None:
             cur.execute(
                 """
                 SELECT column_name FROM information_schema.columns
-                 WHERE table_name='users' AND column_name='password';
+                 WHERE table_schema = 'public'
+                   AND table_name='users' AND column_name='password';
                 """
             )
             if cur.fetchone() is None:
@@ -1216,11 +1262,15 @@ def _ensure_users_table(conn) -> None:
             ("avatar_url", "ALTER TABLE users ADD COLUMN avatar_url TEXT;"),
             ("online", "ALTER TABLE users ADD COLUMN online BOOLEAN DEFAULT FALSE;"),
             ("is_verified", "ALTER TABLE users ADD COLUMN is_verified BOOLEAN NOT NULL DEFAULT TRUE;"),
+            ("auth_version", "ALTER TABLE users ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 0;"),
+            ("password_changed_at", "ALTER TABLE users ADD COLUMN password_changed_at TIMESTAMP WITH TIME ZONE;"),
+            ("auth_changed_at", "ALTER TABLE users ADD COLUMN auth_changed_at TIMESTAMP WITH TIME ZONE;"),
         ):
             cur.execute(
                 """
                 SELECT column_name FROM information_schema.columns
-                 WHERE table_name='users' AND column_name=%s;
+                 WHERE table_schema = 'public'
+                   AND table_name='users' AND column_name=%s;
                 """,
                 (col,),
             )
@@ -1397,11 +1447,11 @@ def _prepare_full_schema_in_setup(conn) -> None:
             """
             CREATE TABLE IF NOT EXISTS echochat_schema_meta (
                 version     TEXT PRIMARY KEY,
-                name        TEXT,
-                kind        TEXT,
-                checksum    TEXT,
-                applied_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                success     BOOLEAN DEFAULT TRUE,
+                name        TEXT NOT NULL,
+                kind        TEXT NOT NULL DEFAULT 'python',
+                checksum    TEXT NOT NULL,
+                applied_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                success     BOOLEAN NOT NULL DEFAULT TRUE,
                 notes       TEXT
             );
             """
@@ -1409,11 +1459,15 @@ def _prepare_full_schema_in_setup(conn) -> None:
 
         roles = ["admin", "moderator", "viewer"]
         perms = [
-            "admin:basic", "admin:settings", "admin:assign_role", "admin:manage_roles",
+            "admin:basic", "admin:settings", "admin:audit", "admin:test_lab",
+            "admin:create_user", "admin:delete_user", "admin:set_recovery_pin",
+            "admin:set_user_status", "admin:set_user_quota", "admin:revoke_2fa",
+            "admin:broadcast", "admin:assign_role", "admin:manage_roles",
             "admin:ban_ip", "admin:reset_password", "admin:logout_user",
             "moderation:mute_user", "moderation:kick_user", "moderation:ban_room",
             "moderation:suspend_user", "moderation:shadowban",
-            "room:lock", "room:readonly", "room:delete",
+            "room:lock", "room:readonly", "room:clear", "room:delete",
+            "profile:moderate",
             "user:delete_self", "user:edit_profile",
         ]
         for role_name in roles:
@@ -1442,7 +1496,7 @@ def _prepare_full_schema_in_setup(conn) -> None:
                     """,
                     (role_map["admin"], perm_map[perm_name]),
                 )
-        for perm_name in ("moderation:mute_user", "moderation:kick_user", "moderation:ban_room", "room:readonly"):
+        for perm_name in ("moderation:mute_user", "moderation:kick_user", "moderation:ban_room", "room:readonly", "room:clear", "profile:moderate"):
             if "moderator" in role_map and perm_name in perm_map:
                 cur.execute(
                     """
@@ -1592,7 +1646,7 @@ def _ensure_admin_rbac_role(conn, username: str) -> None:
             return
         admin_role_id = row[0]
 
-        cur.execute("SELECT id FROM users WHERE username=%s;", (username,))
+        cur.execute("SELECT id FROM users WHERE LOWER(username)=LOWER(%s);", (username,))
         user_row = cur.fetchone()
         if not user_row:
             return
@@ -1659,7 +1713,7 @@ def _sync_admin_login_user_in_db(
 
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT password, public_key, encrypted_private_key, is_admin, recovery_pin_hash FROM users WHERE username=%s;",
+            "SELECT password, public_key, encrypted_private_key, is_admin, recovery_pin_hash FROM users WHERE LOWER(username)=LOWER(%s);",
             (username,),
         )
         row = cur.fetchone()
@@ -1676,6 +1730,7 @@ def _sync_admin_login_user_in_db(
             recovery_pin_hash=recovery_pin_hash,
             recovery_pin_set_at=datetime.now(timezone.utc),
             field_encryption_settings=field_encryption_settings,
+            commit=False,
         )
         _ensure_admin_rbac_role(conn, username)
         return password_hash, f"{account_label.title()} '{username}' was created as a normal user account with admin rights."
@@ -1696,7 +1751,7 @@ def _sync_admin_login_user_in_db(
                        recovery_pin_set_at = CURRENT_TIMESTAMP,
                        recovery_failed_attempts = 0,
                        recovery_locked_until = NULL
-                 WHERE username=%s;
+                 WHERE LOWER(username)=LOWER(%s);
                 """,
                 (
                     email is not None, email_to_store,
@@ -1740,8 +1795,11 @@ def _sync_admin_login_user_in_db(
                        recovery_pin_hash=%s,
                        recovery_pin_set_at=CURRENT_TIMESTAMP,
                        recovery_failed_attempts=0,
-                       recovery_locked_until=NULL
-                 WHERE username=%s;
+                       recovery_locked_until=NULL,
+                       auth_version=COALESCE(auth_version, 0) + 1,
+                       password_changed_at=CURRENT_TIMESTAMP,
+                       auth_changed_at=CURRENT_TIMESTAMP
+                 WHERE LOWER(username)=LOWER(%s);
                 """,
                 (
                     password_hash,
@@ -2552,6 +2610,35 @@ def _redact_secret_text(value: Any, keep: int = 2) -> str:
         return '*' * len(text)
     return '*' * max(4, len(text) - keep) + text[-keep:]
 
+def _show_public_beta_readiness_report(stdscr, merged: Dict[str, Any]) -> None:
+    """Render the public-beta readiness report inside the setup TUI.
+
+    The hosting/network setup screens call this after the user edits hosting
+    fields. Keep this as a small TUI wrapper around the shared readiness
+    formatter so the wizard and command-line readiness check stay in sync.
+    """
+    try:
+        lines = public_beta_readiness_lines(
+            merged,
+            settings_file="server_config.json",
+            repo_root=Path(__file__).resolve().parent,
+        )
+    except Exception as exc:
+        lines = [
+            "Echo-Chat Public Beta Readiness",
+            "",
+            "Could not build the readiness report.",
+            f"Error: {exc}",
+        ]
+    _tui_scroll_text(
+        stdscr,
+        "Public beta readiness report",
+        lines,
+        footer="Enter/Esc returns to setup.",
+        allow_save=False,
+    )
+
+
 
 def _readiness_marker(ok: bool) -> str:
     return "OK" if ok else "NEEDS ATTENTION"
@@ -2600,7 +2687,7 @@ def _collect_setup_readiness_lines(merged: Dict[str, Any], runtime: Dict[str, An
     if bool(merged.get("__create_initial_admin")):
         extra_admin_ok = bool(str(merged.get("__initial_admin_user") or "").strip()) and bool(str(merged.get("__initial_admin_raw_password") or "").strip()) and _valid_recovery_pin(str(merged.get("__initial_admin_recovery_pin") or ""))
 
-    jwt_ok = bool(str(merged.get("jwt_secret") or "").strip())
+    jwt_ok = is_strong_secret(resolve_secret(merged, "jwt_secret"))
     public_url = str(merged.get("public_base_url") or "").strip().lower()
     public_https = public_url.startswith("https://")
     cookie_secure = bool(merged.get("cookie_secure"))
@@ -2641,7 +2728,7 @@ def _collect_setup_readiness_lines(merged: Dict[str, Any], runtime: Dict[str, An
         f"  [{_readiness_marker(db_ready)}] Database: {db_detail}",
         f"  [{_readiness_marker(identity_ok)}] Server identity: {'name/host/port set' if identity_ok else 'server name, host, or port is missing'}",
         f"  [{_readiness_marker(owner_user_ok and owner_password_ok and owner_pin_ok and extra_admin_ok)}] Owner/admin accounts: owner username/password/PIN {'set' if owner_user_ok and owner_password_ok and owner_pin_ok else 'needs attention'}; extra admin {'ready/off' if extra_admin_ok else 'incomplete'}",
-        f"  [{_readiness_marker(jwt_ok)}] JWT/session secret: {'present' if jwt_ok else 'missing; setup can generate one in Step 4'}",
+        f"  [{_readiness_marker(jwt_ok)}] JWT/session secret: {'present' if jwt_ok else 'missing/placeholder; setup can generate stable secrets in Step 4'}",
         f"  [{_readiness_marker(cookie_note_ok)}] Public URL / cookies: {cookie_detail}",
         f"  [{_readiness_marker(smtp_ready)}] Password recovery email: {smtp_detail}",
         f"  [{_readiness_marker(ddns_ready)}] Dynamic DNS helper: {ddns_detail}",
@@ -2696,7 +2783,7 @@ def _current_setup_step_checks(merged: Dict[str, Any], runtime: Dict[str, Any] |
     if bool(merged.get("__create_initial_admin")):
         extra_admin_ok = bool(str(merged.get("__initial_admin_user") or "").strip()) and bool(str(merged.get("__initial_admin_raw_password") or "").strip()) and _valid_recovery_pin(str(merged.get("__initial_admin_recovery_pin") or ""))
 
-    jwt_ok = bool(str(merged.get("jwt_secret") or "").strip())
+    jwt_ok = is_strong_secret(resolve_secret(merged, "jwt_secret"))
     token_ok = _setup_safe_int(merged.get("access_token_minutes"), 0) > 0 and _setup_safe_int(merged.get("refresh_token_days"), 0) > 0
 
     smtp_enabled = bool(merged.get("smtp_enabled"))
@@ -2804,7 +2891,8 @@ def _collect_setup_summary_lines(merged: Dict[str, Any], runtime: Dict[str, Any]
         f"  Server name: {str(merged.get('server_name') or '').strip() or '(not set)'}",
         f"  Bind host: {str(merged.get('server_host') or merged.get('host') or '').strip() or '(not set)'}",
         f"  Bind port: {str(merged.get('server_port') or merged.get('port') or '').strip() or '(not set)'}",
-        f"  Startup mode: {str(merged.get('run_mode') or 'development')}" + (f" ({int(merged.get('production_workers') or 1)} Gunicorn worker(s))" if str(merged.get('run_mode') or '').lower() == 'production' else ""),
+        f"  Startup mode: {str(merged.get('run_mode') or 'development')}" + (f" ({int(merged.get('production_workers') or 1)} worker x {int(merged.get('production_instance_count') or 1)} instance(s))" if str(merged.get('run_mode') or '').lower() == 'production' else ""),
+        f"  Production instance ports: {int(merged.get('production_instance_base_port') or merged.get('server_port') or 5000)}" + (f"-{int(merged.get('production_instance_base_port') or merged.get('server_port') or 5000) + max(0, int(merged.get('production_instance_count') or 1) - 1) * int(merged.get('production_instance_port_step') or 1)}" if int(merged.get('production_instance_count') or 1) > 1 else ""),
         f"  Public base URL: {str(merged.get('public_base_url') or '').strip() or '(not set)'}",
         '',
         'Database',
@@ -3231,8 +3319,10 @@ def _edit_server_identity_section(stdscr, merged: Dict[str, Any], base: Dict[str
         {"label": "Server name", "value": str(merged.get("server_name") or base["server_name"]), "help": "The public display name shown across the chat UI and used for friendly defaults like the no-reply email name."},
         {"label": "Bind host", "value": str(merged.get("server_host") or base["server_host"]), "help": "Use 0.0.0.0 to listen on all local network interfaces, or 127.0.0.1 for localhost-only testing."},
         {"label": "Bind port", "value": int(merged.get("server_port") or base["server_port"]), "type": "int", "min": 1, "max": 65535, "help": "Pick a free TCP port. Use a different port if another EchoChat server is already running on this machine."},
-        {"label": "Startup mode", "value": str(merged.get("run_mode") or base.get("run_mode") or "development"), "type": "choice", "options": ["development", "production"], "help": "Development uses the built-in local/LAN runner. Production makes plain `python main.py` start Gunicorn using the saved settings."},
-        {"label": "Production workers", "value": int(merged.get("production_workers") or base.get("production_workers") or 1), "type": "int", "min": 1, "max": 16, "help": "How many Gunicorn workers to use in production mode. Use 1 until Redis/Socket.IO message queue is configured."},
+        {"label": "Startup mode", "value": str(merged.get("run_mode") or base.get("run_mode") or "development"), "type": "choice", "options": ["development", "production"], "help": "Development uses the built-in local/LAN runner. Production makes plain `python main.py` start one Gunicorn-backed Echo-Chat instance."},
+        {"label": "Gunicorn workers per instance", "value": 1, "type": "int", "min": 1, "max": 1, "help": "Keep this locked at 1. Flask-SocketIO is safe with one Gunicorn worker per process; do not put 10 workers inside one Gunicorn server."},
+        {"label": "Echo-Chat instances", "value": int(merged.get("production_instance_count") or base.get("production_instance_count") or 1), "type": "int", "min": 1, "max": 10, "help": "Horizontal scale target. 10 means ten separate Echo-Chat processes, each with one worker, behind sticky reverse-proxy routing plus Redis Socket.IO queue."},
+        {"label": "First instance port", "value": int(merged.get("production_instance_base_port") or merged.get("server_port") or base.get("server_port") or 5000), "type": "int", "min": 1, "max": 65535, "help": "First backend port for multi-instance deployment. Example: 5000 with 10 instances uses 5000-5009."},
         {"label": "Public base URL", "value": str(merged.get("public_base_url") or ""), "help": "Optional public URL such as https://chat.example.com. Leave blank for local-only testing."},
     ]
     _edit_form(
@@ -3242,6 +3332,7 @@ def _edit_server_identity_section(stdscr, merged: Dict[str, Any], base: Dict[str
         intro_lines=[
             "Start here for the basics people usually expect to see in setup.",
             "These values control the chat server name, local bind address, port, and optional public URL.",
+            "Scaling rule: use 1 worker per Echo-Chat instance. If you choose more than 1 instance, setup auto-fills the Redis DB split for rate limits, Socket.IO, and shared realtime state.",
         ],
     )
     merged["server_name"] = str(fields[0]["value"]).strip() or base["server_name"]
@@ -3251,9 +3342,25 @@ def _edit_server_identity_section(stdscr, merged: Dict[str, Any], base: Dict[str
     merged["server_port"] = int(fields[2]["value"])
     merged["run_mode"] = str(fields[3]["value"] or "development").strip().lower()
     merged["production_mode"] = merged["run_mode"] == "production"
-    merged["production_workers"] = int(fields[4]["value"] or 1)
+    # Flask-SocketIO's official Gunicorn path is one worker per process.
+    # Keep each process at one worker; scale by running multiple one-worker
+    # Echo-Chat instances behind sticky routing plus Redis Socket.IO queue.
+    merged["production_workers"] = 1
+    merged["production_instance_count"] = max(1, min(10, int(fields[5]["value"] or 1)))
+    merged["production_instance_base_port"] = int(fields[6]["value"] or merged["server_port"])
+    scaled_changed = apply_scaled_runtime_safety_defaults(merged)
+    if scaled_realtime_requested(merged) and any(scaled_changed.values()):
+        _tui_scroll_text(
+            stdscr,
+            "Scaled Redis auto-config",
+            scaled_redis_summary_lines(merged, scaled_changed) + ["", redis_install_hint()],
+            footer="Enter/Esc returns to setup.",
+            allow_save=False,
+        )
+    merged["production_instance_bind_host"] = str(merged.get("production_instance_bind_host") or "127.0.0.1").strip() or "127.0.0.1"
+    merged["production_instance_port_step"] = 1
     merged["production_bind"] = str(merged.get("production_bind") or "").strip()
-    merged["public_base_url"] = str(fields[5]["value"] or "").strip()
+    merged["public_base_url"] = str(fields[7]["value"] or "").strip()
     merged["host"] = merged["server_host"]
     merged["port"] = merged["server_port"]
     merged.update(_autobrand_settings(merged))
@@ -3394,7 +3501,7 @@ def _edit_login_security_section(stdscr, merged: Dict[str, Any], base: Dict[str,
         {"label": "Auto-away after inactive minutes", "value": int(merged.get("presence_idle_minutes") or 0), "type": "int", "min": 0, "max": 1440, "help": "Set 0 to disable auto-away. Any positive value changes a still-online user to Away after that many inactive minutes without logging them out."},
         {"label": "Auto-offline after inactive minutes", "value": int(merged.get("presence_offline_minutes") or 0), "type": "int", "min": 0, "max": 1440, "help": "Set 0 to disable auto-offline. Any positive value keeps the session signed in but switches the user to Invisible after that many inactive minutes so other people see them as offline."},
         {"label": "Revoke all sessions on restart", "value": bool(merged.get("revoke_all_tokens_on_start", False)), "type": "bool", "help": "Turn this on only if you want every server restart to force every user to log in again."},
-        {"label": "Generate JWT secret now", "value": not bool(merged.get("jwt_secret")), "type": "bool", "help": "If no JWT secret is set yet, setup can generate a stable one for you now."},
+        {"label": "Generate stable core/crypto secrets now", "value": (not is_strong_secret(resolve_secret(merged, "jwt_secret")) or not is_strong_secret(resolve_secret(merged, "secret_key"))), "type": "bool", "help": "Setup can generate stable Flask/JWT/crypto secrets and save them safely so restarts do not break login or encrypted data."},
         {"label": "Enable SMS 2FA", "value": bool(merged.get("enable_two_factor_beta", False) and merged.get("enable_sms_two_factor", False)), "type": "bool", "help": "Optional Twilio Verify login codes. Keep this off unless Twilio is configured."},
         {"label": "Twilio Verify channel", "value": str(merged.get("two_factor_sms_channel") or "sms"), "type": "choice", "options": ["sms", "whatsapp"], "help": "Phone-based verification channel. sms is the normal choice."},
         {"label": "Twilio Account SID", "value": str(merged.get("twilio_account_sid") or ""), "help": "Starts with AC. You may store this non-password identifier here or provide ECHOCHAT_TWILIO_ACCOUNT_SID."},
@@ -3420,9 +3527,17 @@ def _edit_login_security_section(stdscr, merged: Dict[str, Any], base: Dict[str,
     merged["presence_idle_minutes"] = int(fields[5]["value"])
     merged["presence_offline_minutes"] = int(fields[6]["value"])
     merged["revoke_all_tokens_on_start"] = bool(fields[7]["value"])
-    if bool(fields[8]["value"]) and not merged.get("jwt_secret"):
-        import secrets
-        merged["jwt_secret"] = secrets.token_hex(32)
+    if bool(fields[8]["value"]):
+        for _canonical in (
+            "secret_key",
+            "jwt_secret",
+            "profile_field_encryption_key",
+            "email_field_encryption_key",
+            "email_hash_key",
+            "security_backup_encryption_key",
+            "privacy_retention_hash_key",
+        ):
+            ensure_secret(merged, _canonical, settings_file=Path("server_config.json"))
     sms_enabled = bool(fields[9]["value"])
     merged["enable_two_factor_beta"] = sms_enabled
     merged["enable_sms_two_factor"] = sms_enabled
@@ -3921,6 +4036,7 @@ def _edit_hosting_network_section(stdscr, merged: Dict[str, Any], base: Dict[str
     merged["rate_limit_storage_uri"] = str(fields[17]["value"] or base["rate_limit_storage_uri"]).strip() or base["rate_limit_storage_uri"]
     merged["rate_limit_storage"] = merged["rate_limit_storage_uri"]
     merged["socketio_message_queue"] = str(fields[18]["value"] or "").strip()
+    apply_scaled_runtime_safety_defaults(merged)
     if bool(fields[19]["value"]):
         patched = apply_hosting_mode_preset(merged, merged.get("hosting_mode"), merged.get("public_base_url") or "")
         merged.clear()
@@ -4218,7 +4334,7 @@ def _test_redis_connection(storage_uri: str) -> tuple[bool, str]:
     if not uri:
         return True, 'No rate-limit storage URI is set, so Echo-Chat will use its normal default behavior.'
     if uri == 'memory://':
-        return True, 'Rate-limit storage is set to memory://, which is fine for one local process but not for shared multi-worker limits.'
+        return True, 'Rate-limit storage is set to memory://, which is fine for one local process but not for scaled multi-instance limits.'
     if not (uri.startswith('redis://') or uri.startswith('rediss://')):
         return True, f'Rate-limit storage URI is not Redis-based: {uri}'
     try:

@@ -445,6 +445,7 @@ CHAT_SCRIPT_PARTS = [
     "/static/js/chat_parts/0048c_room_invites_webcam_ui.js",
     "/static/js/chat_parts/0049_motion_fx.js",
     "/static/js/chat_parts/0050_mobile_layout.js",
+    "/static/js/chat_parts/0051_hub_collapse.js",
 ]
 
 

@@ -14,9 +14,13 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
-RECOMMENDED_RATE_LIMIT_REDIS = "redis://127.0.0.1:6379/0"
-RECOMMENDED_SOCKETIO_QUEUE_REDIS = "redis://127.0.0.1:6379/1"
-RECOMMENDED_SHARED_STATE_REDIS = "redis://127.0.0.1:6379/2"
+from scaled_redis_autoconfig import (
+    RECOMMENDED_RATE_LIMIT_REDIS,
+    RECOMMENDED_SOCKETIO_QUEUE_REDIS,
+    RECOMMENDED_SHARED_STATE_REDIS,
+    apply_scaled_runtime_safety_defaults,
+    redis_install_hint,
+)
 
 
 @dataclass(frozen=True)
@@ -71,7 +75,7 @@ def _int_setting(settings: dict[str, Any], *keys: str, default: int = 0) -> int:
 
 
 def _production_workers(settings: dict[str, Any]) -> int:
-    for env_key in ("ECHOCHAT_WORKERS", "WEB_CONCURRENCY", "PRODUCTION_WORKERS"):
+    for env_key in ("ECHOCHAT_WORKERS", "ECHOCHAT_PRODUCTION_WORKERS", "WEB_CONCURRENCY", "PRODUCTION_WORKERS"):
         raw = os.getenv(env_key)
         if raw:
             try:
@@ -81,6 +85,19 @@ def _production_workers(settings: dict[str, Any]) -> int:
             except Exception:
                 pass
     return _int_setting(settings, "production_workers", "worker_count", "web_workers", default=1)
+
+
+def _production_instances(settings: dict[str, Any]) -> int:
+    for env_key in ("ECHOCHAT_PRODUCTION_INSTANCES", "ECHOCHAT_INSTANCE_COUNT", "PRODUCTION_INSTANCES"):
+        raw = os.getenv(env_key)
+        if raw:
+            try:
+                value = int(raw)
+                if value > 0:
+                    return max(1, min(10, value))
+            except Exception:
+                pass
+    return max(1, min(10, _int_setting(settings, "production_instance_count", "production_instances", "instance_count", default=1)))
 
 
 def _worker_class(settings: dict[str, Any]) -> str:
@@ -128,11 +145,14 @@ def _socketio_transports(settings: dict[str, Any], workers: int, async_mode: str
 
 
 def _queue_url(settings: dict[str, Any]) -> str:
+    socketio_profile = settings.get("socketio_profile") or {}
+    if not isinstance(socketio_profile, dict):
+        socketio_profile = {}
     return str(
         os.getenv("ECHOCHAT_SOCKETIO_MESSAGE_QUEUE")
         or os.getenv("SOCKETIO_MESSAGE_QUEUE")
+        or socketio_profile.get("message_queue")
         or settings.get("socketio_message_queue")
-        or os.getenv("REDIS_URL")
         or ""
     ).strip()
 
@@ -261,11 +281,13 @@ def build_redis_socketio_report(settings: dict[str, Any], *, live_check: bool = 
     broader public beta readiness report.
     """
     settings = dict(settings or {})
+    auto_changed = apply_scaled_runtime_safety_defaults(settings)
     mode = _hosting_mode(settings)
     public_mode = mode == "public_beta"
     run_mode = _run_mode(settings)
     production_mode = run_mode == "production"
     workers = _production_workers(settings)
+    instances = _production_instances(settings)
     worker_class = _worker_class(settings)
     async_mode = _async_mode(settings)
     transports = _socketio_transports(settings, workers, async_mode)
@@ -275,10 +297,19 @@ def build_redis_socketio_report(settings: dict[str, Any], *, live_check: bool = 
     queue_is_redis = _is_redis_url(queue)
     rate_is_redis = _is_redis_url(rate_url)
     shared_is_redis = _is_redis_url(shared_url)
-    redis_needed = queue_is_redis or rate_is_redis or shared_is_redis or public_mode or workers > 1
+    redis_needed = queue_is_redis or rate_is_redis or shared_is_redis or public_mode or workers > 1 or instances > 1
     redis_pkg = _redis_package_installed()
 
     items: list[RedisSocketIOItem] = []
+
+    if any(auto_changed.values()):
+        items.append(RedisSocketIOItem(
+            "pass",
+            "scaled-redis-auto-config",
+            "Scaled Redis URLs were auto-filled",
+            f"rate={_redact_url(settings.get('rate_limit_storage_uri'))}; socketio={_redact_url(settings.get('socketio_message_queue'))}; shared={_redact_url(settings.get('shared_state_redis_url'))}",
+            redis_install_hint(),
+        ))
 
     if redis_pkg:
         items.append(RedisSocketIOItem("pass", "redis-python-package", "redis Python package is installed", "The Python client required for Redis health checks is importable."))
@@ -295,7 +326,7 @@ def build_redis_socketio_report(settings: dict[str, Any], *, live_check: bool = 
         items.append(RedisSocketIOItem("warn", "production-mode", "Development/LAN mode", "Acceptable for local testing. Use production mode before inviting internet testers."))
 
     if workers <= 1:
-        items.append(RedisSocketIOItem("pass", "production-workers", "Single production worker", "Safe default for Flask-SocketIO under Gunicorn."))
+        items.append(RedisSocketIOItem("pass", "production-workers", "Single Gunicorn worker per instance", "Safe default for Flask-SocketIO under Gunicorn."))
     else:
         # Gunicorn's internal worker balancer is not sticky. Even with Redis, the
         # safe beginner path is one worker per Gunicorn process; scale horizontally
@@ -308,16 +339,29 @@ def build_redis_socketio_report(settings: dict[str, Any], *, live_check: bool = 
             "Use production_workers=1. Later scale with multiple one-worker Echo-Chat instances behind a sticky reverse proxy plus socketio_message_queue=redis://127.0.0.1:6379/1.",
         ))
 
-    if workers > 1 and not queue:
-        items.append(RedisSocketIOItem("fail", "socketio-message-queue", "Socket.IO message queue is missing", "Multiple realtime workers require a shared message queue for broadcasts.", f"Set socketio_message_queue={RECOMMENDED_SOCKETIO_QUEUE_REDIS}, or keep production_workers=1."))
+    if instances <= 1:
+        items.append(RedisSocketIOItem("pass", "production-instances", "Single Echo-Chat instance planned", "One instance with one worker is the beginner-safe deployment."))
+    elif queue_is_redis:
+        items.append(RedisSocketIOItem("pass", "production-instances", "Multiple one-worker instances planned", f"production_instance_count={instances}. Use sticky proxy routing across the instance ports."))
+    else:
+        items.append(RedisSocketIOItem("fail", "scaled-instance-queue", "Multiple instances need Redis Socket.IO queue", f"production_instance_count={instances}; socketio_message_queue is blank or not Redis.", f"Set socketio_message_queue={RECOMMENDED_SOCKETIO_QUEUE_REDIS} before starting all instances."))
+
+    if (workers > 1 or instances > 1) and not queue:
+        items.append(RedisSocketIOItem("fail", "socketio-message-queue", "Socket.IO message queue is missing", "Multiple realtime workers or multiple one-worker instances require a shared message queue for broadcasts.", f"Set socketio_message_queue={RECOMMENDED_SOCKETIO_QUEUE_REDIS}, or keep production_workers=1 and production_instance_count=1."))
     elif queue_is_redis:
         items.append(RedisSocketIOItem("pass", "socketio-message-queue", "Socket.IO Redis message queue configured", _redact_url(queue)))
     elif queue:
         items.append(RedisSocketIOItem("warn", "socketio-message-queue", "Socket.IO message queue is not Redis", _redact_url(queue), "Redis is the documented/simple path for Echo-Chat public beta."))
     elif public_mode:
-        items.append(RedisSocketIOItem("warn", "socketio-message-queue", "Socket.IO message queue is not configured", "Single-worker public beta can start without it, but Redis queue is recommended before adding testers.", f"Set socketio_message_queue={RECOMMENDED_SOCKETIO_QUEUE_REDIS}."))
+        items.append(RedisSocketIOItem("warn", "socketio-message-queue", "Socket.IO message queue is not configured", "Single-instance public beta can start without it, but Redis queue is recommended before adding testers or scaling.", f"Set socketio_message_queue={RECOMMENDED_SOCKETIO_QUEUE_REDIS}."))
+    elif workers <= 1 and instances <= 1:
+        items.append(RedisSocketIOItem("pass", "socketio-message-queue", "Socket.IO queue optional for LAN single-instance testing", "No message queue configured."))
     else:
-        items.append(RedisSocketIOItem("pass", "socketio-message-queue", "Socket.IO queue optional for LAN single-worker testing", "No message queue configured."))
+        items.append(RedisSocketIOItem("fail", "socketio-message-queue", "Socket.IO message queue is missing", "Scaled topology needs a Redis Socket.IO queue.", f"Set socketio_message_queue={RECOMMENDED_SOCKETIO_QUEUE_REDIS}."))
+
+    generic_redis_url = str(os.getenv("REDIS_URL") or "").strip()
+    if generic_redis_url and not queue:
+        items.append(RedisSocketIOItem("warn", "generic-redis-url", "Generic REDIS_URL is not used as the Socket.IO queue", _redact_url(generic_redis_url), "Set ECHOCHAT_SOCKETIO_MESSAGE_QUEUE explicitly; keep REDIS_URL only for tools that truly require a generic Redis setting."))
 
     if rate_is_redis:
         items.append(RedisSocketIOItem("pass", "rate-limit-storage", "Redis-backed rate limits configured", _redact_url(rate_url)))
@@ -333,8 +377,10 @@ def build_redis_socketio_report(settings: dict[str, Any], *, live_check: bool = 
             items.append(RedisSocketIOItem("pass", "shared-state-redis", "Shared-state Redis URL configured", _redact_url(shared_url)))
         else:
             items.append(RedisSocketIOItem("warn", "shared-state-redis", "Shared-state URL is not Redis", _redact_url(shared_url), "Use Redis for cross-process shared state when scaling."))
+    elif instances > 1 or workers > 1:
+        items.append(RedisSocketIOItem("fail", "shared-state-redis", "Shared-state Redis URL is missing for scaled realtime mode", "Presence and live room state would stay process-local unless shared_state_redis_url is explicit.", f"Set shared_state_redis_url={RECOMMENDED_SHARED_STATE_REDIS}."))
     elif public_mode:
-        items.append(RedisSocketIOItem("pass", "shared-state-redis", "Shared-state Redis URL is optional for first beta", "Not required for a single-worker public beta; useful later for scaled shared state."))
+        items.append(RedisSocketIOItem("pass", "shared-state-redis", "Shared-state Redis URL is optional for first beta", "Not required for a single-instance public beta; useful later for scaled shared state."))
 
     if queue_is_redis and rate_is_redis and _same_redis_db(queue, rate_url):
         items.append(RedisSocketIOItem("warn", "redis-db-separation", "Socket.IO queue and rate limits share the same Redis DB", f"Both use {_redact_url(queue)}", f"Use {RECOMMENDED_RATE_LIMIT_REDIS} for rate limits and {RECOMMENDED_SOCKETIO_QUEUE_REDIS} for Socket.IO."))
@@ -342,6 +388,18 @@ def build_redis_socketio_report(settings: dict[str, Any], *, live_check: bool = 
         items.append(RedisSocketIOItem("pass", "redis-db-separation", "Redis DB separation looks good", f"rate={_redact_url(rate_url)}; socketio={_redact_url(queue)}"))
     elif public_mode:
         items.append(RedisSocketIOItem("warn", "redis-db-separation", "Redis DB separation could not be verified", "Configure both rate-limit storage and Socket.IO queue as Redis URLs."))
+
+    if queue_is_redis and shared_is_redis and _same_redis_db(queue, shared_url):
+        items.append(RedisSocketIOItem("warn", "redis-shared-state-separation", "Socket.IO queue and shared state use the same Redis DB", f"Both use {_redact_url(queue)}", f"Use {RECOMMENDED_SOCKETIO_QUEUE_REDIS} for Socket.IO and {RECOMMENDED_SHARED_STATE_REDIS} for shared state."))
+    elif queue_is_redis and shared_is_redis:
+        items.append(RedisSocketIOItem("pass", "redis-shared-state-separation", "Socket.IO and shared-state Redis DBs are separate", f"socketio={_redact_url(queue)}; shared={_redact_url(shared_url)}"))
+
+    db_pool_max = _int_setting(settings, "db_pool_max", default=50)
+    planned_db_connections = instances * max(1, db_pool_max)
+    if instances > 1 and planned_db_connections > 80:
+        items.append(RedisSocketIOItem("warn", "db-pool-scale", "Planned DB pool can exceed a typical local PostgreSQL limit", f"production_instance_count={instances}; db_pool_max={db_pool_max}; possible web connections={planned_db_connections}", "Lower db_pool_max per instance, raise PostgreSQL max_connections, or add PgBouncer before scaling high."))
+    elif instances > 1:
+        items.append(RedisSocketIOItem("pass", "db-pool-scale", "Planned DB pool scale looks bounded", f"production_instance_count={instances}; db_pool_max={db_pool_max}; possible web connections={planned_db_connections}"))
 
     if async_mode == "threading" and worker_class != "gthread":
         items.append(RedisSocketIOItem("warn", "async-worker-alignment", "Threading async mode does not match worker class", f"async_mode={async_mode}; worker_class={worker_class}", "Use production_async_mode=threading and production_worker_class=gthread for the default path."))
@@ -360,7 +418,7 @@ def build_redis_socketio_report(settings: dict[str, Any], *, live_check: bool = 
     if live_check:
         for url in _unique_redis_urls(rate_url, queue, shared_url):
             ok, msg = _ping_redis_url(url)
-            items.append(RedisSocketIOItem("pass" if ok else "fail", "redis-live-ping", "Redis live ping succeeded" if ok else "Redis live ping failed", msg, "Start Redis, fix the URL, or install redis>=5.0." if not ok else ""))
+            items.append(RedisSocketIOItem("pass" if ok else "fail", "redis-live-ping", "Redis live ping succeeded" if ok else "Redis live ping failed", msg, redis_install_hint() + "; also confirm redis>=5.0 is installed in the Python venv." if not ok else ""))
         if not _unique_redis_urls(rate_url, queue, shared_url):
             items.append(RedisSocketIOItem("warn", "redis-live-ping", "No Redis URL available for live ping", "Configure rate_limit_storage_uri or socketio_message_queue first."))
 
@@ -372,6 +430,7 @@ def build_redis_socketio_report(settings: dict[str, Any], *, live_check: bool = 
         "overall": overall,
         "mode": mode,
         "production_workers": workers,
+        "production_instances": instances,
         "worker_class": worker_class,
         "async_mode": async_mode,
         "socketio_transports": transports,
@@ -388,8 +447,13 @@ def build_redis_socketio_report(settings: dict[str, Any], *, live_check: bool = 
 
 def blocking_topology_errors(settings: dict[str, Any]) -> list[str]:
     """Errors that should block production startup before Gunicorn exec."""
-    report = build_redis_socketio_report(settings, live_check=False)
-    blocking_codes = {"production-workers", "socketio-message-queue", "redis-python-package"}
+    # For scaled deployments, perform a live Redis ping before Gunicorn exec so
+    # admins get a clear install/start Redis fix instead of a later worker crash.
+    _settings = dict(settings or {})
+    apply_scaled_runtime_safety_defaults(_settings)
+    _scaled = _production_workers(_settings) > 1 or _production_instances(_settings) > 1
+    report = build_redis_socketio_report(_settings, live_check=_scaled)
+    blocking_codes = {"production-workers", "socketio-message-queue", "scaled-instance-queue", "shared-state-redis", "redis-python-package", "redis-live-ping"}
     out: list[str] = []
     for item in report.get("items") or []:
         if item.get("level") == "fail" and item.get("code") in blocking_codes:
@@ -411,12 +475,14 @@ def format_redis_socketio_report(report: dict[str, Any]) -> str:
         "",
         f"Overall: {str(report.get('overall') or 'unknown').upper()}",
         f"Mode: {report.get('mode') or 'unknown'}",
-        f"Workers: {report.get('production_workers')}",
+        f"Workers per instance: {report.get('production_workers')}",
+        f"Planned instances: {report.get('production_instances')}",
         f"Worker class: {report.get('worker_class')}",
         f"Socket.IO async: {report.get('async_mode')}",
         f"Socket.IO transports: {', '.join(report.get('socketio_transports') or [])}",
         f"Rate-limit storage: {report.get('rate_limit_storage_uri') or '(not set)'}",
         f"Socket.IO queue: {report.get('socketio_message_queue') or '(not set)'}",
+        f"Shared-state Redis: {report.get('shared_state_redis_url') or '(not set)'}",
         "",
         f"Summary: {report.get('pass_count', 0)} pass, {report.get('warn_count', 0)} warn, {report.get('fail_count', 0)} fail",
         "",
@@ -433,9 +499,12 @@ def format_redis_socketio_report(report: dict[str, Any]) -> str:
     lines.extend([
         "",
         "Beginner-safe rule:",
-        "  Use production_workers=1 for the built-in Gunicorn runner.",
+        "  Use production_workers=1 for each Gunicorn instance.",
+        "  Use production_instance_count=1-10 to plan separate one-worker instances.",
         f"  Use {RECOMMENDED_RATE_LIMIT_REDIS} for rate limits when public.",
         f"  Use {RECOMMENDED_SOCKETIO_QUEUE_REDIS} for Socket.IO before scaling.",
+        f"  Use {RECOMMENDED_SHARED_STATE_REDIS} for shared realtime state before scaling.",
+        "  Setup auto-fills those Redis URLs when production_instance_count is greater than 1.",
         "  Scale later with multiple one-worker Echo-Chat instances behind sticky routing.",
     ])
     return "\n".join(lines).rstrip() + "\n"

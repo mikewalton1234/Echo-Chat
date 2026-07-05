@@ -47,7 +47,7 @@ def main() -> int:
         return 3
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT id FROM users WHERE username = %s;", (username,))
+            cur.execute("SELECT id FROM users WHERE LOWER(username) = LOWER(%s);", (username,))
             row = cur.fetchone()
             if not row:
                 print(f"User not found: {username}")

@@ -91,6 +91,7 @@ SECRET_SETTING_KEYS = {
     "email_field_encryption_key",
     "email_hash_key",
     "security_backup_encryption_key",
+    "privacy_retention_hash_key",
     "jwt_secret_key",
     "flask_secret_key",
     "session_secret",
@@ -102,13 +103,8 @@ SECRET_SETTING_KEYS = {
     "owner_password",
     "recovery_pin",
     "recovery_pin_hash",
-    # DB DSNs often contain passwords
-    "database_url",
-    "database_bootstrap_url",
-    "db_connection_string",
-    "database_dsn",
-    "postgres_dsn",
-    "postgres_url",
+    # DB DSNs are handled below: passwordless local DSNs are safe to persist
+    # for beginner setup, while DSNs containing credentials are scrubbed.
     # Third-party API keys
     "giphy_api_key",
     "media_api_key",
@@ -138,6 +134,29 @@ SECRET_SETTING_KEYS = {
     "voice_turn_password",
     "voice_turn_credential",
 }
+
+
+# PostgreSQL DSN keys may be either non-secret local identifiers
+#   postgresql://linux_user@localhost:5432/echochat
+# or real secrets with embedded passwords
+#   postgresql://linux_user:password@db-host:5432/echochat
+# Keep passwordless local/LAN examples usable; scrub credential-bearing URLs.
+PASSWORDLESS_PERSISTABLE_POSTGRES_DSN_KEYS = {
+    "database_url",
+    "database_bootstrap_url",
+    "db_connection_string",
+    "database_dsn",
+    "postgres_dsn",
+    "postgres_url",
+}
+
+
+def _is_postgres_url(value: Any) -> bool:
+    try:
+        raw = str(value or "").strip().lower()
+        return raw.startswith(("postgresql://", "postgres://"))
+    except Exception:
+        return False
 
 # URI settings can carry passwords inside the URL. Scrub them when credentials
 # are present even if the key itself can also hold non-secret values like memory://.
@@ -201,6 +220,14 @@ def _scrub_mapping(settings: Dict[str, Any]) -> Dict[str, Any]:
         key_s = str(key)
         key_l = key_s.lower()
         if key_l in SECRET_SETTING_KEYS:
+            continue
+        if key_l in PASSWORDLESS_PERSISTABLE_POSTGRES_DSN_KEYS:
+            # Local setup DSNs without an embedded password are not secrets and
+            # must remain in server_config.json, otherwise setup succeeds but
+            # the next server start crashes with an empty PostgreSQL DSN.
+            if not value or _url_contains_password(value) or not _is_postgres_url(value):
+                continue
+            out[key_s] = str(value).strip()
             continue
         if key_l in SECRET_URI_SETTING_KEYS and _url_contains_password(value):
             continue

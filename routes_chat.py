@@ -35,6 +35,7 @@ from database import (
 from room_name_policy import normalize_room_name, validate_custom_room_creation_name, validate_room_name_format
 from security import log_audit_event, parse_rate_limit_value, simple_rate_limit, get_request_ip
 from permissions import require_admin, check_user_permission
+from moderation import is_user_sanctioned
 from room_catalog import (
     catalog_has_room,
     normalize_catalog_room_entry,
@@ -246,6 +247,53 @@ def _is_blocked(blocker: str, blocked: str) -> bool:
 
 def _either_blocked(a: str, b: str) -> bool:
     return _is_blocked(a, b) or _is_blocked(b, a)
+
+def _room_action_denial(username: str, action: str) -> tuple[dict | None, int]:
+    """Return a JSON-ish error payload/status when room/invite writes are sanctioned.
+
+    Socket.IO has its own live-session gate, but the HTTP room browser endpoints
+    are reachable with ordinary JWTs.  Keep room creation, invites, and durable
+    membership writes aligned with moderation sanctions so an old browser tab or
+    stale access token cannot keep creating visible room state after moderation.
+    """
+    user = str(username or "").strip()
+    if not user:
+        return {"error": "Not authenticated"}, 401
+    try:
+        if is_user_sanctioned(user, "ban"):
+            return {"error": "You are banned.", "code": "banned"}, 403
+        if action in {"create", "invite", "member_manage"} and is_user_sanctioned(user, "mute"):
+            return {"error": "You are muted.", "code": "muted"}, 403
+        if action in {"join", "accept_invite"} and is_user_sanctioned(user, "kick"):
+            return {"error": "You are temporarily kicked.", "code": "kicked"}, 403
+    except Exception:
+        # Room writes are visible state changes.  If sanction lookup is unhealthy,
+        # fail closed instead of allowing room/invite mutation through a broken DB path.
+        return {"error": "Moderation status unavailable"}, 503
+    return None, 200
+
+
+def _delete_generic_room_invite_casefold(cur, room: str, actor: str):
+    """Delete one visible generic room invite and return (room, invited_by).
+
+    Generic room invites are only notification rows.  Private custom-room grants
+    live in custom_room_invites and must not be consumed here.  Case-insensitive
+    matching keeps invite cleanup working after username/room casing repairs.
+    """
+    cur.execute(
+        """
+        DELETE FROM room_invites i
+         USING chat_rooms r
+         LEFT JOIN custom_rooms cr ON LOWER(cr.name)=LOWER(r.name)
+         WHERE LOWER(i.room_name)=LOWER(r.name)
+           AND LOWER(i.room_name)=LOWER(%s)
+           AND LOWER(i.invited_user)=LOWER(%s)
+           AND (cr.name IS NULL OR cr.is_private = FALSE)
+        RETURNING r.name, i.invited_by;
+        """,
+        (room, actor),
+    )
+    return cur.fetchone()
 
 def _get_live_counts() -> dict[str, int]:
     """Best-effort live counts (unique usernames per room) from Socket.IO sessions."""
@@ -777,6 +825,9 @@ def api_create_custom_room():
 
     if not actor:
         return jsonify({"error": "Not authenticated"}), 401
+    denied, status = _room_action_denial(actor, "create")
+    if denied is not None:
+        return jsonify(denied), status
 
     cfg = _runtime_settings()
     if not bool(cfg.get("allow_user_create_rooms", True)):
@@ -801,16 +852,18 @@ def api_create_custom_room():
             #
             # IMPORTANT: We want users to be able to re-create a custom room that was auto-deleted.
             # Sometimes a stale chat_rooms row can remain (or the room exists under a different category).
-            cur.execute("SELECT 1 FROM chat_rooms WHERE name=%s LIMIT 1;", (name,))
-            if cur.fetchone() is not None:
+            cur.execute("SELECT name, COALESCE(room_kind, '') FROM chat_rooms WHERE LOWER(name)=LOWER(%s) LIMIT 1;", (name,))
+            existing_chat_room = cur.fetchone()
+            if existing_chat_room is not None:
+                existing_chat_name = str(existing_chat_room[0] or name).strip() or name
                 # If a custom_rooms record exists, provide a helpful conflict message (including its path).
                 cur.execute(
-                    "SELECT category, subcategory, created_by, is_private FROM custom_rooms WHERE name=%s LIMIT 1;",
+                    "SELECT name, category, subcategory, created_by, is_private FROM custom_rooms WHERE LOWER(name)=LOWER(%s) LIMIT 1;",
                     (name,),
                 )
                 row = cur.fetchone()
                 if row is not None:
-                    ex_cat, ex_sub, ex_owner, ex_private = row
+                    ex_name, ex_cat, ex_sub, ex_owner, ex_private = row
                     invited = False
                     if bool(ex_private) and (str(ex_owner or '').strip().lower() != str(actor or '').strip().lower()):
                         cur.execute(
@@ -836,7 +889,7 @@ def api_create_custom_room():
                                 {
                                     "error": f"Room already exists in {ex_cat} › {ex_sub}",
                                     "existing": {
-                                        "name": name,
+                                        "name": ex_name or existing_chat_name or name,
                                         "category": ex_cat,
                                         "subcategory": ex_sub,
                                         "created_by": ex_owner,
@@ -850,11 +903,15 @@ def api_create_custom_room():
                     # invite-only room when a caller guesses the exact name.
                     return jsonify({"error": "Room name unavailable"}), 409
 
-                # No custom_rooms record exists, but chat_rooms row does.
-                # If it's an official room (from catalog), block it; otherwise treat as a stale orphan and allow revive.
-                if _catalog_has_roomname(catalog, name):
+                # No custom_rooms record exists, but a chat_rooms row does.
+                # Exact-case stale custom/manual orphans may be revived.  A different
+                # casing would create two browser-identical rooms in PostgreSQL's
+                # case-sensitive unique index, so block it.
+                if existing_chat_name.lower() != name.lower() or _catalog_has_roomname(catalog, existing_chat_name or name):
                     return jsonify({"error": "Room name already in use"}), 409
-                # else: proceed to insert into custom_rooms (revive)
+                if existing_chat_name != name:
+                    return jsonify({"error": "Room name already in use"}), 409
+                # else: proceed to insert into custom_rooms (revive exact stale orphan)
 
             cur.execute(
                 """
@@ -927,6 +984,9 @@ def api_invite_to_custom_room():
     guard = _too_large_json_guard() or _chat_rate_limit_guard("custom_room_invite", "rate_limit_custom_room_invite", default_limit=20, default_window=60, actor=actor)
     if guard is not None:
         return guard
+    denied, status = _room_action_denial(actor, "invite")
+    if denied is not None:
+        return _chat_json(denied, status)
     data = request.get_json(silent=True) or {}
     room = (data.get("room") or "").strip()
     invitee = (data.get("invitee") or "").strip()
@@ -949,8 +1009,8 @@ def api_invite_to_custom_room():
             # The invite button can live in the room browser, so the inviter does
             # not have to be connected to the room right now.  They do need
             # accepted private-room entry access, not just a pending invite.
-            if not can_user_join_custom_room(canonical_room, actor):
-                return _chat_json({"error": "No access to invite for this room"}, 403)
+            if not can_user_moderate_custom_room(canonical_room, actor):
+                return _chat_json({"error": "Only the room owner or a room moderator can invite users to this private room"}, 403)
 
             cur.execute("SELECT username FROM users WHERE LOWER(username)=LOWER(%s) LIMIT 1;", (invitee,))
             urow = cur.fetchone()
@@ -1121,6 +1181,9 @@ def api_revoke_custom_room_member():
     guard = _too_large_json_guard() or _chat_rate_limit_guard("custom_room_member_revoke", "rate_limit_custom_room_member_manage", default_limit=20, default_window=60, actor=actor)
     if guard is not None:
         return guard
+    denied, status = _room_action_denial(actor, "member_manage")
+    if denied is not None:
+        return _chat_json(denied, status)
     data = request.get_json(silent=True) or {}
     room = (data.get("room") or "").strip()
     target = (data.get("username") or data.get("target") or "").strip()
@@ -1194,11 +1257,17 @@ def api_list_custom_room_invites():
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT r.name, i.invited_by, i.created_at
+                SELECT r.name, i.invited_by, i.created_at, r.category, r.subcategory
                   FROM custom_room_invites i
                   JOIN custom_rooms r ON LOWER(r.name) = LOWER(i.room_name)
                  WHERE LOWER(i.invited_user) = LOWER(%s)
                    AND r.is_private = TRUE
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM blocks b
+                        WHERE (LOWER(b.blocker)=LOWER(%s) AND LOWER(b.blocked)=LOWER(i.invited_by))
+                           OR (LOWER(b.blocker)=LOWER(i.invited_by) AND LOWER(b.blocked)=LOWER(%s))
+                   )
                    AND NOT EXISTS (
                        SELECT 1
                          FROM custom_room_members m
@@ -1209,7 +1278,7 @@ def api_list_custom_room_invites():
                  ORDER BY i.created_at DESC
                  LIMIT 200;
                 """,
-                (username, username),
+                (username, username, username, username),
             )
             rows = cur.fetchall() or []
         invites = [
@@ -1218,6 +1287,8 @@ def api_list_custom_room_invites():
                 "by": r[1],
                 "kind": "custom_private",
                 "created_at": (r[2].isoformat() if hasattr(r[2], "isoformat") else str(r[2])),
+                "category": r[3],
+                "subcategory": r[4],
             }
             for r in rows
         ]
@@ -1239,6 +1310,9 @@ def api_accept_custom_room_invite():
     guard = _too_large_json_guard() or _chat_rate_limit_guard("custom_room_invite_accept", "rate_limit_room_invite_response", default_limit=30, default_window=60, actor=actor)
     if guard is not None:
         return guard
+    denied, status = _room_action_denial(actor, "accept_invite")
+    if denied is not None:
+        return _chat_json(denied, status)
     data = request.get_json(silent=True) or {}
     room = (data.get("room") or "").strip()
     if not room:
@@ -1256,7 +1330,7 @@ def api_accept_custom_room_invite():
                    AND r.is_private = TRUE
                    AND LOWER(i.room_name)=LOWER(%s)
                    AND LOWER(i.invited_user)=LOWER(%s)
-                RETURNING r.name, i.invited_by;
+                RETURNING r.name, i.invited_by, r.category, r.subcategory;
                 """,
                 (room, actor),
             )
@@ -1266,6 +1340,8 @@ def api_accept_custom_room_invite():
                 return _chat_json({"error": "No pending invite for this private room", "kind": "custom_private"}, 403)
             accepted_room = str(row[0] if row and row[0] else room).strip()
             invited_by = (str(row[1]) if row and row[1] else "")
+            accepted_category = (str(row[2]) if row and len(row) > 2 and row[2] else "")
+            accepted_subcategory = (str(row[3]) if row and len(row) > 3 and row[3] else "")
 
             if invited_by and _either_blocked(actor, invited_by):
                 conn.commit()
@@ -1289,7 +1365,7 @@ def api_accept_custom_room_invite():
             )
         conn.commit()
         _emit_to_username(actor, "room_invite_cleared", {"room": accepted_room, "by": invited_by, "kind": "custom_private", "action": "accepted"})
-        return _chat_json({"status": "ok", "deleted": 1, "room": accepted_room, "kind": "custom_private", "action": "accepted"}, 200)
+        return _chat_json({"status": "ok", "deleted": 1, "room": accepted_room, "kind": "custom_private", "action": "accepted", "category": accepted_category, "subcategory": accepted_subcategory}, 200)
     except Exception:
         try:
             if conn:
@@ -1359,6 +1435,9 @@ def api_invite_to_room_any():
     guard = _too_large_json_guard() or _chat_rate_limit_guard("room_invite", "rate_limit_room_invite", default_limit=20, default_window=60, actor=actor)
     if guard is not None:
         return guard
+    denied, status = _room_action_denial(actor, "invite")
+    if denied is not None:
+        return _chat_json(denied, status)
     data = request.get_json(silent=True) or {}
     room = (data.get("room") or "").strip()
     invitee = (data.get("invitee") or "").strip()
@@ -1400,8 +1479,8 @@ def api_invite_to_room_any():
                     return _chat_json({"error": "Room not found"}, 404)
 
             if row and bool(row[2]):
-                if not can_user_join_custom_room(canonical_room, actor):
-                    return _chat_json({"error": "No access to invite for this room"}, 403)
+                if not can_user_moderate_custom_room(canonical_room, actor):
+                    return _chat_json({"error": "Only the room owner or a room moderator can invite users to this private room"}, 403)
                 if _custom_room_join_access_exists_cur(cur, canonical_room, invitee, created_by=created_by):
                     return _chat_json({"error": "User already has access to this private room", "kind": "custom_private"}, 409)
 
@@ -1455,13 +1534,22 @@ def api_list_room_invites():
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT room_name, invited_by, created_at
-                  FROM room_invites
-                 WHERE invited_user = %s
-                 ORDER BY created_at DESC
+                SELECT r.name, i.invited_by, i.created_at
+                  FROM room_invites i
+                  JOIN chat_rooms r ON LOWER(r.name)=LOWER(i.room_name)
+                  LEFT JOIN custom_rooms cr ON LOWER(cr.name)=LOWER(r.name)
+                 WHERE LOWER(i.invited_user) = LOWER(%s)
+                   AND (cr.name IS NULL OR cr.is_private = FALSE)
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM blocks b
+                        WHERE (LOWER(b.blocker)=LOWER(%s) AND LOWER(b.blocked)=LOWER(i.invited_by))
+                           OR (LOWER(b.blocker)=LOWER(i.invited_by) AND LOWER(b.blocked)=LOWER(%s))
+                   )
+                 ORDER BY i.created_at DESC
                  LIMIT 200;
                 """,
-                (username,),
+                (username, username, username),
             )
             rows = cur.fetchall() or []
         invites = [
@@ -1487,6 +1575,9 @@ def api_accept_room_invite():
     guard = _too_large_json_guard() or _chat_rate_limit_guard("room_invite_accept", "rate_limit_room_invite_response", default_limit=30, default_window=60, actor=actor)
     if guard is not None:
         return guard
+    denied, status = _room_action_denial(actor, "accept_invite")
+    if denied is not None:
+        return _chat_json(denied, status)
     data = request.get_json(silent=True) or {}
     room = (data.get("room") or "").strip()
     if not room:
@@ -1496,16 +1587,15 @@ def api_accept_room_invite():
     try:
         conn = get_db()
         with conn.cursor() as cur:
-            cur.execute(
-                "DELETE FROM room_invites WHERE room_name=%s AND invited_user=%s RETURNING invited_by;",
-                (room, actor),
-            )
-            row = cur.fetchone()
+            row = _delete_generic_room_invite_casefold(cur, room, actor)
             deleted = 1 if row else 0
-            invited_by = (str(row[0]) if row and row[0] else "")
+            accepted_room = str(row[0] if row and row[0] else room).strip()
+            invited_by = (str(row[1]) if row and row[1] else "")
         conn.commit()
-        _emit_to_username(actor, "room_invite_cleared", {"room": room, "by": invited_by, "kind": "room", "action": "accepted"})
-        return jsonify({"status": "ok", "deleted": deleted, "kind": "room", "action": "accepted"}), 200
+        _emit_to_username(actor, "room_invite_cleared", {"room": accepted_room, "by": invited_by, "kind": "room", "action": "accepted"})
+        if deleted and invited_by and _either_blocked(actor, invited_by):
+            return jsonify({"error": "You cannot accept this invite", "deleted": deleted, "kind": "room", "action": "blocked", "room": accepted_room}), 403
+        return jsonify({"status": "ok", "deleted": deleted, "room": accepted_room, "kind": "room", "action": "accepted"}), 200
     except Exception as e:
         try:
             if conn:
@@ -1533,16 +1623,13 @@ def api_decline_room_invite():
     try:
         conn = get_db()
         with conn.cursor() as cur:
-            cur.execute(
-                "DELETE FROM room_invites WHERE room_name=%s AND invited_user=%s RETURNING invited_by;",
-                (room, actor),
-            )
-            row = cur.fetchone()
+            row = _delete_generic_room_invite_casefold(cur, room, actor)
             deleted = 1 if row else 0
-            invited_by = (str(row[0]) if row and row[0] else "")
+            declined_room = str(row[0] if row and row[0] else room).strip()
+            invited_by = (str(row[1]) if row and row[1] else "")
         conn.commit()
-        _emit_to_username(actor, "room_invite_cleared", {"room": room, "by": invited_by, "kind": "room", "action": "declined"})
-        return jsonify({"status": "ok", "deleted": deleted, "kind": "room", "action": "declined"}), 200
+        _emit_to_username(actor, "room_invite_cleared", {"room": declined_room, "by": invited_by, "kind": "room", "action": "declined"})
+        return jsonify({"status": "ok", "deleted": deleted, "room": declined_room, "kind": "room", "action": "declined"}), 200
     except Exception as e:
         try:
             if conn:

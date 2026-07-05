@@ -41,6 +41,15 @@ def _safe_verify_jwt(optional: bool = False) -> str | None:
 # the lower powers needed to view the admin UI and complete that same workflow.
 _PERMISSION_INHERITANCE: dict[str, set[str]] = {
     "admin:settings": {"admin:basic"},
+    "admin:audit": {"admin:basic"},
+    "admin:test_lab": {"admin:basic"},
+    "admin:create_user": {"admin:basic"},
+    "admin:delete_user": {"admin:basic", "admin:logout_user"},
+    "admin:set_recovery_pin": {"admin:basic"},
+    "admin:set_user_status": {"admin:basic", "admin:logout_user"},
+    "admin:set_user_quota": {"admin:basic"},
+    "admin:revoke_2fa": {"admin:basic", "admin:logout_user"},
+    "admin:broadcast": {"admin:basic"},
     "admin:assign_role": {"admin:basic"},
     "admin:manage_roles": {"admin:basic", "admin:assign_role"},
     "admin:ban_ip": {"admin:basic", "admin:logout_user"},
@@ -48,10 +57,11 @@ _PERMISSION_INHERITANCE: dict[str, set[str]] = {
     "admin:logout_user": {"admin:basic"},
     "moderation:kick_user": {"moderation:mute_user"},
     "moderation:ban_room": {"moderation:kick_user", "moderation:mute_user"},
-    "moderation:suspend_user": {"moderation:mute_user"},
+    "moderation:suspend_user": {"moderation:mute_user", "profile:moderate"},
     "moderation:shadowban": {"moderation:mute_user"},
     "room:lock": {"room:readonly"},
-    "room:delete": {"room:lock", "room:readonly"},
+    "room:clear": {"room:readonly"},
+    "room:delete": {"room:lock", "room:clear", "room:readonly"},
 }
 
 

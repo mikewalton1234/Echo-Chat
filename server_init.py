@@ -59,6 +59,8 @@ from flask_wtf import CSRFProtect
 from constants import APP_VERSION, DEFAULT_SERVER_NAME, sanitize_postgres_dsn, get_db_connection_string, redact_postgres_dsn, postgres_dsn_parts, sanitize_sound_pack_external_urls
 from werkzeug.middleware.proxy_fix import ProxyFix
 from secrets_policy import persist_secrets_enabled, scrub_secrets_for_persist
+from secret_manager import ensure_secret, is_strong_secret, missing_core_or_crypto, resolve_secret
+from scaled_redis_autoconfig import apply_scaled_runtime_safety_defaults, redis_install_hint
 from preflight import run_preflight, log_preflight_summary
 from account_creation_policy import password_policy_metadata
 from db.core import prepare_runtime_database
@@ -86,6 +88,7 @@ from routes_admin_tools import register_admin_tools
 from moderation_routes import register_moderation_routes
 from routes_media import register_media_routes
 from media_mode import client_av_config, media_permissions_policy
+from realtime.state import configure_shared_state, shared_state_summary
 
 # CORS is optional
 try:
@@ -145,12 +148,67 @@ def _safe_positive_int(value: Any, default: int, *, name: str, minimum: int | No
     return parsed
 
 
+def _safe_int(value: Any, default: int, *, name: str, minimum: int | None = None, maximum: int | None = None) -> int:
+    """Parse an integer runtime setting without crashing startup.
+
+    Use this for app-factory settings that may be hand-edited in JSON or supplied
+    by environment variables.  Invalid values fall back to a safe default and are
+    logged instead of killing the app with a raw ValueError.
+    """
+    try:
+        parsed = int(value)
+    except Exception:
+        logging.warning("Invalid %s=%r; using %s", name, value, default)
+        parsed = int(default)
+    if minimum is not None and parsed < minimum:
+        logging.warning("%s=%s is below minimum %s; clamping", name, parsed, minimum)
+        parsed = int(minimum)
+    if maximum is not None and parsed > maximum:
+        logging.warning("%s=%s is above maximum %s; clamping", name, parsed, maximum)
+        parsed = int(maximum)
+    return parsed
+
+
 def _socketio_redis_queue_forced(settings: Dict[str, Any]) -> bool:
     return (
         _truthy_runtime_flag(os.environ.get("ECHOCHAT_FORCE_SOCKETIO_REDIS_QUEUE"))
         or _truthy_runtime_flag(os.environ.get("FORCE_SOCKETIO_REDIS_QUEUE"))
         or _truthy_runtime_flag(settings.get("force_socketio_redis_queue"))
         or _truthy_runtime_flag(settings.get("socketio_force_message_queue"))
+    )
+
+
+def _runtime_worker_count(settings: Dict[str, Any]) -> int:
+    for name in ("ECHOCHAT_WORKERS", "ECHOCHAT_PRODUCTION_WORKERS", "WEB_CONCURRENCY", "PRODUCTION_WORKERS"):
+        raw = os.environ.get(name)
+        if raw:
+            return _safe_positive_int(raw, 1, name=name, minimum=1)
+    for key in ("production_workers", "worker_count", "web_workers"):
+        raw = settings.get(key)
+        if raw:
+            return _safe_positive_int(raw, 1, name=key, minimum=1)
+    return 1
+
+
+def _production_instance_count(settings: Dict[str, Any]) -> int:
+    for name in ("ECHOCHAT_PRODUCTION_INSTANCES", "ECHOCHAT_INSTANCE_COUNT", "PRODUCTION_INSTANCES"):
+        raw = os.environ.get(name)
+        if raw:
+            return _safe_positive_int(raw, 1, name=name, minimum=1, maximum=10)
+    for key in ("production_instance_count", "production_instances", "instance_count"):
+        raw = settings.get(key)
+        if raw:
+            return _safe_positive_int(raw, 1, name=key, minimum=1, maximum=10)
+    return 1
+
+
+def _explicit_socketio_queue_from_settings(settings: Dict[str, Any]) -> str:
+    socketio_profile = settings.get("socketio_profile") or {}
+    if not isinstance(socketio_profile, dict):
+        socketio_profile = {}
+    return (
+        str(socketio_profile.get("message_queue") or "").strip()
+        or str(settings.get("socketio_message_queue") or "").strip()
     )
 
 
@@ -203,22 +261,16 @@ def _get_socketio_message_queue(settings: Dict[str, Any], *, worker_count: int =
         if v:
             return v
 
-    socketio_profile = settings.get("socketio_profile") or {}
-    if not isinstance(socketio_profile, dict):
-        socketio_profile = {}
-
-    configured = (
-        str(socketio_profile.get("message_queue") or "").strip()
-        or str(settings.get("socketio_message_queue") or "").strip()
-    )
-    redis_url = (os.environ.get("REDIS_URL") or "").strip()
-    candidate = configured or redis_url
+    candidate = _explicit_socketio_queue_from_settings(settings)
     if not candidate:
+        if os.environ.get("REDIS_URL"):
+            logging.info("[socketio] REDIS_URL is ignored for Socket.IO. Set ECHOCHAT_SOCKETIO_MESSAGE_QUEUE explicitly when scaling.")
         return None
 
-    if int(worker_count or 1) <= 1 and not force_queue:
+    instances = _production_instance_count(settings)
+    if int(worker_count or 1) <= 1 and instances <= 1 and not force_queue:
         logging.info(
-            "[socketio] Single-worker runtime: Socket.IO message queue is disabled for this process. "
+            "[socketio] Single-worker/single-instance runtime: Socket.IO message queue is disabled for this process. "
             "Set ECHOCHAT_FORCE_SOCKETIO_REDIS_QUEUE=1 only if you intentionally use external Socket.IO emitters."
         )
         return None
@@ -249,15 +301,16 @@ def _require_redis_connectivity(redis_url: str) -> None:
     except ImportError:
         logging.critical(
             "[socketio] Redis message queue configured (%s) but python package 'redis' is not installed. "
-            "Install with: pip install redis",
+            "Install with: pip install redis>=5.0 or python -m pip install -r requirements.txt",
             _redact_redis_url(redis_url),
         )
         raise SystemExit(2)
     except Exception as exc:
         logging.critical(
-            "[socketio] Redis message queue configured (%s) but Redis is not reachable: %s",
+            "[socketio] Redis message queue configured (%s) but Redis is not reachable: %s. %s",
             _redact_redis_url(redis_url),
             exc,
+            redis_install_hint(),
         )
         raise SystemExit(2)
 
@@ -284,19 +337,17 @@ def _parse_socketio_transport_setting(value: Any) -> list[str] | None:
 
 def _resolve_socketio_runtime_profile(settings: Dict[str, Any], async_mode: str | None = None) -> Dict[str, Any]:
     async_mode = str(async_mode or _determine_socketio_async_mode() or "threading").strip().lower()
-    worker_count = _safe_positive_int(
-        os.environ.get("WEB_CONCURRENCY") or settings.get("worker_count") or 1,
-        1,
-        name="WEB_CONCURRENCY/worker_count",
-        minimum=1,
-    )
+    worker_count = _runtime_worker_count(settings)
+    production_instances = _production_instance_count(settings)
     socketio_profile = settings.get("socketio_profile") or {}
     if not isinstance(socketio_profile, dict):
         socketio_profile = {}
     message_queue = _get_socketio_message_queue(settings, worker_count=worker_count)
     forced_websocket_only = bool(worker_count > 1)
     if worker_count > 1 and not message_queue:
-        logging.warning('Multi-worker mode requires socketio_message_queue/REDIS_URL')
+        logging.warning('Multi-worker mode requires explicit ECHOCHAT_SOCKETIO_MESSAGE_QUEUE/socketio_message_queue')
+    if production_instances > 1 and not message_queue:
+        logging.warning('Multiple Echo-Chat instances require explicit ECHOCHAT_SOCKETIO_MESSAGE_QUEUE/socketio_message_queue')
     if worker_count > 1 and async_mode == 'threading':
         logging.warning('Multi-worker mode requires eventlet/WebSocket support; threading + polling is not supported')
 
@@ -341,6 +392,7 @@ def _resolve_socketio_runtime_profile(settings: Dict[str, Any], async_mode: str 
     max_http_buffer_size = min(requested_http_buffer, max(16384, event_payload_limit + 65536))
     return {
         "worker_count": worker_count,
+        "production_instance_count": production_instances,
         "message_queue": message_queue,
         "websocket_only": websocket_only,
         "transports": transports,
@@ -431,6 +483,18 @@ def _is_public_beta_startup(settings: Dict[str, Any]) -> bool:
     run_mode = str(settings.get("run_mode") or "").strip().lower()
     production_mode = bool(settings.get("production_mode", False)) or run_mode in {"production", "prod"}
     public_url = str(settings.get("public_base_url") or "").strip()
+
+    # A saved/default hosting_mode=lan must not hide a real public production URL.
+    # main.py --development rewrites run_mode/production_mode for the current process,
+    # so the explicit development override still stays local even if a public URL is saved.
+    if production_mode and public_url.lower().startswith("https://"):
+        try:
+            parsed_public = urlparse(public_url)
+            if parsed_public.scheme == "https" and parsed_public.hostname:
+                return True
+        except Exception:
+            pass
+
     if mode == "public_beta":
         return True
     if mode in {"lan", "local", "development", "dev", "no_domain_yet", "no_domain"}:
@@ -482,11 +546,24 @@ def _validate_public_beta_startup_settings(settings: Dict[str, Any], settings_fi
     """
     if not _is_public_beta_startup(settings):
         return
-    if bool(settings.get("allow_insecure_production_start", False)):
-        logging.critical("allow_insecure_production_start=true; public beta startup guards bypassed")
-        return
+    allow_unsafe = bool(settings.get("allow_insecure_production_start", False))
+    if allow_unsafe and os.getenv("ECHOCHAT_FORCE_UNSAFE_PUBLIC_START") != "1":
+        logging.critical("allow_insecure_production_start=true ignored without ECHOCHAT_FORCE_UNSAFE_PUBLIC_START=1")
+        allow_unsafe = False
 
     errors: list[str] = []
+    if allow_unsafe:
+        # Still never allow public startup with missing/placeholder core secrets;
+        # one-off Flask/JWT secrets break auth and can poison at-rest crypto.
+        if not is_strong_secret(resolve_secret(settings, "secret_key")):
+            errors.append("SECRET_KEY must be a stable strong secret even when unsafe bypass is requested")
+        if not is_strong_secret(resolve_secret(settings, "jwt_secret")):
+            errors.append("JWT_SECRET_KEY must be a stable strong secret even when unsafe bypass is requested")
+        if errors:
+            raise RuntimeError("Public beta startup blocked: " + "; ".join(errors))
+        logging.critical("ECHOCHAT_FORCE_UNSAFE_PUBLIC_START=1; public beta readiness guards bypassed after core-secret check")
+        return
+
 
     # Keep a tiny built-in safety net first so a broken readiness import never
     # turns an unsafe public-beta configuration into a successful boot.
@@ -509,19 +586,31 @@ def _validate_public_beta_startup_settings(settings: Dict[str, Any], settings_fi
     if not rate_storage or rate_storage == "memory://":
         errors.append("rate_limit_storage_uri must use Redis or another shared backend, not memory://")
 
-    try:
-        workers = int(settings.get("production_workers") or os.environ.get("WEB_CONCURRENCY") or 1)
-    except Exception:
-        workers = 1
-    if workers > 1 and not str(settings.get("socketio_message_queue") or "").strip():
-        errors.append("production_workers > 1 requires socketio_message_queue")
+    workers = _runtime_worker_count(settings)
+    instances = _production_instance_count(settings)
+    if (workers > 1 or instances > 1) and not _explicit_socketio_queue_from_settings(settings):
+        errors.append("scaled Socket.IO topology requires explicit socketio_message_queue")
+    if (workers > 1 or instances > 1) and not str(
+        os.environ.get("ECHOCHAT_SHARED_STATE_REDIS_URL")
+        or os.environ.get("SHARED_STATE_REDIS_URL")
+        or settings.get("shared_state_redis_url")
+        or ""
+    ).strip():
+        errors.append("scaled realtime topology requires explicit shared_state_redis_url")
 
-    try:
-        max_socket_payload = int(settings.get("socketio_event_max_payload_bytes") or 65536)
-    except Exception:
-        max_socket_payload = 65536
+    max_socket_payload = _safe_int(
+        settings.get("socketio_event_max_payload_bytes") or 65536,
+        65536,
+        name="socketio_event_max_payload_bytes",
+        minimum=1024,
+        maximum=1048576,
+    )
     if max_socket_payload > 131072:
         errors.append("socketio_event_max_payload_bytes must be 131072 or less for public beta")
+
+    missing_crypto = missing_core_or_crypto(settings, include_crypto=True)
+    if missing_crypto:
+        errors.append("stable public secrets/crypto keys missing: " + ", ".join(missing_crypto))
 
     try:
         from public_beta_readiness import build_public_beta_readiness
@@ -599,6 +688,102 @@ def _log_connected_database_identity(settings: Dict[str, Any], ident: Dict[str, 
         logging.info("Connected DB matches configured database/user")
 
 
+def _db_pool_bounds_for_runtime(settings: Dict[str, Any]) -> tuple[int, int]:
+    """Return DB pool min/max adjusted for the current instance topology.
+
+    Single-process LAN/dev mode keeps the historical larger pool because the UI
+    can burst through reconnects and admin polling.  Scaled production must not
+    force every instance to 50 connections; ten one-worker instances at 50 each
+    can exceed a normal local PostgreSQL max_connections setting before users
+    even arrive.
+    """
+    instances = _production_instance_count(settings)
+    cfg_min = _safe_int(settings.get("db_pool_min", 1), 1, name="db_pool_min", minimum=1, maximum=25)
+    raw_max = settings.get("db_pool_max", None)
+    if raw_max is None or str(raw_max).strip() == "":
+        if instances <= 1:
+            cfg_max = 50
+        elif instances <= 2:
+            cfg_max = 25
+        elif instances <= 5:
+            cfg_max = 15
+        else:
+            cfg_max = 10
+    else:
+        cfg_max = _safe_int(raw_max, 50 if instances <= 1 else 10, name="db_pool_max", minimum=1, maximum=100)
+
+    if instances <= 1 and cfg_max < 50:
+        logging.warning("db_pool_max=%s is low for single-instance UI bursts; forcing to 50", cfg_max)
+        cfg_max = 50
+    elif instances > 1 and cfg_max > 25:
+        logging.warning(
+            "db_pool_max=%s with %s instances can open up to %s database connections; consider 5-15 per instance or PgBouncer",
+            cfg_max,
+            instances,
+            cfg_max * instances,
+        )
+
+    if cfg_min > cfg_max:
+        logging.warning("db_pool_min=%s is above db_pool_max=%s; clamping min to max", cfg_min, cfg_max)
+        cfg_min = cfg_max
+    return cfg_min, cfg_max
+
+
+def _configure_realtime_shared_state(app: Flask, settings: Dict[str, Any], runtime_context: Dict[str, Any]) -> dict:
+    """Configure Redis-backed shared realtime state and expose status.
+
+    Socket.IO Redis pub/sub carries cross-process emits, while shared-state Redis
+    keeps presence and room rosters consistent across multiple app instances.
+    For scaled mode, degraded process-local state is not safe enough to hide.
+    """
+    workers = _safe_positive_int(runtime_context.get("worker_count") or 1, 1, name="worker_count", minimum=1)
+    instances = _safe_positive_int(runtime_context.get("production_instance_count") or 1, 1, name="production_instance_count", minimum=1, maximum=10)
+    scaled = bool(workers > 1 or instances > 1)
+    error = None
+    enabled = False
+    try:
+        enabled = bool(configure_shared_state(settings))
+    except Exception as exc:  # pragma: no cover - defensive runtime path
+        error = str(exc)
+        enabled = False
+        logging.exception("Shared realtime state configuration failed")
+
+    summary = {}
+    try:
+        summary = dict(shared_state_summary() or {})
+    except Exception as exc:
+        if not error:
+            error = str(exc)
+        summary = {}
+
+    status = {
+        "enabled": enabled,
+        "scaled_required": scaled,
+        "error": error,
+        "summary": summary,
+    }
+    app.config["ECHOCHAT_SHARED_STATE_ENABLED"] = enabled
+    app.config["ECHOCHAT_SHARED_STATE_STATUS"] = status
+    runtime_context["shared_state_enabled"] = enabled
+
+    if enabled:
+        logging.info("Shared realtime state enabled prefix=%s", summary.get("prefix"))
+        return status
+
+    if scaled:
+        msg = (
+            "Scaled realtime mode requires explicit reachable shared-state Redis. "
+            "Set ECHOCHAT_SHARED_STATE_REDIS_URL=redis://127.0.0.1:6379/2."
+        )
+        if error:
+            msg += f" Last error: {error}"
+        logging.critical(msg)
+        raise RuntimeError(msg)
+
+    logging.info("Shared realtime state disabled; single-instance process-local state will be used")
+    return status
+
+
 def _initialize_database_stack(app: Flask, settings: Dict[str, Any]) -> None:
     prepare_runtime_database(settings)
     with app.app_context():
@@ -612,11 +797,7 @@ def _initialize_database_stack(app: Flask, settings: Dict[str, Any]) -> None:
         # invites, etc.) becomes flaky.
         # We therefore enforce a sane *floor* for dev so the app remains stable even if an
         # older server_config.json has db_pool_max=10.
-        cfg_min = int(settings.get("db_pool_min", 1))
-        cfg_max = int(settings.get("db_pool_max", 50))
-        if cfg_max < 50:
-            logging.warning("db_pool_max=%s is too low for the current UI; forcing to 50", cfg_max)
-            cfg_max = 50
+        cfg_min, cfg_max = _db_pool_bounds_for_runtime(settings)
         init_db_pool(
             minconn=cfg_min,
             maxconn=cfg_max,
@@ -652,21 +833,31 @@ def _create_socketio_instance(app: Flask, settings: Dict[str, Any], cors_origins
     app.config["ECHOCHAT_SOCKETIO_TRANSPORTS"] = transports
     app.config["ECHOCHAT_SOCKETIO_WEBSOCKET_ONLY"] = bool(socketio_profile.get("websocket_only"))
     app.config["ECHOCHAT_WS_ENABLED"] = "websocket" in transports
-    app.config["ECHOCHAT_START_JANITOR_INPROCESS"] = bool(socketio_profile.get("worker_count", 1) <= 1)
+    app.config["ECHOCHAT_START_JANITOR_INPROCESS"] = bool(
+        socketio_profile.get("worker_count", 1) <= 1
+        and socketio_profile.get("production_instance_count", 1) <= 1
+        and not os.environ.get("GUNICORN_CMD_ARGS")
+    )
 
-    # Multi-worker broadcast (recommended for scale): configure Redis message queue.
-    # Supports either server_config.json or env vars (preferred for infra):
-    #   - ECHOCHAT_SOCKETIO_MESSAGE_QUEUE=redis://127.0.0.1:6379/0
-    #   - or set REDIS_URL and omit the above.
+    # Cross-process broadcast (required for scale): configure an explicit Redis
+    # Socket.IO queue with ECHOCHAT_SOCKETIO_MESSAGE_QUEUE or socketio_message_queue.
+    # Do not rely on generic REDIS_URL; Echo-Chat keeps Redis DBs separated.
     message_queue = socketio_profile.get("message_queue")
     if message_queue:
         _require_redis_connectivity(message_queue)
+
+    # Keep this as a plain cookie name for python-engineio compatibility.
+    # Some Engine.IO versions concatenate cookie attributes as strings and crash
+    # when dict values such as httponly=True/secure=False are booleans.
+    # JWT/auth cookies remain hardened separately by Flask/JWT settings.
+    engineio_cookie = "echochat_io"
 
     socketio = SocketIO(
         app,
         async_mode=async_mode,
         cors_allowed_origins=cors_origins,
-        cookie="echochat_io",
+        cookie=engineio_cookie,
+        always_connect=True,
         logger=False,
         engineio_logger=False,
         ping_interval=20,
@@ -681,10 +872,14 @@ def _create_socketio_instance(app: Flask, settings: Dict[str, Any], cors_origins
         "ws_enabled": app.config.get("ECHOCHAT_WS_ENABLED"),
         "message_queue": message_queue,
         "worker_count": socketio_profile.get("worker_count"),
+        "production_instance_count": socketio_profile.get("production_instance_count"),
         "websocket_only": socketio_profile.get("websocket_only"),
         "socketio_event_max_payload_bytes": socketio_profile.get("socketio_event_max_payload_bytes"),
         "max_http_buffer_size": socketio_profile.get("max_http_buffer_size"),
+        "engineio_cookie_hardened": False,
+        "engineio_cookie_mode": "compatibility-name-only",
     }
+    _configure_realtime_shared_state(app, settings, runtime_context)
     app.config["ECHOCHAT_SOCKETIO_MESSAGE_QUEUE"] = message_queue
     app.config["ECHOCHAT_SOCKETIO_RUNTIME_PROFILE"] = dict(runtime_context)
     return socketio, runtime_context
@@ -795,6 +990,20 @@ def create_app(
     """
 
     settings_file = Path(settings_file) if isinstance(settings_file, str) else settings_file
+    apply_scaled_runtime_safety_defaults(settings)
+    # Make secrets admin-friendly: if setup/config scrubbed secrets out of JSON,
+    # generate stable values and store them in a protected .env before any public
+    # readiness guard or at-rest crypto helper can fall back to one-off material.
+    for _canonical in (
+        "secret_key",
+        "jwt_secret",
+        "profile_field_encryption_key",
+        "email_field_encryption_key",
+        "email_hash_key",
+        "security_backup_encryption_key",
+        "privacy_retention_hash_key",
+    ):
+        ensure_secret(settings, _canonical, settings_file=settings_file)
     _validate_public_beta_startup_settings(settings, settings_file=settings_file)
 
     # ───── Flask App Core ─────
@@ -810,11 +1019,30 @@ def create_app(
     app.config["ECHOCHAT_SETTINGS"] = settings
 
     trust_proxy_headers = bool(settings.get("trust_proxy_headers", False))
-    proxy_fix_hops = int(settings.get("proxy_fix_hops", 1) or 1)
+    proxy_fix_hops = _safe_int(settings.get("proxy_fix_hops", 1), 1, name="proxy_fix_hops", minimum=0, maximum=5)
+    proxy_fix_x_for = _safe_int(settings.get("proxy_fix_x_for", proxy_fix_hops), proxy_fix_hops, name="proxy_fix_x_for", minimum=0, maximum=5)
+    proxy_fix_x_proto = _safe_int(settings.get("proxy_fix_x_proto", proxy_fix_hops), proxy_fix_hops, name="proxy_fix_x_proto", minimum=0, maximum=5)
+    proxy_fix_x_host = _safe_int(settings.get("proxy_fix_x_host", proxy_fix_hops), proxy_fix_hops, name="proxy_fix_x_host", minimum=0, maximum=5)
+    proxy_fix_x_port = _safe_int(settings.get("proxy_fix_x_port", proxy_fix_hops), proxy_fix_hops, name="proxy_fix_x_port", minimum=0, maximum=5)
+    proxy_fix_x_prefix = _safe_int(settings.get("proxy_fix_x_prefix", 0), 0, name="proxy_fix_x_prefix", minimum=0, maximum=5)
     app.config["ECHOCHAT_TRUST_PROXY_HEADERS"] = trust_proxy_headers
     app.config["ECHOCHAT_PROXY_FIX_HOPS"] = proxy_fix_hops
+    app.config["ECHOCHAT_PROXY_FIX_COUNTS"] = {
+        "x_for": proxy_fix_x_for,
+        "x_proto": proxy_fix_x_proto,
+        "x_host": proxy_fix_x_host,
+        "x_port": proxy_fix_x_port,
+        "x_prefix": proxy_fix_x_prefix,
+    }
     if trust_proxy_headers:
-        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=proxy_fix_hops, x_proto=proxy_fix_hops, x_host=proxy_fix_hops, x_port=proxy_fix_hops)
+        app.wsgi_app = ProxyFix(
+            app.wsgi_app,
+            x_for=proxy_fix_x_for,
+            x_proto=proxy_fix_x_proto,
+            x_host=proxy_fix_x_host,
+            x_port=proxy_fix_x_port,
+            x_prefix=proxy_fix_x_prefix,
+        )
 
     # Dev-server hardening: prevent Werkzeug's built-in server from printing
     # "write() before start_response" for invalid WSGI edge paths.
@@ -824,9 +1052,9 @@ def create_app(
     _wrap_wsgi_start_response_guard(app, settings, layer="flask")
 
     app.secret_key = _ensure_secret_key(settings, settings_file)
-    max_request_bytes = int(settings.get("max_request_bytes") or 31457280)
-    max_form_memory_size = int(settings.get("max_form_memory_size") or 500000)
-    max_form_parts = int(settings.get("max_form_parts") or 100)
+    max_request_bytes = _safe_int(settings.get("max_request_bytes") or 31457280, 31457280, name="max_request_bytes", minimum=1024, maximum=104857600)
+    max_form_memory_size = _safe_int(settings.get("max_form_memory_size") or 500000, 500000, name="max_form_memory_size", minimum=1024, maximum=10485760)
+    max_form_parts = _safe_int(settings.get("max_form_parts") or 100, 100, name="max_form_parts", minimum=1, maximum=10000)
     app.config.update(
         MAX_CONTENT_LENGTH=max_request_bytes,
         MAX_FORM_MEMORY_SIZE=max_form_memory_size,
@@ -857,7 +1085,7 @@ def create_app(
 
     def _build_default_csp() -> str:
         nonce = _get_csp_nonce()
-        socketio_client_url = str(settings.get("socketio_client_url") or "https://cdn.socket.io/4.5.0/socket.io.min.js").strip()
+        socketio_client_url = str(settings.get("socketio_client_url") or "/static/vendor/socket.io.min.js").strip()
         script_src = ["'self'", f"'nonce-{nonce}'"]
         socketio_origin = _origin_for_csp(socketio_client_url)
         if socketio_origin and socketio_origin not in script_src:
@@ -908,7 +1136,7 @@ def create_app(
             "server_name_admin": f"{server_name} Admin",
             "app_version": APP_VERSION,
             "csp_nonce": _get_csp_nonce(),
-            "socketio_client_url": str(settings.get("socketio_client_url") or "https://cdn.socket.io/4.5.0/socket.io.min.js").strip(),
+            "socketio_client_url": str(settings.get("socketio_client_url") or "/static/vendor/socket.io.min.js").strip(),
             "password_policy": password_policy.get("summary"),
             "password_min_length": password_policy.get("min_length"),
             "password_max_length": password_policy.get("max_length"),
@@ -941,8 +1169,8 @@ def create_app(
 
         # Defaults in Flask-JWT-Extended are short (15 minutes). For dev UX we
         # use a longer access token and rely on refresh to keep sessions alive.
-        JWT_ACCESS_TOKEN_EXPIRES=timedelta(minutes=int(settings.get("access_token_minutes", 30))),
-        JWT_REFRESH_TOKEN_EXPIRES=timedelta(days=int(settings.get("refresh_token_days", 7))),
+        JWT_ACCESS_TOKEN_EXPIRES=timedelta(minutes=_safe_int(settings.get("access_token_minutes", 30), 30, name="access_token_minutes", minimum=1, maximum=1440)),
+        JWT_REFRESH_TOKEN_EXPIRES=timedelta(days=_safe_int(settings.get("refresh_token_days", 7), 7, name="refresh_token_days", minimum=1, maximum=90)),
 
         # Flask-WTF's global CSRF protection conflicts with our JSON APIs.
         # We validate CSRF manually on HTML forms, and rely on JWT's CSRF tokens
@@ -1021,7 +1249,7 @@ def create_app(
 
             # Only send HSTS when HTTPS is in use.
             if cookie_secure:
-                max_age = int(settings.get("hsts_max_age") or 31536000)
+                max_age = _safe_int(settings.get("hsts_max_age") or 31536000, 31536000, name="hsts_max_age", minimum=0, maximum=63072000)
                 inc_sub = bool(settings.get("hsts_include_subdomains", True))
                 preload = bool(settings.get("hsts_preload", False))
                 hsts = f"max-age={max_age}"
@@ -1128,7 +1356,7 @@ def create_app(
         logging.info(
             "Default localhost-only allowed origins detected; using same-origin LAN mode so browsers opened at "
             "http://<this-computer-ip>:%s can connect Socket.IO without reconnect loops.",
-            int(settings.get("port") or settings.get("server_port") or 5000),
+            _safe_int(settings.get("port") or settings.get("server_port") or 5000, 5000, name="port", minimum=1, maximum=65535),
         )
         cors_candidate = None
 
@@ -1151,6 +1379,11 @@ def create_app(
         logging.warning(lan_warning)
 
     storage_uri = settings.get("rate_limit_storage_uri") or settings.get("rate_limit_storage") or "memory://"
+    simple_guard_storage_uri = str(settings.get("simple_rate_limit_storage_uri") or storage_uri or "").strip()
+    if simple_guard_storage_uri.startswith(("redis://", "rediss://")):
+        app.config["ECHOCHAT_SIMPLE_RATE_LIMIT_REDIS_URL"] = simple_guard_storage_uri
+    else:
+        app.config["ECHOCHAT_SIMPLE_RATE_LIMIT_REDIS_URL"] = ""
     if limiter is None:
         limiter = Limiter(
             key_func=lambda: get_request_ip(),
@@ -1250,14 +1483,14 @@ def create_app(
 
             upload_overhead = 256_000
             upload_caps = {
-                '/upload': int(settings.get('max_legacy_public_upload_bytes') or max_request_bytes) + upload_overhead,
-                '/api/dm_files/upload': int(settings.get('max_dm_file_bytes') or max_request_bytes) + upload_overhead,
-                '/api/group_files/upload': int(settings.get('max_group_upload_bytes') or settings.get('max_group_file_bytes') or max_request_bytes) + upload_overhead,
+                '/upload': _safe_int(settings.get('max_legacy_public_upload_bytes') or max_request_bytes, max_request_bytes, name='max_legacy_public_upload_bytes', minimum=1024, maximum=104857600) + upload_overhead,
+                '/api/dm_files/upload': _safe_int(settings.get('max_dm_file_bytes') or max_request_bytes, max_request_bytes, name='max_dm_file_bytes', minimum=1024, maximum=104857600) + upload_overhead,
+                '/api/group_files/upload': _safe_int(settings.get('max_group_upload_bytes') or settings.get('max_group_file_bytes') or max_request_bytes, max_request_bytes, name='max_group_upload_bytes', minimum=1024, maximum=104857600) + upload_overhead,
             }
             request_content_limit = upload_caps.get(path, max_request_bytes)
             if path.startswith('/api/groups/') and path.endswith('/upload'):
-                request_content_limit = int(settings.get('max_group_upload_bytes') or settings.get('max_group_file_bytes') or max_request_bytes) + upload_overhead
-            request.max_content_length = int(request_content_limit)
+                request_content_limit = _safe_int(settings.get('max_group_upload_bytes') or settings.get('max_group_file_bytes') or max_request_bytes, max_request_bytes, name='max_group_upload_bytes', minimum=1024, maximum=104857600) + upload_overhead
+            request.max_content_length = _safe_int(request_content_limit, max_request_bytes, name='request_content_limit', minimum=1024, maximum=105113600)
 
             if protected_write and bool(settings.get('enforce_same_origin_writes', True)):
                 allow_missing_same_origin_headers_for_writes = bool(settings.get('allow_missing_same_origin_headers_for_writes', False))
@@ -1311,7 +1544,31 @@ def create_app(
                 ok, retry_after = simple_rate_limit(f'formw:{ip}:{path}', limit=lim, window_sec=win)
                 if not ok:
                     return _rate_limited_response('Form submission rate limited', retry_after)
-        except Exception:
+        except Exception as exc:
+            protected = False
+            try:
+                p = request.path or ''
+                m = (request.method or 'GET').upper()
+                protected = (m in {'POST', 'PUT', 'PATCH', 'DELETE'} and (
+                    p.startswith('/api/')
+                    or p.startswith('/admin')
+                    or p.startswith('/auth/')
+                    or p.startswith('/moderation')
+                    or p in {'/login', '/register', '/forgot-password', '/token/refresh', '/logout', '/upload'}
+                    or p.startswith('/reset-password/')
+                ))
+            except Exception:
+                protected = True
+            logging.exception('Central request security guard failed; protected=%s', protected)
+            if protected:
+                wants_json = False
+                try:
+                    wants_json = request.path.startswith(('/api/', '/auth/', '/admin/')) or request.accept_mimetypes.best == 'application/json'
+                except Exception:
+                    wants_json = True
+                if wants_json:
+                    return ({'ok': False, 'error': 'security_guard_failed'}, 500)
+                return ('Security guard failed', 500)
             return None
         return None
 
@@ -1329,11 +1586,9 @@ def create_app(
     _initialize_database_stack(app, settings)
 
     # ───── SocketIO Setup ─────
-    # IMPORTANT: Do not reuse JWT cookie names for the Socket.IO session cookie.
-    # If you set cookie="echochat_io", Engine.IO will overwrite your JWT
-    # access token cookie with a non-JWT session id (no dots), which then causes:
-    #   jwt.exceptions.DecodeError: Not enough segments
-    # on every @jwt_required() endpoint.
+    # Use a dedicated Engine.IO cookie name so it never collides with JWT cookies.
+    # The cookie is hardened with HttpOnly/Secure/SameSite attributes in
+    # _create_socketio_instance().
     #
     # NOTE: long-polling generates a *ton* of HTTP requests (and log lines). If
     # eventlet is available, we prefer it to enable WebSockets and dramatically
@@ -1413,7 +1668,7 @@ def run_web_server(
 
     # ───── Run Server (dev / single-process) ─────
     host = settings.get("host") or settings.get("server_host") or "0.0.0.0"
-    port = int(settings.get("port") or settings.get("server_port") or 5000)
+    port = _safe_int(settings.get("port") or settings.get("server_port") or 5000, 5000, name="port", minimum=1, maximum=65535)
     debug = bool(settings.get("debug") or settings.get("server_debug") or False)
 
     # HTTPS support (required for WebCrypto/E2EE on non-localhost origins).
@@ -1498,57 +1753,51 @@ def _ensure_secret_key(
     settings: Dict[str, Any],
     settings_file: Optional[Path],
 ) -> str:
-    key = settings.get("secret_key") or os.getenv("SECRET_KEY")
+    key = resolve_secret(settings, "secret_key")
     if key:
+        settings["secret_key"] = key
         return key
 
-    key = secrets.token_urlsafe(64)
-    settings["secret_key"] = key
-    persisted = _persist_generated_key(settings, settings_file)
-    if persisted:
-        print("✅ secret_key generated and saved to settings.")
-    else:
-        print("⚠️  Generated a one-off secret_key (NOT saved). Sessions may break on restart.")
+    key, generated, env_path = ensure_secret(settings, "secret_key", settings_file=settings_file)
+    if generated:
+        if env_path:
+            print(f"✅ Stable secret_key generated and saved to {env_path}.")
+        elif _persist_generated_key(settings, settings_file):
+            print("✅ secret_key generated and saved to settings.")
+        else:
+            print("⚠️  secret_key generated for this process, but could not be persisted. Run: python main.py --generate-secrets --write-env-secrets")
     return key
-
 
 
 def _ensure_jwt_secret(
     settings: Dict[str, Any],
     settings_file: Optional[Path],
 ) -> str:
-    # Prefer explicit config, then env var. Only persist if we *generated* it
-    # and secret persistence is enabled.
-    key = settings.get("jwt_secret") or settings.get("jwt_secret_key")  # tolerate older naming
+    key = resolve_secret(settings, "jwt_secret")
     if key:
-        return str(key)
+        settings["jwt_secret"] = key
+        return key
 
-    env_key = os.getenv("JWT_SECRET_KEY")
-    if env_key and str(env_key).strip():
-        return str(env_key).strip()
-
-    key = secrets.token_hex(32)
-    settings["jwt_secret"] = key
-    persisted = _persist_generated_key(settings, settings_file)
-    if persisted:
-        print("✅ jwt_secret generated and saved to settings.")
-    else:
-        print("⚠️  Generated a one-off jwt_secret (NOT saved). Logins may break on restart.")
+    key, generated, env_path = ensure_secret(settings, "jwt_secret", settings_file=settings_file)
+    if generated:
+        if env_path:
+            print(f"✅ Stable jwt_secret generated and saved to {env_path}.")
+        elif _persist_generated_key(settings, settings_file):
+            print("✅ jwt_secret generated and saved to settings.")
+        else:
+            print("⚠️  jwt_secret generated for this process, but could not be persisted. Run: python main.py --generate-secrets --write-env-secrets")
     return key
 
 
 def _persist_generated_key(settings: Dict[str, Any], settings_file: Optional[Path]) -> bool:
-    # If persistence is disabled, never write generated secrets into server_config.json.
     if not persist_secrets_enabled(settings):
         return False
     if not settings_file:
-        print("⚠️  settings_file path not supplied; cannot persist secret_key.")
+        print("⚠️  settings_file path not supplied; cannot persist generated secrets.")
         return False
 
     try:
         if settings_file.suffix.lower() == ".json":
-            # Only write if the settings file is valid JSON or does not exist.
-            # This prevents corrupting files that are encrypted / binary / partially written.
             existing: dict | None = None
             if settings_file.exists():
                 try:
@@ -1556,8 +1805,6 @@ def _persist_generated_key(settings: Dict[str, Any], settings_file: Optional[Pat
                         existing = json.load(fp)
                 except Exception:
                     existing = None
-
-            # If the settings file exists but is invalid JSON, back it up and write a fresh JSON file.
             if existing is None and settings_file.exists():
                 ts = datetime.now().strftime("%Y%m%d-%H%M%S")
                 bad_path = settings_file.with_suffix(settings_file.suffix + f".bad-{ts}")
@@ -1568,13 +1815,12 @@ def _persist_generated_key(settings: Dict[str, Any], settings_file: Optional[Pat
                     print(f"⚠️  Could not back up invalid settings file: {exc}")
                     return False
                 existing = {}
-
             merged = dict(existing or {})
             merged.update(settings)
             merged = scrub_secrets_for_persist(merged)
-
             with settings_file.open("w", encoding="utf-8") as fp:
                 json.dump(merged, fp, indent=2)
+                fp.write("\n")
         elif settings_file.suffix.lower() in {".yml", ".yaml"}:
             import yaml
             with settings_file.open("w", encoding="utf-8") as fp:
@@ -1583,7 +1829,6 @@ def _persist_generated_key(settings: Dict[str, Any], settings_file: Optional[Pat
             print(f"⚠️  Unsupported settings file format: {settings_file}")
             return False
     except Exception as exc:
-        print(f"⚠️  Could not persist secret_key to {settings_file}: {exc}", file=sys.stderr)
+        print(f"⚠️  Could not persist generated secret to {settings_file}: {exc}", file=sys.stderr)
         return False
-
     return True

@@ -24,7 +24,9 @@ import shlex
 
 from public_beta_readiness import build_public_beta_readiness, format_public_beta_readiness_report, infer_hosting_mode
 from redis_socketio_readiness import build_redis_socketio_report, format_redis_socketio_report
+from scaled_redis_autoconfig import apply_scaled_runtime_safety_defaults, redis_install_hint
 from reverse_proxy_generator import backend_url, has_real_public_domain, write_proxy_configs
+from secret_manager import generate_secret_bundle
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,18 @@ def _safe_int(value: Any, default: int) -> int:
         return out if out > 0 else default
     except Exception:
         return default
+
+
+def _instance_count(settings: dict[str, Any]) -> int:
+    return max(1, min(10, _safe_int(settings.get("production_instance_count") or settings.get("production_instances") or settings.get("instance_count"), 1)))
+
+
+def _instance_base_port(settings: dict[str, Any]) -> int:
+    return _safe_int(settings.get("production_instance_base_port") or settings.get("instance_base_port") or settings.get("server_port") or settings.get("port"), 5000)
+
+
+def _instance_bind_host(settings: dict[str, Any]) -> str:
+    return str(settings.get("production_instance_bind_host") or settings.get("reverse_proxy_backend_host") or "127.0.0.1").strip() or "127.0.0.1"
 
 
 def _public_url(settings: dict[str, Any]) -> str:
@@ -78,6 +92,99 @@ def _service_group(settings: dict[str, Any]) -> str:
 def _env_file(settings: dict[str, Any]) -> str:
     return str(settings.get("systemd_env_file") or settings.get("deployment_env_file") or "/etc/echochat/echochat.env").strip() or "/etc/echochat/echochat.env"
 
+
+def _protect_home_value(settings: dict[str, Any]) -> str:
+    workdir = _project_dir(settings)
+    if workdir.startswith("/home/") or workdir.startswith("/root/"):
+        return "false"
+    return "true"
+
+
+
+
+def _is_redis_url_value(value: Any) -> bool:
+    return str(value or "").strip().lower().startswith(("redis://", "rediss://"))
+
+
+def _deployment_uses_redis(settings: dict[str, Any]) -> bool:
+    """Return True when generated services should order after Redis.
+
+    Check every Redis-backed deployment setting, not only the Socket.IO queue.
+    This keeps generated systemd units consistent with rate-limit, shared-state,
+    and rediss:// TLS Redis URLs.
+    """
+    return any(
+        _is_redis_url_value(settings.get(key))
+        for key in (
+            "socketio_message_queue",
+            "rate_limit_storage_uri",
+            "simple_rate_limit_storage_uri",
+            "shared_state_redis_url",
+        )
+    )
+
+
+def _systemd_quote(value: Any) -> str:
+    """Quote a value for systemd unit command/path fields.
+
+    systemd does not run ExecStart through a shell, but its unit syntax still
+    splits on whitespace. Double-quote paths and values so installs under
+    folders such as "/home/user/Echo Chat" do not produce broken units.
+    """
+    raw = str(value or "")
+    escaped = raw.replace("\\", "\\\\").replace("\"", "\\\"")
+    return f'"{escaped}"'
+
+
+def _runtime_path_values(settings: dict[str, Any]) -> list[str]:
+    workdir = Path(_project_dir(settings))
+    values: list[str] = []
+
+    def add(raw: Any) -> None:
+        if raw is None or str(raw).strip() == "":
+            return
+        p = Path(str(raw).strip())
+        if not p.is_absolute():
+            p = workdir / p
+        value = str(p)
+        if value not in values:
+            values.append(value)
+
+    for rel in ("logs", "uploads", "private_uploads", "instance", "static/uploads"):
+        add(workdir / rel)
+    for key in (
+        "upload_root",
+        "dm_upload_root",
+        "group_upload_root",
+        "torrents_root",
+        "document_root",
+        "backup_export_root",
+        "exports_root",
+        "security_backup_root",
+    ):
+        add(settings.get(key))
+    return values
+
+
+def _systemd_read_write_paths(settings: dict[str, Any]) -> str:
+    lines = [f"ReadWritePaths={_systemd_quote(path)}" for path in _runtime_path_values(settings)]
+    lines.append(f"ReadWritePaths={_systemd_quote(Path(_project_dir(settings)) / 'server_config.json')}")
+    return "\n".join(lines)
+
+
+def _runtime_mkdir_commands(settings: dict[str, Any]) -> str:
+    user = _service_user(settings)
+    group = _service_group(settings)
+    dirs = " ".join(shlex.quote(path) for path in _runtime_path_values(settings))
+    cfg = shlex.quote(str(Path(_project_dir(settings)) / "server_config.json"))
+    if not dirs:
+        dirs = shlex.quote(str(Path(_project_dir(settings)) / "logs"))
+    return (
+        f"sudo install -d -o {shlex.quote(user)} -g {shlex.quote(group)} -m 0750 {dirs}\n"
+        f"sudo touch {cfg}\n"
+        f"sudo chown {shlex.quote(user)}:{shlex.quote(group)} {cfg}\n"
+        f"sudo chmod 640 {cfg}\n"
+    )
 
 def _redact_url_secret(raw: Any) -> str:
     value = str(raw or "").strip()
@@ -231,12 +338,15 @@ def _deployment_status(settings: dict[str, Any]) -> str:
 def build_deployment_plan(settings: dict[str, Any], *, settings_file: str | Path = "server_config.json", repo_root: str | Path | None = None) -> dict[str, Any]:
     """Return a beginner-friendly production deployment plan for saved settings."""
     settings = dict(settings or {})
+    apply_scaled_runtime_safety_defaults(settings)
     repo_root = Path(repo_root or Path(__file__).resolve().parent)
     readiness = build_public_beta_readiness(settings, settings_file=settings_file, repo_root=repo_root)
     redis_report = build_redis_socketio_report(settings, live_check=False)
     status = _deployment_status(settings)
     public_url = _public_url(settings)
-    workers = _safe_int(settings.get("production_workers"), 1)
+    workers = 1
+    instances = _instance_count(settings)
+    instance_base_port = _instance_base_port(settings)
     worker_class = str(settings.get("production_worker_class") or "gthread").strip() or "gthread"
     async_mode = str(settings.get("production_async_mode") or "threading").strip() or "threading"
     bind = str(settings.get("production_bind") or settings.get("server_host") or settings.get("host") or "127.0.0.1")
@@ -265,7 +375,7 @@ def build_deployment_plan(settings: dict[str, Any], *, settings_file: str | Path
         },
         {
             "title": "Use the beginner-safe Socket.IO production topology",
-            "detail": f"Current plan: workers={workers}, worker_class={worker_class}, async={async_mode}. Keep workers=1 until you build sticky multi-instance routing.",
+            "detail": f"Current plan: {instances} instance(s), 1 worker per instance, worker_class={worker_class}, async={async_mode}. If instances > 1, Echo-Chat auto-fills Redis DB 0/1/2; Redis must still be installed and running.",
             "command": "python main.py --redis-socketio-check --redis-live-check",
         },
         {
@@ -288,6 +398,8 @@ def build_deployment_plan(settings: dict[str, Any], *, settings_file: str | Path
         "backend_url": backend_url(settings),
         "run_mode": str(settings.get("run_mode") or "development"),
         "production_workers": workers,
+        "production_instance_count": instances,
+        "production_instance_base_port": instance_base_port,
         "production_worker_class": worker_class,
         "production_async_mode": async_mode,
         "safe_to_invite": safe_to_invite,
@@ -308,7 +420,8 @@ def format_deployment_plan(plan: dict[str, Any]) -> str:
         f"Public URL: {plan.get('public_url') or '(not set)'}",
         f"Backend URL: {plan.get('backend_url') or '(unknown)'}",
         f"Run mode: {plan.get('run_mode')}",
-        f"Gunicorn: workers={plan.get('production_workers')}, worker={plan.get('production_worker_class')}, async={plan.get('production_async_mode')}",
+        f"Gunicorn: {plan.get('production_instance_count')} instance(s) x {plan.get('production_workers')} worker, worker={plan.get('production_worker_class')}, async={plan.get('production_async_mode')}",
+        f"Instance ports: {plan.get('production_instance_base_port')}" + (f"-{int(plan.get('production_instance_base_port') or 5000) + int(plan.get('production_instance_count') or 1) - 1}" if int(plan.get('production_instance_count') or 1) > 1 else ""),
         "",
         "Recommended steps:",
     ]
@@ -343,7 +456,7 @@ def generate_systemd_service(settings: dict[str, Any]) -> str:
     env_file = _env_file(settings)
     user = _service_user(settings)
     group = _service_group(settings)
-    needs_redis = bool(str(settings.get("socketio_message_queue") or settings.get("rate_limit_storage_uri") or "").startswith("redis://"))
+    needs_redis = _deployment_uses_redis(settings)
     after = "network-online.target" + (" redis.service" if needs_redis else "")
     return f"""# Echo-Chat generated systemd service
 # Generated by: python main.py --write-deployment-kit
@@ -356,10 +469,12 @@ Wants={after}
 
 [Service]
 Type=simple
-WorkingDirectory={workdir}
-EnvironmentFile={env_file}
+WorkingDirectory={_systemd_quote(workdir)}
+EnvironmentFile={_systemd_quote(env_file)}
 Environment=PYTHONUNBUFFERED=1
-ExecStart={python_bin} main.py --production
+ExecStartPre={_systemd_quote(python_bin)} tools/config_doctor.py --config {_systemd_quote(Path(workdir) / "server_config.json")}
+ExecStartPre={_systemd_quote(python_bin)} main.py --config {_systemd_quote(Path(workdir) / "server_config.json")} --redis-socketio-check
+ExecStart=/usr/bin/env ECHOCHAT_CONFIG={_systemd_quote(Path(workdir) / "server_config.json")} ECHOCHAT_PRODUCTION_WORKERS=1 ECHOCHAT_WORKERS=1 {_systemd_quote(python_bin)} main.py --production
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=25
@@ -370,14 +485,105 @@ Group={group}
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ProtectHome=true
+ProtectHome={_protect_home_value(settings)}
 RestrictSUIDSGID=true
 LockPersonality=true
-ReadWritePaths={workdir}/logs
-ReadWritePaths={workdir}/server_config.json
-ReadWritePaths={workdir}/uploads
-ReadWritePaths={workdir}/private_uploads
-ReadWritePaths={workdir}/instance
+{_systemd_read_write_paths(settings)}
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def generate_systemd_instance_template(settings: dict[str, Any]) -> str:
+    """Generate a systemd template for multiple one-worker Echo-Chat instances.
+
+    Start as echochat@5000.service, echochat@5001.service, etc. The instance
+    number is the port. Keep every instance at one Gunicorn worker.
+    """
+    workdir = _project_dir(settings)
+    python_bin = _venv_python(settings)
+    env_file = _env_file(settings)
+    user = _service_user(settings)
+    group = _service_group(settings)
+    needs_redis = _deployment_uses_redis(settings)
+    after = "network-online.target" + (" redis.service" if needs_redis else "")
+    host = _instance_bind_host(settings)
+    return f"""# Echo-Chat generated systemd template for horizontal scaling
+# Install as /etc/systemd/system/echochat@.service.
+# Start ports like: sudo systemctl enable --now echochat@5000 echochat@5001
+# Each instance uses exactly one Gunicorn worker. Do not set workers to 10.
+
+[Unit]
+Description=Chat server powered by Echo-Chat on port %i
+After={after}
+Wants={after}
+
+[Service]
+Type=simple
+WorkingDirectory={_systemd_quote(workdir)}
+EnvironmentFile={_systemd_quote(env_file)}
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre={_systemd_quote(python_bin)} tools/config_doctor.py --config {_systemd_quote(Path(workdir) / "server_config.json")}
+ExecStartPre={_systemd_quote(python_bin)} main.py --config {_systemd_quote(Path(workdir) / "server_config.json")} --redis-socketio-check
+# Bind overrides live in ExecStart so they cannot be overwritten by EnvironmentFile values.
+ExecStart=/usr/bin/env ECHOCHAT_CONFIG={_systemd_quote(Path(workdir) / "server_config.json")} ECHOCHAT_BIND={_systemd_quote(str(host) + ":%i")} ECHOCHAT_PRODUCTION_BIND={_systemd_quote(str(host) + ":%i")} ECHOCHAT_PRODUCTION_WORKERS=1 ECHOCHAT_WORKERS=1 {_systemd_quote(python_bin)} main.py --production
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=25
+User={user}
+Group={group}
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome={_protect_home_value(settings)}
+RestrictSUIDSGID=true
+LockPersonality=true
+{_systemd_read_write_paths(settings)}
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def generate_janitor_service(settings: dict[str, Any]) -> str:
+    """Generate the single production janitor service used with Gunicorn."""
+    workdir = _project_dir(settings)
+    python_bin = _venv_python(settings)
+    env_file = _env_file(settings)
+    user = _service_user(settings)
+    group = _service_group(settings)
+    needs_redis = _deployment_uses_redis(settings)
+    after = "network-online.target" + (" redis.service" if needs_redis else "")
+    return f"""# Echo-Chat generated janitor service
+# Run exactly one janitor alongside Gunicorn/systemd web services.
+
+[Unit]
+Description=Chat server janitor for Echo-Chat deployments
+After={after}
+Wants={after}
+
+[Service]
+Type=simple
+WorkingDirectory={_systemd_quote(workdir)}
+EnvironmentFile={_systemd_quote(env_file)}
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre={_systemd_quote(python_bin)} tools/config_doctor.py --config {_systemd_quote(Path(workdir) / "server_config.json")}
+ExecStart={_systemd_quote(python_bin)} janitor_runner.py --config {_systemd_quote(Path(workdir) / "server_config.json")}
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=25
+User={user}
+Group={group}
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome={_protect_home_value(settings)}
+RestrictSUIDSGID=true
+LockPersonality=true
+{_systemd_read_write_paths(settings)}
 
 [Install]
 WantedBy=multi-user.target
@@ -386,6 +592,8 @@ WantedBy=multi-user.target
 
 def generate_environment_file(settings: dict[str, Any]) -> str:
     """Generate a reviewable systemd EnvironmentFile template."""
+    settings = dict(settings or {})
+    apply_scaled_runtime_safety_defaults(settings)
     public = _public_url(settings) or "https://YOUR-REAL-DOMAIN"
     origin = _public_origin(settings) or public
     config_path = f"{_project_dir(settings)}/server_config.json"
@@ -393,25 +601,33 @@ def generate_environment_file(settings: dict[str, Any]) -> str:
     rate_url = str(settings.get("rate_limit_storage_uri") or "redis://127.0.0.1:6379/0")
     queue = str(settings.get("socketio_message_queue") or "redis://127.0.0.1:6379/1")
     shared = str(settings.get("shared_state_redis_url") or "redis://127.0.0.1:6379/2")
-    bind = str(settings.get("production_bind") or "127.0.0.1:5000")
+    instances = _instance_count(settings)
+    instance_base = _instance_base_port(settings)
+    generated_secrets = generate_secret_bundle(include_crypto=True)
     return f"""# Echo-Chat generated systemd EnvironmentFile
 # Copy to {_env_file(settings)} and chmod 600.
-# Replace CHANGE_ME values before production.
+# Secrets below were generated when this kit was written. Keep this file private.
 
 ECHOCHAT_PERSIST_SECRETS=0
 ECHOCHAT_CONFIG={shlex.quote(config_path)}
 
-SECRET_KEY=CHANGE_ME_GENERATE_WITH_python_-c_import_secrets_print_secrets.token_urlsafe_64
-JWT_SECRET_KEY=CHANGE_ME_GENERATE_A_DIFFERENT_LONG_RANDOM_VALUE
+SECRET_KEY={generated_secrets['SECRET_KEY']}
+JWT_SECRET_KEY={generated_secrets['JWT_SECRET_KEY']}
+ECHOCHAT_PROFILE_FIELD_KEY={generated_secrets['ECHOCHAT_PROFILE_FIELD_KEY']}
+ECHOCHAT_EMAIL_FIELD_KEY={generated_secrets['ECHOCHAT_EMAIL_FIELD_KEY']}
+ECHOCHAT_EMAIL_HASH_KEY={generated_secrets['ECHOCHAT_EMAIL_HASH_KEY']}
+ECHOCHAT_SECURITY_BACKUP_KEY={generated_secrets['ECHOCHAT_SECURITY_BACKUP_KEY']}
+ECHOCHAT_PRIVACY_HASH_KEY={generated_secrets['ECHOCHAT_PRIVACY_HASH_KEY']}
 DATABASE_URL={shlex.quote(db_url)}
 
 ECHOCHAT_RUN_MODE=production
 ECHOCHAT_PRODUCTION_MODE=1
-ECHOCHAT_PRODUCTION_BIND={shlex.quote(bind)}
-ECHOCHAT_PRODUCTION_WORKERS={_safe_int(settings.get('production_workers'), 1)}
-# Direct gunicorn_conf.py aliases; keep these aligned with the production values above.
-ECHOCHAT_BIND={shlex.quote(bind)}
-ECHOCHAT_WORKERS={_safe_int(settings.get('production_workers'), 1)}
+# Bind/port is selected by server_config.json for single-instance services.
+# For echochat@PORT template instances, the service ExecStart overrides bind per port.
+ECHOCHAT_PRODUCTION_WORKERS=1
+ECHOCHAT_PRODUCTION_INSTANCES={instances}
+ECHOCHAT_INSTANCE_BASE_PORT={instance_base}
+ECHOCHAT_WORKERS=1
 ECHOCHAT_SOCKETIO_ASYNC={shlex.quote(str(settings.get('production_async_mode') or 'threading'))}
 ECHOCHAT_GUNICORN_WORKER_CLASS={shlex.quote(str(settings.get('production_worker_class') or 'gthread'))}
 ECHOCHAT_GUNICORN_THREADS={_safe_int(settings.get('production_threads') or settings.get('gunicorn_threads'), 100)}
@@ -423,10 +639,17 @@ ECHOCHAT_COOKIE_SECURE={'1' if _truthy(settings.get('cookie_secure')) else '0'}
 ECHOCHAT_COOKIE_SAMESITE={shlex.quote(str(settings.get('cookie_samesite') or 'Lax'))}
 ECHOCHAT_TRUST_PROXY_HEADERS={'1' if _truthy(settings.get('trust_proxy_headers')) else '0'}
 ECHOCHAT_PROXY_FIX_HOPS={_safe_int(settings.get('proxy_fix_hops'), 1)}
+ECHOCHAT_PROXY_FIX_X_FOR={_safe_int(settings.get('proxy_fix_x_for'), _safe_int(settings.get('proxy_fix_hops'), 1))}
+ECHOCHAT_PROXY_FIX_X_PROTO={_safe_int(settings.get('proxy_fix_x_proto'), _safe_int(settings.get('proxy_fix_hops'), 1))}
+ECHOCHAT_PROXY_FIX_X_HOST={_safe_int(settings.get('proxy_fix_x_host'), _safe_int(settings.get('proxy_fix_hops'), 1))}
+ECHOCHAT_PROXY_FIX_X_PORT={_safe_int(settings.get('proxy_fix_x_port'), _safe_int(settings.get('proxy_fix_hops'), 1))}
+ECHOCHAT_PROXY_FIX_X_PREFIX={_safe_int(settings.get('proxy_fix_x_prefix'), 0)}
+ECHOCHAT_FORWARDED_ALLOW_IPS={shlex.quote(str(settings.get('forwarded_allow_ips') or '127.0.0.1'))}
 ECHOCHAT_ENABLE_HEALTH_ENDPOINT={'1' if _truthy(settings.get('enable_health_check_endpoint')) else '0'}
 ECHOCHAT_HEALTH_ENDPOINT={shlex.quote(str(settings.get('health_check_endpoint') or '/health'))}
 
 ECHOCHAT_RATE_LIMIT_STORAGE_URI={shlex.quote(rate_url)}
+ECHOCHAT_SIMPLE_RATE_LIMIT_STORAGE_URI={shlex.quote(str(settings.get('simple_rate_limit_storage_uri') or rate_url))}
 ECHOCHAT_SOCKETIO_MESSAGE_QUEUE={shlex.quote(queue)}
 ECHOCHAT_SHARED_STATE_REDIS_URL={shlex.quote(shared)}
 ECHOCHAT_SOCKETIO_TRANSPORTS={shlex.quote(_csv(settings.get('socketio_transports')) or 'polling')}
@@ -466,24 +689,46 @@ ECHOCHAT_TURN_CREDENTIAL=CHANGE_ME_OR_LEAVE_BLANK
 """
 
 
+def _instance_service_names(settings: dict[str, Any]) -> list[str]:
+    base = _instance_base_port(settings)
+    return [f"echochat@{base + offset}" for offset in range(_instance_count(settings))]
+
+
 def _install_commands(settings: dict[str, Any]) -> str:
     env_file = _env_file(settings)
     user = _service_user(settings)
-    return f"""# Review generated files before running these commands.
-sudo useradd --system --home-dir {_project_dir(settings)} --shell /usr/bin/nologin {user} 2>/dev/null || true
-sudo mkdir -p {Path(env_file).parent}
-sudo cp echochat.env.example {env_file}
-sudo chmod 600 {env_file}
-sudo cp echochat.service /etc/systemd/system/echochat.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now echochat.service
-sudo systemctl status echochat.service --no-pager
+    instances = _instance_count(settings)
+    service_names = " ".join(_instance_service_names(settings))
+    workdir = _project_dir(settings)
+    group = _service_group(settings)
+    common = f"""# Review generated files before running these commands.
+sudo useradd --system --home-dir {shlex.quote(workdir)} --shell /usr/bin/nologin {shlex.quote(user)} 2>/dev/null || true
+sudo mkdir -p {shlex.quote(str(Path(env_file).parent))}
+sudo cp echochat.env.example {shlex.quote(env_file)}
+sudo chown root:{shlex.quote(group)} {shlex.quote(env_file)}
+sudo chmod 640 {shlex.quote(env_file)}
+{_runtime_mkdir_commands(settings)}sudo cp echochat-janitor.service /etc/systemd/system/echochat-janitor.service
 """
+    if instances > 1:
+        web = f"""sudo cp echochat@.service /etc/systemd/system/echochat@.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now {service_names} echochat-janitor.service
+sudo systemctl status {service_names} echochat-janitor.service --no-pager
+"""
+    else:
+        web = """sudo cp echochat.service /etc/systemd/system/echochat.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now echochat.service echochat-janitor.service
+sudo systemctl status echochat.service echochat-janitor.service --no-pager
+"""
+    return common + web
+
 
 
 def write_deployment_kit(settings: dict[str, Any], output_dir: str | Path, *, proxy: str = "all", settings_file: str | Path = "server_config.json", repo_root: str | Path | None = None) -> list[DeploymentKitFile]:
     """Write a reviewable deployment kit folder and return file metadata."""
     settings = dict(settings or {})
+    apply_scaled_runtime_safety_defaults(settings)
     repo_root = Path(repo_root or Path(__file__).resolve().parent)
     out = validate_deployment_kit_output_dir(output_dir, repo_root=repo_root)
     out.mkdir(parents=True, exist_ok=True)
@@ -501,14 +746,16 @@ def write_deployment_kit(settings: dict[str, Any], output_dir: str | Path, *, pr
         "README.md": "# Echo-Chat generated deployment kit\n\n"
         + "Generated files are templates. Review paths, users, secrets, DNS, firewall, and certificate choices before installing.\n\n"
         + f"Public URL: `{plan.get('public_url') or '(not set)'}`\n\n"
-        + f"Backend: `{plan.get('backend_url')}`\n\n"
+        + f"Backend: `{plan.get('backend_url')}`" + (f" plus {int(plan.get('production_instance_count') or 1) - 1} more backend(s)" if int(plan.get('production_instance_count') or 1) > 1 else "") + "\n\n"
         + "## Install commands\n\n```bash\n" + _install_commands(settings) + "```\n\n"
         + "## Checks\n\n```bash\npython main.py --redis-socketio-check --redis-live-check\npython main.py --public-beta-check\n```\n\n"
-        + "## Generated folders\n\n- `proxy/` contains Caddy/Nginx reverse proxy templates.\n- `echochat.service` is the systemd service template.\n- `echochat.env.example` is the secret/config environment template.\n- `deployment-plan.txt`, `public-beta-readiness.txt`, and `redis-socketio-check.txt` are review reports.\n",
+        + "## Generated folders\n\n- `proxy/` contains Caddy/Nginx reverse proxy templates.\n- `echochat.service` is the single-instance systemd service template.\n- `echochat@.service` is the multi-instance one-worker-per-port systemd template.\n- `echochat-janitor.service` is the single cleanup worker service required in production.\n- `echochat.env.example` is the secret/config environment template.\n- `deployment-plan.txt`, `public-beta-readiness.txt`, and `redis-socketio-check.txt` are review reports.\n",
         "deployment-plan.txt": format_deployment_plan(plan),
         "public-beta-readiness.txt": readiness_text,
         "redis-socketio-check.txt": redis_text,
         "echochat.service": generate_systemd_service(settings),
+        "echochat@.service": generate_systemd_instance_template(settings),
+        "echochat-janitor.service": generate_janitor_service(settings),
         "echochat.env.example": generate_environment_file(settings),
         "install-commands.sh": "#!/usr/bin/env bash\nset -euo pipefail\n" + _install_commands(settings),
     }

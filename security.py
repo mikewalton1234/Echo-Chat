@@ -29,6 +29,11 @@ from typing import Optional, Tuple
 
 from flask import current_app, has_request_context, request
 
+try:
+    import redis as _redis_mod  # type: ignore
+except Exception:  # pragma: no cover - optional production dependency
+    _redis_mod = None
+
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.backends import default_backend
@@ -260,11 +265,81 @@ from collections import deque
 
 _SRL_BUCKETS: dict[str, deque] = {}
 _SRL_LOCK = threading.Lock()
+_SRL_REDIS_CLIENT = None
+_SRL_REDIS_URL: str | None = None
+
+
+def _simple_rate_limit_redis_url() -> str:
+    if not has_request_context():
+        return ''
+    try:
+        url = str(current_app.config.get('ECHOCHAT_SIMPLE_RATE_LIMIT_REDIS_URL') or '').strip()
+    except Exception:
+        url = ''
+    return url if url.startswith(('redis://', 'rediss://')) else ''
+
+
+def _simple_rate_limit_redis_client(url: str):
+    global _SRL_REDIS_CLIENT, _SRL_REDIS_URL
+    if not url or _redis_mod is None:
+        return None
+    with _SRL_LOCK:
+        if _SRL_REDIS_CLIENT is not None and _SRL_REDIS_URL == url:
+            return _SRL_REDIS_CLIENT
+        try:
+            _SRL_REDIS_CLIENT = _redis_mod.Redis.from_url(
+                url,
+                decode_responses=True,
+                socket_connect_timeout=0.5,
+                socket_timeout=0.5,
+                health_check_interval=30,
+            )
+            _SRL_REDIS_CLIENT.ping()
+            _SRL_REDIS_URL = url
+            return _SRL_REDIS_CLIENT
+        except Exception as exc:
+            logging.warning('Redis simple rate limiter unavailable; falling back to process-local buckets: %s', exc)
+            _SRL_REDIS_CLIENT = None
+            _SRL_REDIS_URL = None
+            return None
+
+
+def _simple_rate_limit_redis(key: str, limit: int, window_sec: int, now: float) -> tuple[bool, float] | None:
+    url = _simple_rate_limit_redis_url()
+    client = _simple_rate_limit_redis_client(url) if url else None
+    if client is None:
+        return None
+    redis_key = f"echochat:srl:{key}"
+    member = f"{now:.6f}:{os.getpid()}:{threading.get_ident()}"
+    cutoff = now - window_sec
+    try:
+        pipe = client.pipeline(transaction=True)
+        pipe.zremrangebyscore(redis_key, 0, cutoff)
+        pipe.zcard(redis_key)
+        pipe.zrange(redis_key, 0, 0, withscores=True)
+        removed, count, oldest = pipe.execute()
+        count = int(count or 0)
+        if count >= limit:
+            oldest_score = float(oldest[0][1]) if oldest else now
+            retry = (oldest_score + window_sec) - now
+            client.expire(redis_key, max(1, int(window_sec * 2)))
+            return False, max(0.0, float(retry))
+        pipe = client.pipeline(transaction=True)
+        pipe.zadd(redis_key, {member: now})
+        pipe.expire(redis_key, max(1, int(window_sec * 2)))
+        pipe.execute()
+        return True, 0.0
+    except Exception as exc:
+        logging.warning('Redis simple rate limiter failed; falling back to process-local bucket for this event: %s', exc)
+        return None
+
 
 def simple_rate_limit(key: str, limit: int, window_sec: int) -> tuple[bool, float]:
     """Sliding-window limiter.
 
-    Returns (ok, retry_after_seconds).
+    Returns (ok, retry_after_seconds).  When the Flask app provides a Redis rate
+    storage URI, this guardrail uses Redis too so broad admin/API/Socket.IO
+    buckets are shared across multiple Echo-Chat instances.
     """
     try:
         limit = int(limit)
@@ -279,6 +354,10 @@ def simple_rate_limit(key: str, limit: int, window_sec: int) -> tuple[bool, floa
         return True, 0.0
 
     now = time.time()
+    redis_result = _simple_rate_limit_redis(str(key), limit, window_sec, now)
+    if redis_result is not None:
+        return redis_result
+
     with _SRL_LOCK:
         dq = _SRL_BUCKETS.get(key)
         if dq is None:
@@ -399,22 +478,18 @@ def trust_proxy_headers_enabled() -> bool:
 
 def get_request_ip(req=None) -> str:
     req = req or request
-    if trust_proxy_headers_enabled():
+    # When proxy trust is enabled, server_init.py applies Werkzeug ProxyFix with
+    # the configured trusted-hop count.  Use the already-normalized remote_addr
+    # instead of re-reading raw X-Forwarded-For/Forwarded headers here; raw client
+    # headers are spoofable when a request can reach the app directly.
+    direct = _clean_ip(getattr(req, 'remote_addr', None))
+    if direct:
+        return direct
+    if not trust_proxy_headers_enabled():
         forwarded = _forwarded_for_ip(req.headers.get('X-Forwarded-For'))
         if forwarded:
             return forwarded
-        forwarded_header = str(req.headers.get('Forwarded') or '').strip()
-        if forwarded_header:
-            for part in forwarded_header.split(';'):
-                for token in part.split(','):
-                    token = token.strip()
-                    if token.lower().startswith('for='):
-                        candidate = token.split('=', 1)[1].strip().strip('"')
-                        cleaned = _clean_ip(candidate)
-                        if cleaned:
-                            return cleaned
-    direct = _clean_ip(getattr(req, 'remote_addr', None))
-    return direct or 'unknown'
+    return 'unknown'
 
 
 def is_loopback_ip(ip: str | None) -> bool:

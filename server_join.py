@@ -111,9 +111,13 @@ def approve_request(index: int, encryption_key: bytes) -> dict:
     with open(PENDING_JOIN_REQUESTS, "w") as f:
         json.dump(requests, f, indent=2)
 
+    # Security hardening: never return the encrypted config and the decryption
+    # key together. This legacy helper is not wired to HTTP routes, but keeping
+    # the dangerous shape out of the code prevents accidental exposure later.
     return {
         "encrypted_config": base64.b64encode(encrypted_config).decode(),
-        "shared_key": base64.b64encode(encryption_key).decode()
+        "shared_key": None,
+        "key_delivery": "manual-out-of-band-required"
     }
 
 
