@@ -57,6 +57,7 @@ Public chat rooms are protected with login security, CSRF protection, rate limit
 
 ## Chat Rooms
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/16f910b7-319b-456f-93a8-ef0d9f084159" />
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/902c7c6b-ceb9-4bc6-a462-3e8ec6fbc59e" />
 
 Echo-Chat supports different kinds of rooms so a server can have both public and private spaces.
 
@@ -98,7 +99,8 @@ Private message features include:
 * Encrypted file sharing
 * Mobile full-screen private message view
 
-## Group Chats
+## Group Chats (still alpha)
+ <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/c2a0a3e9-6b31-43e8-b1bf-0e98ba21dcdf" />
 
 Echo-Chat includes group chats for smaller private communities.
 
@@ -181,6 +183,7 @@ File-sharing features include:
 * Peer-to-peer file transfer support between browsers
 
 ## Torrent and Magnet Tools
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/1a0f73b1-4916-4aa3-9fdb-72d0e746cf10" />
 
 Echo-Chat includes torrent and magnet helper tools for chat rooms.
 
@@ -201,6 +204,7 @@ Torrent features include:
 Server owners are responsible for how torrent and file-sharing features are configured and moderated.
 
 ## Room Radio
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/65b15de8-fa30-482f-9536-3d2c154c9622" />
 
 Echo-Chat includes room radio so users can listen while chatting.
 
@@ -285,7 +289,7 @@ Test Lab features include:
 * Exportable test results
 * Hidden/randomized test link for admins
 
-## Mobile Support
+## Mobile Support (Alpha as Fu@@)
 
 Echo-Chat has mobile-friendly layouts for phones and small screens.
 
