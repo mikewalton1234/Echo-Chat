@@ -6,6 +6,98 @@ function bringToFront(winEl) {
   winEl.style.zIndex = UIState.highestZ;
 }
 
+
+function ecMarkConversationWindowSeen(winEl) {
+  try {
+    if (!ecIsConversationWindowActive(winEl)) return;
+    const kind = String(winEl.dataset?.kind || '').trim();
+    if (kind === 'dm') {
+      const peer = String(winEl.dataset?.pmPeer || '').trim();
+      if (peer && typeof ecClearLivePmUnread === 'function') ecClearLivePmUnread(peer);
+    } else if (kind === 'group') {
+      const gid = Number(winEl.dataset?.groupId || String(winEl.dataset?.winId || '').replace(/^group:/, '') || 0);
+      if (gid) {
+        try {
+          const ids = Array.from(winEl._groupSeenMessageIds || []);
+          if (ids.length && typeof markGroupMessagesRead === 'function') markGroupMessagesRead(gid, ids);
+        } catch {}
+        try { if (typeof updateGroupUnreadCache === 'function') updateGroupUnreadCache(gid, 0); } catch {}
+      }
+    }
+  } catch {}
+}
+
+function ecConversationWindowIsVisible(winEl) {
+  try {
+    if (!winEl || !document.body?.contains(winEl)) return false;
+    if (winEl.classList.contains('hidden')) return false;
+    if (winEl.getAttribute('aria-hidden') === 'true') return false;
+    const kind = String(winEl.dataset?.kind || '').trim();
+    return kind === 'dm' || kind === 'group';
+  } catch {
+    return false;
+  }
+}
+
+function ecTopVisibleConversationWindow() {
+  try {
+    if (!UIState?.windows || typeof UIState.windows.values !== 'function') return null;
+    const wins = Array.from(UIState.windows.values()).filter(ecConversationWindowIsVisible);
+    if (!wins.length) return null;
+
+    // On phone layout only one PM/group sheet is truly active. Hidden inactive
+    // sheets may still be in the DOM, so prefer the mobile-active sheet before
+    // falling back to desktop z-index ordering.
+    const activeMobile = wins.find((win) => win.classList.contains('is-mobile-active-window'));
+    if (activeMobile) return activeMobile;
+
+    return wins.sort((a, b) => {
+      const za = Number.parseInt(a.style?.zIndex || a.dataset?.zIndex || '0', 10) || 0;
+      const zb = Number.parseInt(b.style?.zIndex || b.dataset?.zIndex || '0', 10) || 0;
+      return zb - za;
+    })[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+
+function ecIsConversationWindowActive(winEl) {
+  try {
+    if (!ecConversationWindowIsVisible(winEl)) return false;
+    const focused = (typeof ecIsWindowActivelyFocused === 'function')
+      ? ecIsWindowActivelyFocused()
+      : (document.visibilityState === 'visible' && (!document.hasFocus || document.hasFocus()));
+    if (!focused) return false;
+    const top = ecTopVisibleConversationWindow();
+    if (!top) return false;
+    return top === winEl;
+  } catch {
+    return false;
+  }
+}
+
+function ecMarkTopVisibleConversationWindowSeen() {
+  try {
+    const win = ecTopVisibleConversationWindow();
+    if (win) ecMarkConversationWindowSeen(win);
+  } catch {}
+}
+
+try {
+  if (!window.__ecConversationSeenOnFocusBound) {
+    window.__ecConversationSeenOnFocusBound = true;
+    const scheduleSeenSweep = () => {
+      try { setTimeout(ecMarkTopVisibleConversationWindowSeen, 0); } catch {}
+    };
+    window.addEventListener('focus', scheduleSeenSweep);
+    window.addEventListener('pageshow', scheduleSeenSweep);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) scheduleSeenSweep();
+    });
+  }
+} catch {}
+
 function registerWindowCleanup(win, cleanupFn) {
   if (!win || typeof cleanupFn !== "function") return cleanupFn;
   if (!Array.isArray(win._ecCleanupFns)) win._ecCleanupFns = [];
@@ -27,6 +119,7 @@ function createWindow({ id, title, kind }) {
     const existing = UIState.windows.get(id);
     existing.classList.remove("hidden");
     bringToFront(existing);
+    ecMarkConversationWindowSeen(existing);
     return existing;
   }
 
@@ -107,6 +200,8 @@ function createWindow({ id, title, kind }) {
   let voiceHint = null;
   let voiceBar = null;
   let voiceStatus = null;
+  let dmStatus = null;
+  let groupStatus = null;
   let voiceBtnCall = null;
   let voiceBtnHang = null;
   let voiceBtnMute = null;
@@ -132,12 +227,20 @@ function createWindow({ id, title, kind }) {
   input.placeholder = "Type a message…";
   input.setAttribute("autocomplete", kind === "dm" ? "off" : "off");
 
-  // Emoticons (emoji) button
+  // Emoticons button: use the bundled classic happy face as a still PNG icon.
+  // Keep this as a non-animated image so the toolbar does not flicker or loop.
   const emojiBtn = document.createElement("button");
   emojiBtn.type = "button";
-  emojiBtn.className = "ym-toolBtn ym-emojiBtn";
+  emojiBtn.className = "ym-toolBtn ym-emojiBtn ecToolbarEmoticonBtn";
   emojiBtn.title = "Emoticons";
-  emojiBtn.textContent = "😊";
+  emojiBtn.setAttribute("aria-label", "Emoticons");
+  const emojiIcon = document.createElement("img");
+  emojiIcon.className = "ecToolbarEmoticonIcon";
+  emojiIcon.src = "/static/emoticons/toolbar-happy-still.png";
+  emojiIcon.alt = "";
+  emojiIcon.setAttribute("aria-hidden", "true");
+  emojiIcon.draggable = false;
+  emojiBtn.appendChild(emojiIcon);
 
   const send = document.createElement("button");
   send.className = "ym-send";
@@ -324,6 +427,12 @@ toolbar.appendChild(gifHint);
     voiceBar.appendChild(left);
     voiceBar.appendChild(btns);
     body.appendChild(voiceBar);
+
+    dmStatus = document.createElement("div");
+    dmStatus.className = "ym-dmStatus ym-dmStatus--checking";
+    dmStatus.setAttribute("aria-live", "polite");
+    dmStatus.textContent = "Checking private message status…";
+    body.appendChild(dmStatus);
   }
   if (kind === "group") {
     toolbar = document.createElement("div");
@@ -405,6 +514,12 @@ toolbar.appendChild(gifHint);
     toolbar.appendChild(groupHandsLabel);
     toolbar.appendChild(fileInput);
     body.appendChild(toolbar);
+
+    groupStatus = document.createElement("div");
+    groupStatus.className = "ym-dmStatus ym-groupStatus ym-groupStatus--checking";
+    groupStatus.setAttribute("aria-live", "polite");
+    groupStatus.textContent = "Checking group status…";
+    body.appendChild(groupStatus);
   }
 
   body.appendChild(compose);
@@ -421,8 +536,10 @@ toolbar.appendChild(gifHint);
   UIState.windows.set(id, win);
 
   // Focus behavior
-  win.addEventListener("mousedown", () => bringToFront(win));
-  titlebar.addEventListener("mousedown", () => bringToFront(win));
+  win.addEventListener("mousedown", () => { bringToFront(win); ecMarkConversationWindowSeen(win); });
+  titlebar.addEventListener("mousedown", () => { bringToFront(win); ecMarkConversationWindowSeen(win); });
+  win.addEventListener("pointerdown", () => { bringToFront(win); ecMarkConversationWindowSeen(win); });
+  win.addEventListener("focusin", () => { bringToFront(win); ecMarkConversationWindowSeen(win); });
 
   // Drag behavior
   (function attachDrag() {
@@ -472,8 +589,13 @@ toolbar.appendChild(gifHint);
       if (!resizing) return;
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
-      win.style.width = `${Math.max(340, startW + dx)}px`;
-      win.style.height = `${Math.max(280, startH + dy)}px`;
+      const isProfileWindow = !!(win.classList && win.classList.contains('ecProfileWindow'));
+      const viewportMaxW = Math.max(360, (window.innerWidth || 0) - 28);
+      const viewportMaxH = Math.max(320, (window.innerHeight || 0) - 28);
+      const minW = isProfileWindow ? Math.min(960, viewportMaxW) : 340;
+      const minH = isProfileWindow ? Math.min(560, viewportMaxH) : 280;
+      win.style.width = `${Math.max(minW, startW + dx)}px`;
+      win.style.height = `${Math.max(minH, startH + dy)}px`;
     };
     const onResizeMouseUp = () => { resizing = false; };
 
@@ -493,7 +615,7 @@ toolbar.appendChild(gifHint);
   btnClose.onclick = () => closeWindow(id);
 
   // Expose handles for message plumbing
-  win._ym = { titleEl, log, input, send, emojiBtn, toolbar, fileBtn, fileInput, toolHint, gifBtn, gifHint, voiceBtn, voiceHint, voiceBar, voiceStatus, voiceBtnCall, voiceBtnHang, voiceBtnMute, voiceBtnAccept, voiceBtnDecline, voiceBtnTalk, voiceHandsFree, groupInviteBtn, groupSettingsBtn, groupVoiceBtn, groupVoiceHint, groupTalkBtn, groupHandsFree, groupMembersPanel, groupMembersList, groupMembersCount, groupMembersRefreshBtn, groupMembersCloseBtn };
+  win._ym = { titleEl, log, input, send, emojiBtn, toolbar, fileBtn, fileInput, toolHint, gifBtn, gifHint, voiceBtn, voiceHint, voiceBar, voiceStatus, dmStatus, groupStatus, voiceBtnCall, voiceBtnHang, voiceBtnMute, voiceBtnAccept, voiceBtnDecline, voiceBtnTalk, voiceHandsFree, groupInviteBtn, groupSettingsBtn, groupVoiceBtn, groupVoiceHint, groupTalkBtn, groupHandsFree, groupMembersPanel, groupMembersList, groupMembersCount, groupMembersRefreshBtn, groupMembersCloseBtn };
   try { appendLine(win, "System:", "Window opened.", { ts: Date.now() }); } catch {}
 
   // Bind emoticons picker
@@ -508,7 +630,10 @@ toolbar.appendChild(gifHint);
 
   // Enter-to-send
   input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") send.click();
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      send.click();
+    }
   });
 
   return win;
@@ -531,6 +656,7 @@ function minimizeWindow(id, title) {
   btn.onclick = () => {
     win.classList.remove("hidden");
     bringToFront(win);
+    ecMarkConversationWindowSeen(win);
     btn.remove();
     UIState.minimized.delete(id);
   };

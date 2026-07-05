@@ -1,3 +1,16 @@
+function rbScheduleInviteBrowserRefresh(reason = '') {
+  try {
+    if (typeof rbHasUI !== 'function' || !rbHasUI()) return;
+    clearTimeout(window.__ecRoomInviteBrowserRefreshTimer);
+    window.__ecRoomInviteBrowserRefreshTimer = setTimeout(() => {
+      try {
+        if (typeof rbRefreshLists === 'function') rbRefreshLists();
+        else if (typeof rbRenderRoomLists === 'function') rbRenderRoomLists();
+      } catch {}
+    }, 180);
+  } catch {}
+}
+
 function showRoomInviteToast(room, by, opts = {}) {
   const r = String(room || "").trim();
   if (!r) return;
@@ -39,6 +52,7 @@ socket.on("room_invite_cleared", ({ room, by, kind }) => {
     renderAlertsInviteListInto($('railAlertsList'), UIState.groupInvites, UIState.roomInvites, { openRail: true });
     updateDockSummaryCounts();
     try { forgetInviteSeen(_inviteKey(room, by, kind || 'room')); } catch {}
+    try { rbScheduleInviteBrowserRefresh('invite_cleared'); } catch {}
   } catch {}
 });
 
@@ -47,6 +61,7 @@ socket.on("custom_room_invite", ({ room, by }) => {
   try { mergeRoomInvites('custom_private', [{ room, by, kind: 'custom_private', created_at: new Date().toISOString() }]); } catch {}
   try { renderAlertsInviteListInto($('railAlertsList'), UIState.groupInvites, UIState.roomInvites, { openRail: true }); } catch {}
   try { updateDockSummaryCounts(); } catch {}
+  try { rbScheduleInviteBrowserRefresh('custom_room_invite'); } catch {}
   showRoomInviteToast(room, by, { kind: 'custom_private' });
 });
 
@@ -55,6 +70,7 @@ socket.on("room_invite", ({ room, by }) => {
   try { mergeRoomInvites('room', [{ room, by, kind: 'room', created_at: new Date().toISOString() }]); } catch {}
   try { renderAlertsInviteListInto($('railAlertsList'), UIState.groupInvites, UIState.roomInvites, { openRail: true }); } catch {}
   try { updateDockSummaryCounts(); } catch {}
+  try { rbScheduleInviteBrowserRefresh('room_invite'); } catch {}
   showRoomInviteToast(room, by, { kind: 'room' });
 });
 

@@ -8,10 +8,14 @@ function setDockBadge(id, count, title = '') {
 }
 
 function getDockAlertPanelSummary(panel = 'missed') {
-  const missedThreads = Array.isArray(UIState.missedPmSummary) ? UIState.missedPmSummary.length : 0;
-  const missedTotal = Array.isArray(UIState.missedPmSummary)
-    ? UIState.missedPmSummary.reduce((sum, it) => sum + (Number(it?.count || 0) || 0), 0)
-    : 0;
+  const missedTotals = (typeof ecGetMissedPmTotals === 'function')
+    ? ecGetMissedPmTotals()
+    : {
+        threads: Array.isArray(UIState.missedPmSummary) ? UIState.missedPmSummary.length : 0,
+        total: Array.isArray(UIState.missedPmSummary) ? UIState.missedPmSummary.reduce((sum, it) => sum + (Number(it?.count || 0) || 0), 0) : 0,
+      };
+  const missedThreads = Number(missedTotals.threads || 0) || 0;
+  const missedTotal = Number(missedTotals.total || 0) || 0;
   const pendingCount = Array.isArray(UIState.pendingRequests) ? UIState.pendingRequests.length : 0;
   const groupAlertCount = Array.isArray(UIState.groupInvites) ? UIState.groupInvites.length : 0;
   const roomAlertCount = Array.isArray(UIState.roomInvites) ? UIState.roomInvites.length : 0;
@@ -55,9 +59,11 @@ function syncDockAlertFlyoutMeta(panel = null) {
 }
 
 function getDockAlertActivityTotals() {
-  const missedTotal = Array.isArray(UIState.missedPmSummary)
-    ? UIState.missedPmSummary.reduce((sum, it) => sum + (Number(it?.count || 0) || 0), 0)
-    : 0;
+  const stateMissedTotal = (typeof ecGetMissedPmTotals === 'function')
+    ? (Number(ecGetMissedPmTotals().total || 0) || 0)
+    : (Array.isArray(UIState.missedPmSummary) ? UIState.missedPmSummary.reduce((sum, it) => sum + (Number(it?.count || 0) || 0), 0) : 0);
+  const badgeMissedTotal = Number($('railMissedCount')?.textContent || 0) || 0;
+  const missedTotal = Math.max(0, stateMissedTotal, badgeMissedTotal);
   const pendingTotal = Array.isArray(UIState.pendingRequests) ? UIState.pendingRequests.length : 0;
   const alertsTotal = (Array.isArray(UIState.groupInvites) ? UIState.groupInvites.length : 0) + (Array.isArray(UIState.roomInvites) ? UIState.roomInvites.length : 0) + (Array.isArray(UIState.webcamRequests) ? UIState.webcamRequests.length : 0) + (Array.isArray(UIState.profilePostNotifications) ? UIState.profilePostNotifications.length : 0);
   return {
@@ -80,6 +86,7 @@ function updateDockAlertRailPresentation() {
     pending: totals.pendingTotal,
     alerts: totals.alertsTotal,
   };
+  try { if (typeof ecMissedDebug === 'function') ecMissedDebug('rail.presentation.start', { totals, flyoutOpen, activePanel, byPanel }); } catch {}
 
   if (flyoutOpen && activePanel && Number(byPanel[activePanel] || 0) <= 0) {
     try { flyout.classList.add('hidden'); } catch {}
@@ -104,4 +111,17 @@ function updateDockAlertRailPresentation() {
 
   rail.classList.toggle('hasPeekedBubble', anyPeeked);
   rail.classList.toggle('isCollapsed', !anyPeeked && !flyoutOpen);
+
+  const dock = rail.closest('.dock');
+  if (dock) {
+    // beta.403: no wide edge mask. The physical CSS lip handles the overlap
+    // without covering the hub search/profile text.
+    dock.classList.remove('hasDockAlertMask');
+  }
+  try {
+    if (typeof ecMissedDebug === 'function') ecMissedDebug('rail.presentation.done', { anyPeeked, flyoutOpen, activePanel, totals });
+    if (totals.missedTotal > 0 && typeof ecRepairMissedBubblePaintPath === 'function') {
+      setTimeout(() => { try { ecRepairMissedBubblePaintPath('rail_presentation'); } catch {} }, 80);
+    }
+  } catch {}
 }

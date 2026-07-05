@@ -146,7 +146,15 @@ function clearOfflineDmBacklog(peer = null) {
       try { localStorage.removeItem(`ec_offline_dm_backlog_v1`); } catch {}
       return;
     }
-    UIState.pendingOfflineDm.delete(peer);
+    const keys = Array.from(UIState.pendingOfflineDm?.keys?.() || []);
+    const matches = keys.filter((name) => {
+      try {
+        if (typeof ecMissedSamePeer === 'function') return ecMissedSamePeer(name, peer);
+      } catch {}
+      return String(name || '') === String(peer || '');
+    });
+    if (matches.length) matches.forEach((name) => UIState.pendingOfflineDm.delete(name));
+    else UIState.pendingOfflineDm.delete(peer);
     persistOfflineDmBacklog();
   } catch {
     // ignore
@@ -200,6 +208,7 @@ const UIState = {
   currentRoom: null,       // server-side one room at a time
   roomsCache: [],          // last known room list for re-rendering (policy badges)
   roomUsers: new Map(),    // room -> [usernames] (last known)
+  roomUnblockRefreshUntil: 0, // short grace while room roster heals after unblock
   friendSet: new Set(),    // fast check for (is friend)
   blockedSet: new Set(),   // fast check for (is blocked by me)
   blockedUsersCache: [],   // last known blocked usernames for the blocked-users modal
@@ -221,6 +230,7 @@ const UIState = {
   selectedBuddy: '',       // last clicked / right-clicked username in dock or room list
   selectedBuddySource: '', // friends | room | blocked | pending | missed
   missedPmSummary: [],     // [{sender, count}] from server (offline-only)
+  livePmUnreadCounts: new Map(), // peer -> unread live PMs not yet opened/focused
   consumingOfflinePeers: new Set(), // peers currently being consumed (avoid duplicate fetch loops)
   consumingOfflinePeerPromises: new Map(), // peer -> in-flight consume promise
   pendingOfflineDm: new Map(),      // peer -> [{id, cipher, ts}]
@@ -234,7 +244,13 @@ const UIState = {
     soundNotif: Settings.get("soundNotif", ECHOCHAT_CFG.sound_notifications_default === undefined ? true : !!ECHOCHAT_CFG.sound_notifications_default),
     soundTheme: Settings.get("soundTheme", String(ECHOCHAT_CFG.sound_theme_default || ECHOCHAT_CFG.default_sound_theme || "soft_chime")),
     rememberUnlock: false,
-    roomFontSize: Settings.get("roomFontSize", 12),
+    roomFontSize: Settings.get("roomFontSize", 13),
+    roomFontFamily: Settings.get("roomFontFamily", "Arial"),
+    roomComposerBold: Settings.get("roomComposerBold", false),
+    roomComposerItalic: Settings.get("roomComposerItalic", false),
+    roomComposerUnderline: Settings.get("roomComposerUnderline", false),
+    roomComposerColor: Settings.get("roomComposerColor", "#111111"),
+    emoticonSize: Settings.get("emoticonSize", 26),
     gifTileSize: Settings.get("gifTileSize", 140),
     gifResultsPerLoad: Settings.get("gifResultsPerLoad", 12),
     gifOpenMode: Settings.get("gifOpenMode", "recents"),

@@ -1,8 +1,9 @@
 function rbBumpUnread(roomName) {
-  const key = String(roomName || '').trim();
+  const key = (typeof rbUnreadKey === 'function') ? rbUnreadKey(roomName) : String(roomName || '').trim();
   if (!key) return;
-  const cur = Number(ROOM_BROWSER.unreadCounts.get(key) || 0) || 0;
-  ROOM_BROWSER.unreadCounts.set(key, cur + 1);
+  const cur = (typeof rbGetUnreadCount === 'function') ? rbGetUnreadCount(key) : (Number(ROOM_BROWSER.unreadCounts.get(key) || 0) || 0);
+  if (typeof rbSetUnreadCount === 'function') rbSetUnreadCount(key, cur + 1);
+  else ROOM_BROWSER.unreadCounts.set(key, cur + 1);
 }
 
 function rbToastApiLoadError(resp, data, fallback) {
@@ -43,7 +44,7 @@ async function rbLoadCounts() {
     const n = Number(count || 0) || 0;
     m.set(String(name), n);
     const capacity = Number(r?.capacity || r?.max_users || 0) || 0;
-    meta.set(String(name), {
+    const metaRow = {
       member_count: n,
       locked: !!r?.locked,
       readonly: !!r?.readonly,
@@ -53,7 +54,8 @@ async function rbLoadCounts() {
       is_custom: !!r?.is_custom,
       is_private: !!r?.is_private,
       room_kind: String(r?.room_kind || '').trim(),
-    });
+    };
+    meta.set(String(name), metaRow);
   });
   ROOM_BROWSER.counts = m;
   ROOM_BROWSER.roomStatusMeta = meta;
@@ -67,12 +69,14 @@ async function rbLoadCustomRooms() {
   const resp = await fetchWithAuth(`/api/custom_rooms?${qs.toString()}`, { method: 'GET' }, { retryOn401: true });
   const j = (typeof ecReadApiJson === 'function') ? await ecReadApiJson(resp, {}) : await resp.json().catch(() => ({}));
   if (!resp || !resp.ok) {
+    ROOM_BROWSER.customRooms = [];
     rbToastApiLoadError(resp, j, 'Could not load custom rooms');
     return;
   }
   const responseCategory = String(j?.category || c || '').trim();
   const responseSubcategory = String(j?.subcategory || s || '').trim();
   const loadedAt = Date.now();
+  const seenCustomRoomKeys = new Set();
   ROOM_BROWSER.customRooms = (Array.isArray(j.rooms) ? j.rooms : []).map((room) => ({
     ...(room || {}),
     category: String(room?.category || responseCategory || c || '').trim(),
@@ -86,9 +90,15 @@ async function rbLoadCustomRooms() {
     timer_paused: !!room?.timer_paused,
     deletion_state: room?.deletion_state ? String(room.deletion_state) : '',
     cleanup_occupancy_count: Number(room?.cleanup_occupancy_count || 0) || 0,
+    my_room_role: room?.my_room_role ? String(room.my_room_role) : '',
+    can_room_moderate: !!room?.can_room_moderate,
     _customExpiryLoadedAt: loadedAt,
   })).filter((room) => {
-    return String(room?.category || '') === String(c) && String(room?.subcategory || '') === String(s);
+    if (!rbSameCatalogPath(room?.category || '', room?.subcategory || '', c, s)) return false;
+    const key = rbRoomNameKey(room?.name || room?.room || '');
+    if (!key || seenCustomRoomKeys.has(key)) return false;
+    seenCustomRoomKeys.add(key);
+    return true;
   });
 }
 
@@ -132,7 +142,7 @@ function rbSubcategoryOnlineCount(subcategory) {
   rbCatalogRoomsForSubcategory(subcategory).forEach((room) => {
     const name = rbCatalogRoomName(room);
     if (!name) return;
-    total += Number(ROOM_BROWSER.counts?.get(name) || 0) || 0;
+    total += Number(rbMapGetRoomValue(ROOM_BROWSER.counts, name, 0) || 0) || 0;
     try {
       ROOM_BROWSER.counts.forEach((count, candidateName) => {
         if (rbNorm(rbAutosplitShardBaseName(candidateName)) === rbNorm(name)) {
@@ -218,9 +228,9 @@ function rbRoomsForSelection() {
   const cat = ROOM_BROWSER.selectedCategory;
   const sub = ROOM_BROWSER.selectedSubcategory;
   if (!ROOM_BROWSER.catalog || !cat || !sub) return [];
-  const c = (ROOM_BROWSER.catalog.categories || []).find((x) => (x.name || '') === cat);
+  const c = (ROOM_BROWSER.catalog.categories || []).find((x) => rbRoomNameKey(x?.name || '') === rbRoomNameKey(cat));
   if (!c) return [];
-  const sObj = (c.subcategories || []).find((x) => (x.name || '') === sub);
+  const sObj = (c.subcategories || []).find((x) => rbRoomNameKey(x?.name || '') === rbRoomNameKey(sub));
   if (!sObj) return [];
   return Array.isArray(sObj.rooms) ? sObj.rooms : [];
 }
@@ -302,6 +312,11 @@ function rbMatchesCustomFilter(row) {
   if (filter === 'public' && row.meta?.is_private) return false;
   if (filter === 'private' && !row.meta?.is_private) return false;
   if (filter === 'mine' && !rbIsCurrentUserRoomCreator(row.meta?.created_by)) return false;
+  if (filter === 'invited') {
+    const role = rbNorm(row.meta?.my_room_role || '');
+    const creator = rbIsCurrentUserRoomCreator(row.meta?.created_by);
+    if (!row.meta?.is_private || creator || role === 'owner') return false;
+  }
   return true;
 }
 
@@ -316,7 +331,10 @@ function rbRoomSearchText(row) {
     row.category,
     row.subcategory,
     row.isCustom ? 'custom user created' : 'official built in',
-    row.isCustom && meta.is_private ? 'private invite locked' : '',
+    row.isCustom && meta.is_private ? 'private invite invited invite-only locked' : '',
+    row.isCustom && rbIsCurrentUserRoomCreator(meta.created_by) ? 'mine owner owned by me' : '',
+    row.isCustom && meta.can_room_moderate ? 'moderator can invite manage' : '',
+    row.isCustom && meta.my_room_role ? `role ${meta.my_room_role}` : '',
     row.locked ? 'locked closed' : 'open unlocked',
     row.readonly ? 'readonly read only' : '',
     Number(row.slowmode_seconds || 0) > 0 ? 'slowmode slow' : '',
@@ -398,7 +416,7 @@ function rbApplyQueriesToMixedRows(rows) {
     if (ROOM_BROWSER.hideEmpty && row.cnt <= 0) return false;
     if (!rbMatchesRoomStatusFilter(row)) return false;
     if (row.isCustom) {
-      const customQuery = rbNorm(ROOM_BROWSER.customQuery);
+      const customQuery = rbNorm(ROOM_BROWSER.customQuery) || roomQuery;
       if (!rbMatchesCustomFilter(row)) return false;
       if (customQuery && !rbMatchesRoomSearch(row, customQuery)) return false;
     } else if (roomQuery && !rbMatchesRoomSearch(row, roomQuery)) {

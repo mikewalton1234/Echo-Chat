@@ -2553,3 +2553,398 @@ body:not(.ec-mobile-shell-active) #btnRoomEmbedLatestMobile {
     overflow-wrap: anywhere;
   }
 }
+
+/* Rich composer should size like the normal chat input in mobile shell. */
+#appRoot.is-mobile-shell .ec-richComposer {
+  min-height: 40px;
+  max-height: 92px;
+  font-size: 16px;
+}
+#appRoot.is-mobile-shell .ym-window[data-kind="dm"] .ym-compose .ec-richComposer,
+#appRoot.is-mobile-shell .ym-window[data-kind="group"] .ym-compose .ec-richComposer,
+#appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedCompose .ec-richComposer {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Beta.355 UI01: mobile classic composer.
+   Closed state is a clean input + Tools + Send row; opening Tools reveals the
+   old-style formatting/media toolbar above it without covering the message box. */
+@media all {
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedCompose.ecClassicCompose {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-rows: auto minmax(44px, auto);
+    align-items: stretch;
+  }
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedCompose.ecClassicCompose .ecClassicComposeToolbar {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    flex-wrap: wrap;
+    overflow-x: hidden;
+    overflow-y: auto;
+    max-height: 76px;
+    row-gap: 4px;
+    padding-bottom: 2px;
+  }
+  #appRoot.is-mobile-shell.is-mobile-compose-tools-open[data-mobile-panel="chat"] .roomEmbedCompose.ecClassicCompose .ecClassicComposeToolbar {
+    display: flex !important;
+  }
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedCompose.ecClassicCompose .ec-richComposer,
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedCompose.ecClassicCompose #roomEmbedInput {
+    grid-column: 1;
+    grid-row: 2;
+    min-width: 0;
+  }
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedCompose.ecClassicCompose .mobileComposeMoreBtn {
+    grid-column: 2;
+    grid-row: 2;
+    min-width: 52px;
+    padding-inline: 8px;
+  }
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedCompose.ecClassicCompose #roomEmbedSend {
+    grid-column: 3;
+    grid-row: 2;
+    min-width: 58px;
+    padding-inline: 10px;
+  }
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedCompose.ecClassicCompose .ecClassicTextBtn .ecToolBtnLabel {
+    display: none;
+  }
+}
+
+/* UI05 room browser: keep custom search usable on phone widths */
+@media (max-width: 700px) {
+  #appRoot.is-mobile-shell .rbToolsCustom .searchInputWrap,
+  #appRoot.is-mobile-shell .rbToolsCustom .rbCustomSearch {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+}
+
+
+/* UI10 mobile/responsive pass: final phone/small-browser guardrails. */
+@media all {
+  body.ec-mobile-shell-active {
+    --mobileNavBaseH: 62px;
+    --mobileNavH: calc(var(--mobileNavBaseH) + env(safe-area-inset-bottom, 0px));
+  }
+
+  body.ec-mobile-keyboard-open {
+    --mobileNavH: 0px;
+  }
+
+  #appRoot.is-mobile-shell,
+  #appRoot.is-mobile-shell #siteArea,
+  #appRoot.is-mobile-shell #ecDock,
+  #appRoot.is-mobile-shell .windowsLayer {
+    width: var(--ecMobileViewportW, 100vw);
+    max-width: 100vw;
+  }
+
+  #appRoot.is-mobile-shell .mobileShellNav {
+    height: var(--mobileNavH, 62px);
+    min-height: var(--mobileNavH, 62px);
+  }
+
+  #appRoot.is-mobile-shell .mobileShellNavBtn {
+    min-height: 46px;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  #appRoot.is-mobile-shell button,
+  #appRoot.is-mobile-shell .miniBtn,
+  #appRoot.is-mobile-shell .ghostBtn,
+  #appRoot.is-mobile-shell .primaryBtn,
+  #appRoot.is-mobile-shell .iconBtn,
+  #appRoot.is-mobile-shell .winBtn,
+  #appRoot.is-mobile-shell .ym-send,
+  #appRoot.is-mobile-shell .ym-toolBtn,
+  #appRoot.is-mobile-shell .ecap-btn,
+  #appRoot.is-mobile-shell .settingsTabBtn,
+  #appRoot.is-mobile-shell .settingsResetBtn,
+  #appRoot.is-mobile-shell .settingsSaveBtn,
+  #appRoot.is-mobile-shell .settingsCloseBtn {
+    min-height: 44px;
+    touch-action: manipulation;
+  }
+
+  #appRoot.is-mobile-shell input,
+  #appRoot.is-mobile-shell select,
+  #appRoot.is-mobile-shell textarea,
+  body.ec-mobile-shell-active #ecAdminPanel input,
+  body.ec-mobile-shell-active #ecAdminPanel select,
+  body.ec-mobile-shell-active #ecAdminPanel textarea {
+    max-width: 100%;
+    font-size: 16px;
+  }
+
+  #appRoot.is-mobile-shell .ym-window:not(.is-mobile-active-window):not(.hidden) {
+    display: none !important;
+  }
+
+  #appRoot.is-mobile-shell .ym-window.is-mobile-active-window {
+    z-index: 1000025 !important;
+  }
+
+  #appRoot.is-mobile-shell .ym-window .ym-titlebar,
+  #appRoot.is-mobile-shell .ecProfileWindow .ym-titlebar {
+    min-height: 48px;
+  }
+
+  #appRoot.is-mobile-shell .ym-window .ym-winBtns,
+  #appRoot.is-mobile-shell .ecProfileWindow .ym-winBtns {
+    gap: 6px;
+  }
+
+  #appRoot.is-mobile-shell .ym-window .ym-winBtns .winBtn,
+  #appRoot.is-mobile-shell .ecProfileWindow .ym-winBtns .winBtn {
+    min-width: 42px;
+    min-height: 42px;
+  }
+
+  #appRoot.is-mobile-shell .ym-window .ym-compose {
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell .ym-window,
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell .ecProfileWindow {
+    top: 4px !important;
+    bottom: 4px !important;
+    left: 4px !important;
+    right: 4px !important;
+    border-radius: 12px;
+  }
+
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell .ym-window .ym-log,
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell .ecProfileWindow .ym-log {
+    scroll-padding-bottom: 120px;
+  }
+
+  #appRoot.is-mobile-shell .modal,
+  #appRoot.is-mobile-shell .roomBrowserPopout,
+  #appRoot.is-mobile-shell .settingsModal,
+  #appRoot.is-mobile-shell .createRoomModal,
+  body.ec-mobile-shell-active #ecAdminPanel .ecap-modalBackdrop {
+    padding: max(8px, env(safe-area-inset-top, 0px)) max(8px, env(safe-area-inset-right, 0px)) max(8px, env(safe-area-inset-bottom, 0px)) max(8px, env(safe-area-inset-left, 0px));
+  }
+
+  body.ec-mobile-shell-active #ecAdminPanel .ecap-modalBackdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1000040;
+  }
+
+  body.ec-mobile-shell-active #ecAdminPanel .ecap-modal {
+    width: min(440px, calc(100vw - 18px));
+    max-height: calc(var(--ecMobileViewportH, 100dvh) - 18px);
+    padding: 14px;
+  }
+
+  body.ec-mobile-shell-active #ecAdminPanel .ecap-modalActions,
+  #appRoot.is-mobile-shell .modalFoot,
+  #appRoot.is-mobile-shell .settingsModalFoot {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  body.ec-mobile-shell-active #ecAdminPanel .ecap-modalActions .ecap-btn,
+  #appRoot.is-mobile-shell .modalFoot button,
+  #appRoot.is-mobile-shell .settingsModalFoot button {
+    width: 100%;
+  }
+
+  #appRoot.is-mobile-shell .toastStack {
+    left: 8px;
+    right: 8px;
+    bottom: calc(var(--mobileNavH, 62px) + 8px);
+    width: auto;
+    max-width: none;
+  }
+
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell .toastStack {
+    bottom: 8px;
+  }
+
+  #appRoot.is-mobile-shell .ec-emojiPopover,
+  #appRoot.is-mobile-shell .gifPanel,
+  #appRoot.is-mobile-shell .ym-avPanel {
+    max-width: calc(100vw - 16px);
+  }
+}
+
+@media (max-width: 480px) {
+  #appRoot.is-mobile-shell .rbScopeBar,
+  #appRoot.is-mobile-shell .dockMenuBar,
+  #appRoot.is-mobile-shell .roomEmbedActions,
+  #appRoot.is-mobile-shell .ym-mobileWindowNav,
+  #appRoot.is-mobile-shell .ecProfileWindow .ym-mobileProfileNav {
+    scrollbar-width: none;
+  }
+  #appRoot.is-mobile-shell .rbScopeBar::-webkit-scrollbar,
+  #appRoot.is-mobile-shell .dockMenuBar::-webkit-scrollbar,
+  #appRoot.is-mobile-shell .roomEmbedActions::-webkit-scrollbar,
+  #appRoot.is-mobile-shell .ym-mobileWindowNav::-webkit-scrollbar,
+  #appRoot.is-mobile-shell .ecProfileWindow .ym-mobileProfileNav::-webkit-scrollbar {
+    display: none;
+  }
+
+  #appRoot.is-mobile-shell .rbRoomRow,
+  #appRoot.is-mobile-shell .dockSection .list li,
+  #appRoot.is-mobile-shell .list li,
+  #appRoot.is-mobile-shell .ecProfilePostCard,
+  #appRoot.is-mobile-shell .ecProfileCommentRow {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  #appRoot.is-mobile-shell .settingsRow,
+  #appRoot.is-mobile-shell .settingsControlRow,
+  body.ec-mobile-shell-active #ecAdminPanel .ecap-row,
+  body.ec-mobile-shell-active #ecAdminPanel .ecap-toolbar,
+  body.ec-mobile-shell-active #ecAdminPanel .ecap-actions {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 8px !important;
+    align-items: stretch !important;
+  }
+}
+
+/* UI10 deep mobile/responsive recheck: orientation, keyboard, and sheet cleanup guardrails. */
+@media all {
+  #appRoot.is-mobile-shell {
+    min-width: 0;
+    overflow-x: hidden;
+    min-height: var(--ecMobileViewportH, 100dvh);
+  }
+
+  #appRoot.is-mobile-shell .windowsLayer {
+    height: calc(var(--ecMobileViewportH, 100dvh) - var(--mobileNavH, 62px));
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  #appRoot.is-mobile-shell .ym-window,
+  #appRoot.is-mobile-shell .ecProfileWindow {
+    max-height: calc(var(--ecMobileViewportH, 100dvh) - var(--mobileNavH, 62px) - 16px) !important;
+    max-width: calc(var(--ecMobileViewportW, 100vw) - 16px) !important;
+    contain: layout paint;
+  }
+
+  #appRoot.is-mobile-shell .ym-window[aria-hidden="true"],
+  #appRoot.is-mobile-shell .ecProfileWindow[aria-hidden="true"] {
+    pointer-events: none !important;
+  }
+
+  #appRoot.is-mobile-shell .ym-window.is-mobile-active-window,
+  #appRoot.is-mobile-shell .ecProfileWindow.is-mobile-active-window {
+    display: flex !important;
+  }
+
+  #appRoot.is-mobile-shell .ym-window.is-mobile-active-window .ym-log,
+  #appRoot.is-mobile-shell .ecProfileWindow.is-mobile-active-window .ym-log,
+  #appRoot.is-mobile-shell .roomEmbedLog,
+  #appRoot.is-mobile-shell .roomBrowserPopoutBody,
+  #appRoot.is-mobile-shell .dockPanels {
+    overscroll-behavior: contain;
+  }
+
+  #appRoot.is-mobile-shell .roomEmbedLog,
+  #appRoot.is-mobile-shell .ym-window .ym-log,
+  #appRoot.is-mobile-shell .ecProfileWindow .ym-log {
+    scroll-padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+  }
+
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell .windowsLayer {
+    inset: 0;
+    height: var(--ecMobileViewportH, 100dvh);
+  }
+
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell .ym-window,
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell .ecProfileWindow {
+    max-height: calc(var(--ecMobileViewportH, 100dvh) - 8px) !important;
+    max-width: calc(var(--ecMobileViewportW, 100vw) - 8px) !important;
+  }
+
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell .ec-emojiPopover,
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell .gifPanel,
+  body.ec-mobile-keyboard-open #appRoot.is-mobile-shell .ym-avPanel {
+    bottom: 6px !important;
+    max-height: min(320px, calc(var(--ecMobileViewportH, 100dvh) - 12px));
+  }
+
+  body.ec-mobile-shell-active #settingsModal:not(.hidden),
+  body.ec-mobile-shell-active .modal:not(.hidden),
+  body.ec-mobile-shell-active .createRoomModal:not(.hidden) {
+    z-index: 1000045;
+  }
+
+  body.ec-mobile-shell-active #ecAdminPanel .ecap-modalBackdrop,
+  body.ec-mobile-shell-active .ecProfileLightboxOverlay,
+  body.ec-mobile-shell-active .ecProfileOwnerEditorBackdrop {
+    z-index: 1000050;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 520px) {
+  #appRoot.is-mobile-shell .mobileShellNav {
+    --mobileNavBaseH: 54px;
+  }
+
+  #appRoot.is-mobile-shell .mobileShellNavBtn {
+    min-height: 42px;
+    font-size: 10px;
+  }
+
+  #appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedHeader,
+  #appRoot.is-mobile-shell[data-mobile-panel="hub"] .dockTitlebar {
+    min-height: 38px;
+  }
+}
+
+/* UI11 voice/webcam UI mobile guardrails. */
+@media (max-width: 700px) {
+  #appRoot.is-mobile-shell .ym-avDiagnostics {
+    font-size: 11px;
+    max-height: 72px;
+    overflow: auto;
+  }
+  #appRoot.is-mobile-shell .ym-avTileActions {
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+  #appRoot.is-mobile-shell .ym-avTileActions .miniBtn,
+  #appRoot.is-mobile-shell .ym-voiceBtns .miniBtn {
+    min-height: 44px;
+  }
+  #appRoot.is-mobile-shell .ym-voiceStatus,
+  #appRoot.is-mobile-shell .ym-avStatus {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
+
+/* Beta.428: keep the non-animated emoticon toolbar icon readable on mobile. */
+#appRoot.is-mobile-shell .ecToolbarEmoticonBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+#appRoot.is-mobile-shell .ecToolbarEmoticonIcon {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  pointer-events: none;
+}
+#appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedCompose.ecClassicCompose .ecClassicComposeToolbar .ecToolbarEmoticonBtn {
+  width: 30px;
+  min-width: 30px;
+  height: 28px;
+  min-height: 28px;
+}
+#appRoot.is-mobile-shell[data-mobile-panel="chat"] .roomEmbedCompose.ecClassicCompose .ecClassicComposeToolbar .ecToolbarEmoticonIcon {
+  width: 24px;
+  height: 24px;
+}

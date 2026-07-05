@@ -1,3 +1,75 @@
+const EC_PROFILE_POST_ACTION_PENDING = new Set();
+const EC_PROFILE_COMMENT_ACTION_PENDING = new Set();
+
+function _profilePendingKey(...parts) {
+  return parts.map((part) => String(part ?? '').trim().toLowerCase()).join(':');
+}
+
+function _profileIsPending(set, key) {
+  return !!(set && key && set.has(key));
+}
+
+function _profileSetButtonBusy(btn, busy, busyText = 'Working…') {
+  if (!btn) return;
+  if (busy) {
+    if (!btn.dataset.idleLabel) btn.dataset.idleLabel = btn.textContent || '';
+    btn.disabled = true;
+    btn.classList.add('isBusy');
+    btn.setAttribute('aria-busy', 'true');
+    if (busyText) btn.textContent = busyText;
+    return;
+  }
+  btn.disabled = false;
+  btn.classList.remove('isBusy');
+  btn.setAttribute('aria-busy', 'false');
+  if (btn.dataset.idleLabel) btn.textContent = btn.dataset.idleLabel;
+}
+
+function _profileRevokeObjectUrl(url) {
+  const value = String(url || '').trim();
+  if (!value || !value.startsWith('blob:') || typeof URL === 'undefined' || typeof URL.revokeObjectURL !== 'function') return;
+  try { URL.revokeObjectURL(value); } catch {}
+}
+
+function _profileSafeObjectUrl(file, state, key) {
+  if (!file || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return '';
+  if (state && key) {
+    _profileRevokeObjectUrl(state[key]);
+    state[key] = '';
+  }
+  let nextUrl = '';
+  try { nextUrl = URL.createObjectURL(file); } catch { nextUrl = ''; }
+  if (state && key) state[key] = nextUrl;
+  return nextUrl;
+}
+
+function _profileValidateOptionalLink(raw, label = 'link') {
+  const value = String(raw || '').trim();
+  if (!value) return { ok: true, url: '' };
+  const safe = ecNormalizeSafeUrl(value, { allowRelative: false, allowExternal: true });
+  if (!safe) return { ok: false, url: '', error: `Use a valid http/https ${label}.` };
+  return { ok: true, url: safe };
+}
+
+function _profileDefaultPostVisibility(profile = {}) {
+  return _profilePostVisibilityValue(profile?.profile_post_default_visibility || 'friends');
+}
+
+async function _profileLimitPostEmoticons(text, opts = {}) {
+  if (typeof ecLimitOutgoingChatEmoticons !== 'function') return { text: String(text || ''), removed: 0 };
+  try {
+    return await ecLimitOutgoingChatEmoticons(String(text || ''), { surface: 'profile post', notify: opts.notify !== false });
+  } catch {
+    return { text: String(text || ''), removed: 0 };
+  }
+}
+
+function _profileWindowKey(username) {
+  const raw = String(username || '').trim();
+  const key = (typeof ecNormalizeUsernameKey === 'function') ? ecNormalizeUsernameKey(raw) : raw.toLowerCase();
+  return key || raw;
+}
+
 function _profileReplaceTextBlock(container, className, text) {
   if (!container) return null;
   _profileClearNode(container);
@@ -22,24 +94,229 @@ function _clampProfileWindowIntoViewport(win) {
 
 function _fitProfileWindow(win, mode = 'public') {
   if (!win) return;
+  if (win.classList && win.classList.contains('is-profile-fullscreen')) return;
   const viewportWidth = Math.max(360, window.innerWidth || 0);
   const viewportHeight = Math.max(360, window.innerHeight || 0);
-  const horizontalMargin = 24;
+  const usableRight = Math.max(360, (typeof _profileUsableRightEdge === 'function') ? _profileUsableRightEdge() : viewportWidth);
+  const horizontalMargin = 18;
   const verticalMargin = 72;
-  const maxWidth = Math.max(520, viewportWidth - horizontalMargin * 2);
+  const maxWidth = Math.max(520, Math.min(viewportWidth - horizontalMargin * 2, usableRight - horizontalMargin * 2));
   const maxHeight = Math.max(440, viewportHeight - verticalMargin);
-  const desiredWidth = mode === 'editor'
-    ? Math.round(Math.min(maxWidth, Math.max(620, viewportWidth * 0.50)))
-    : Math.round(Math.min(maxWidth, Math.max(780, viewportWidth * 0.58)));
+  const minGoodWidth = mode === 'editor' ? 980 : 1080;
+  const fillWidth = mode === 'editor' ? usableRight * 0.78 : usableRight * 0.84;
+  const desiredWidth = Math.round(Math.min(maxWidth, Math.max(minGoodWidth, fillWidth)));
   const desiredHeight = mode === 'editor'
-    ? Math.round(Math.min(maxHeight, Math.max(560, viewportHeight * 0.72)))
-    : Math.round(Math.min(maxHeight, Math.max(620, viewportHeight * 0.74)));
+    ? Math.round(Math.min(maxHeight, Math.max(600, viewportHeight * 0.74)))
+    : Math.round(Math.min(maxHeight, Math.max(640, viewportHeight * 0.76)));
   win.style.width = `${desiredWidth}px`;
   win.style.height = `${desiredHeight}px`;
   win.style.maxWidth = `${maxWidth}px`;
   win.style.maxHeight = `${maxHeight}px`;
-  _clampProfileWindowIntoViewport(win);
+  win.style.minWidth = `${Math.min(maxWidth, mode === 'editor' ? 920 : 960)}px`;
+  win.style.minHeight = `${Math.min(maxHeight, mode === 'editor' ? 560 : 580)}px`;
+  _positionProfileWindowNearTop(win);
 }
+
+function _profileUsableRightEdge() {
+  const viewportWidth = Math.max(360, window.innerWidth || 0);
+  try {
+    const root = document.getElementById('appRoot');
+    const dock = document.getElementById('ecDock');
+    const dockVisible = dock && (!root || !root.classList || !root.classList.contains('is-hub-collapsed'));
+    if (dockVisible) {
+      const dockWidth = Math.max(0, Math.round(dock.getBoundingClientRect?.().width || dock.offsetWidth || 0));
+      if (dockWidth > 0 && dockWidth < viewportWidth * 0.45) return viewportWidth - dockWidth;
+    }
+  } catch {}
+  return viewportWidth;
+}
+
+function _positionProfileWindowNearTop(win) {
+  if (!win || (win.classList && win.classList.contains('is-profile-fullscreen'))) return;
+  const width = Math.max(320, Math.round(parseFloat(win.style.width) || win.offsetWidth || 0));
+  const height = Math.max(280, Math.round(parseFloat(win.style.height) || win.offsetHeight || 0));
+  const usableRight = Math.max(360, _profileUsableRightEdge());
+  const left = Math.max(10, Math.min(Math.max(10, usableRight - width - 10), Math.round((usableRight - width) / 2)));
+  const maxTop = Math.max(10, (window.innerHeight || 0) - height - 12);
+  win.style.left = `${left}px`;
+  win.style.top = `${Math.min(10, maxTop)}px`;
+}
+
+function _profileGetScrollHost(target) {
+  if (!target) return null;
+  if (target._ym && target._ym.log) return target._ym.log;
+  if (target.classList && target.classList.contains('ym-log')) return target;
+  if (typeof target.querySelector === 'function') return target.querySelector('.ym-log') || target;
+  return target;
+}
+
+function _profileForceTopScroll(target) {
+  const log = _profileGetScrollHost(target);
+  if (!log) return;
+  const reset = () => {
+    try { log.style.scrollBehavior = 'auto'; } catch {}
+    try { log.style.overflowAnchor = 'none'; } catch {}
+    try { log.scrollTop = 0; } catch {}
+    try { log.scrollTo({ top: 0, left: 0, behavior: 'instant' }); } catch {
+      try { log.scrollTo(0, 0); } catch {}
+    }
+    try {
+      log.querySelectorAll?.('.ecProfilePageCard, .ecProfileCard, [data-profile-feed-root], [data-profile-photos-root]').forEach((node) => {
+        if (!node || typeof node.scrollTop !== 'number') return;
+        try { node.style.scrollBehavior = 'auto'; } catch {}
+        try { node.style.overflowAnchor = 'none'; } catch {}
+        node.scrollTop = 0;
+      });
+    } catch {}
+  };
+
+  reset();
+  try { requestAnimationFrame(reset); } catch { try { queueMicrotask(reset); } catch {} }
+}
+
+function _profileStartTopLock(win) {
+  if (!win) return 0;
+  const token = (Number(win.__ecProfileTopLockToken || 0) || 0) + 1;
+  win.__ecProfileTopLockToken = token;
+  try { win.classList.add('is-profile-toplock'); } catch {}
+  _profileForceTopScroll(win);
+  return token;
+}
+
+function _profileReleaseTopLock(win, token, delayMs = 0) {
+  if (!win) return;
+  const release = () => {
+    if (token && Number(win.__ecProfileTopLockToken || 0) !== Number(token)) return;
+    _profileForceTopScroll(win);
+    const log = _profileGetScrollHost(win);
+    const endAt = (typeof performance !== 'undefined' ? performance.now() : Date.now()) + 260;
+    const settle = () => {
+      if (token && Number(win.__ecProfileTopLockToken || 0) !== Number(token)) return;
+      _profileForceTopScroll(log || win);
+      const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      if (now < endAt) {
+        try { requestAnimationFrame(settle); } catch { setTimeout(settle, 16); }
+        return;
+      }
+      try { win.classList.remove('is-profile-toplock'); } catch {}
+      if (token && Number(win.__ecProfileTopLockToken || 0) === Number(token)) win.__ecProfileTopLockToken = 0;
+      _profileForceTopScroll(log || win);
+    };
+    try { requestAnimationFrame(settle); } catch { setTimeout(settle, 0); }
+  };
+  if (delayMs > 0) setTimeout(release, delayMs);
+  else release();
+}
+
+function _profileExpandedAppBounds() {
+  const fallbackWidth = Math.max(360, window.innerWidth || 0);
+  const fallbackHeight = Math.max(360, window.innerHeight || 0);
+  let left = 8;
+  let top = 8;
+  let width = Math.max(360, fallbackWidth - 16);
+  let height = Math.max(360, fallbackHeight - 16);
+
+  try {
+    const site = document.getElementById('siteArea');
+    const rect = site && site.getBoundingClientRect ? site.getBoundingClientRect() : null;
+    if (rect && rect.width > 360 && rect.height > 360) {
+      const margin = 8;
+      left = Math.max(0, Math.round(rect.left + margin));
+      top = Math.max(0, Math.round(rect.top + margin));
+      width = Math.max(360, Math.round(rect.width - margin * 2));
+      height = Math.max(360, Math.round(rect.height - margin * 2));
+    } else {
+      const usableRight = Math.max(360, (typeof _profileUsableRightEdge === 'function') ? _profileUsableRightEdge() : fallbackWidth);
+      width = Math.max(360, Math.round(usableRight - 16));
+    }
+  } catch {}
+
+  return { left, top, width, height };
+}
+
+function _profileSetFullscreen(win, fullscreen) {
+  if (!win) return;
+  const btn = win.querySelector('[data-profile-fullscreen-btn]');
+  if (fullscreen) {
+    if (!win.__ecProfileRestoreState) {
+      win.__ecProfileRestoreState = {
+        left: win.style.left || '',
+        top: win.style.top || '',
+        width: win.style.width || '',
+        height: win.style.height || '',
+        maxWidth: win.style.maxWidth || '',
+        maxHeight: win.style.maxHeight || '',
+      };
+    }
+    const bounds = _profileExpandedAppBounds();
+    win.classList.add('is-profile-fullscreen');
+    win.style.left = `${bounds.left}px`;
+    win.style.top = `${bounds.top}px`;
+    win.style.width = `${bounds.width}px`;
+    win.style.height = `${bounds.height}px`;
+    win.style.maxWidth = 'none';
+    win.style.maxHeight = 'none';
+    try { bringToFront(win); } catch {}
+  } else {
+    const restore = win.__ecProfileRestoreState || {};
+    win.classList.remove('is-profile-fullscreen');
+    win.style.left = restore.left || win.style.left || '10px';
+    win.style.top = restore.top || '10px';
+    win.style.width = restore.width || win.style.width || '';
+    win.style.height = restore.height || win.style.height || '';
+    win.style.maxWidth = restore.maxWidth || '';
+    win.style.maxHeight = restore.maxHeight || '';
+    win.__ecProfileRestoreState = null;
+    _positionProfileWindowNearTop(win);
+  }
+  if (btn) {
+    const isFull = win.classList.contains('is-profile-fullscreen');
+    btn.setAttribute('aria-pressed', isFull ? 'true' : 'false');
+    btn.title = isFull ? 'Restore profile window' : 'Full screen profile';
+    btn.setAttribute('aria-label', isFull ? 'Restore profile window' : 'Full screen profile');
+    btn.textContent = isFull ? '❐' : '□';
+  }
+}
+
+function _ensureProfileFullscreenButton(win) {
+  if (!win) return null;
+  const btns = win.querySelector('.ym-winBtns');
+  if (!btns) return null;
+  let btn = btns.querySelector('[data-profile-fullscreen-btn]');
+  if (btn) return btn;
+  btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'winBtn ecProfileFullscreenBtn';
+  btn.dataset.profileFullscreenBtn = '1';
+  btn.title = 'Full screen profile';
+  btn.setAttribute('aria-label', 'Full screen profile');
+  btn.setAttribute('aria-pressed', 'false');
+  btn.textContent = '□';
+  btn.addEventListener('mousedown', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  btn.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    _profileSetFullscreen(win, !(win.classList && win.classList.contains('is-profile-fullscreen')));
+  });
+  const closeBtn = btns.querySelector('.winBtn.danger');
+  if (closeBtn) btns.insertBefore(btn, closeBtn);
+  else btns.appendChild(btn);
+  return btn;
+}
+
+try {
+  if (!window.__ecProfileFullscreenResizeBound) {
+    window.__ecProfileFullscreenResizeBound = true;
+    window.addEventListener('resize', () => {
+      try {
+        document.querySelectorAll('.ecProfileWindow.is-profile-fullscreen').forEach((win) => _profileSetFullscreen(win, true));
+      } catch {}
+    });
+  }
+} catch {}
 
 function openMyProfileEditor() {
   openProfileWindow(currentUser, { fitMode: 'editor', ownerEditSurface: true });
@@ -168,7 +445,9 @@ function _bindProfileResponsiveChrome(root) {
   const syncCompactState = () => {
     const width = Math.round(card.getBoundingClientRect().width || root.getBoundingClientRect().width || 0);
     const compact = width > 0 && width <= 1180;
+    const narrow = width > 0 && width <= 760;
     card.classList.toggle('is-compact-profile', compact);
+    card.classList.toggle('is-narrow-profile', narrow);
     if (!compact) card.classList.remove('is-right-rail-open');
     syncToggleState();
   };
@@ -195,6 +474,7 @@ function _bindProfileResponsiveChrome(root) {
       try { btn.removeEventListener('click', onToggleClick); } catch {}
     });
     try { observer?.disconnect(); } catch {}
+    try { card.classList.remove('is-compact-profile', 'is-narrow-profile', 'is-right-rail-open'); } catch {}
     try { if (root._profileResponsiveObserver === observer) root._profileResponsiveObserver = null; } catch {}
     try { root._profileResponsiveCleanup = null; } catch {}
     try { delete root.dataset.profileResponsiveBound; } catch {}
@@ -1702,8 +1982,16 @@ function _profileOpenPostEditPane(root, username, profile, post, card) {
 
   cancel.addEventListener('click', () => pane.remove());
   save.addEventListener('click', async () => {
-    const nextBody = String(body.value || '').trim();
-    if (!nextBody && !post?.image_url && !post?.gif_url && !link.value.trim()) {
+    const limitedEditBody = await _profileLimitPostEmoticons(String(body.value || '').trim(), { notify: true });
+    const nextBody = String(limitedEditBody?.text || '').trim();
+    if (body && nextBody !== String(body.value || '').trim()) body.value = nextBody;
+    const linkCheck = _profileValidateOptionalLink(link.value, 'profile post link');
+    if (!linkCheck.ok) {
+      status.textContent = linkCheck.error || 'Use a valid http/https link.';
+      try { link.focus(); } catch {}
+      return;
+    }
+    if (!nextBody && !post?.image_url && !post?.gif_url && !linkCheck.url) {
       status.textContent = 'Write text, keep media, or add a link before saving.';
       try { body.focus(); } catch {}
       return;
@@ -1719,7 +2007,7 @@ function _profileOpenPostEditPane(root, username, profile, post, card) {
           visibility: _profilePostVisibilityValue(visibility.value),
           image_url: post?.image_url || '',
           gif_url: post?.gif_url || '',
-          link_url: String(link.value || '').trim(),
+          link_url: linkCheck.url,
           is_pinned: !!pin.checked,
           is_featured: !!feature.checked,
         }),
@@ -1865,12 +2153,15 @@ async function _loadProfileGallery(root, username, profile, filter = 'all', opts
   const statusNode = root.querySelector('[data-profile-gallery-status]');
   const moreBtn = root.querySelector('[data-profile-gallery-more]');
   const append = !!opts.append;
+  const loadSeq = Number(opts.loadSeq || root.__ecProfileLoadSeq || 0) || 0;
+  const isStale = () => loadSeq && Number(root.__ecProfileLoadSeq || 0) && Number(root.__ecProfileLoadSeq || 0) !== loadSeq;
   const offset = append ? Math.max(0, Number(root.__ecProfileGalleryOffset || 0) || 0) : 0;
   if (statusNode) statusNode.textContent = append ? 'Loading more gallery media…' : 'Loading gallery…';
   if (moreBtn) moreBtn.disabled = true;
   try {
     const payload = await _fetchProfileGallery(username, filter, EC_PROFILE_GALLERY_PAGE_LIMIT, offset);
-    _renderProfileGallery(root, username, profile, payload, filter, { append });
+    if (isStale()) return;
+    _renderProfileGallery(root, username, profile, payload, filter, { append, loadSeq });
   } catch (err) {
     if (statusNode) statusNode.textContent = String(err?.message || err || 'Could not load profile gallery');
     if (moreBtn) moreBtn.disabled = false;
@@ -1973,7 +2264,10 @@ function _renderProfileFeed(root, username, profile, payload, opts = {}) {
         _profileOpenReportPane(root, username, profile, postId, 0, card);
         return;
       }
-      btn.disabled = true;
+      const pendingKey = _profilePendingKey('post', postId, act);
+      if (_profileIsPending(EC_PROFILE_POST_ACTION_PENDING, pendingKey)) return;
+      EC_PROFILE_POST_ACTION_PENDING.add(pendingKey);
+      _profileSetButtonBusy(btn, true);
       try {
         if (act === 'react') {
           const isLiked = btn.getAttribute('aria-pressed') === 'true' || btn.classList.contains('is-liked');
@@ -2023,7 +2317,8 @@ function _renderProfileFeed(root, username, profile, payload, opts = {}) {
       } catch (err) {
         try { showToast?.(String(err?.message || err || 'Could not update post')); } catch {}
       } finally {
-        btn.disabled = false;
+        EC_PROFILE_POST_ACTION_PENDING.delete(pendingKey);
+        _profileSetButtonBusy(btn, false);
       }
     });
   });
@@ -2038,7 +2333,10 @@ function _renderProfileFeed(root, username, profile, payload, opts = {}) {
         try { input?.focus(); } catch {}
         return;
       }
-      btn.disabled = true;
+      const pendingKey = _profilePendingKey('comment-add', postId);
+      if (_profileIsPending(EC_PROFILE_COMMENT_ACTION_PENDING, pendingKey)) return;
+      EC_PROFILE_COMMENT_ACTION_PENDING.add(pendingKey);
+      _profileSetButtonBusy(btn, true, 'Sending…');
       try {
         const resp = await fetchWithAuth(`/api/profile/posts/${encodeURIComponent(String(postId))}/comments`, {
           method: 'POST',
@@ -2055,7 +2353,8 @@ function _renderProfileFeed(root, username, profile, payload, opts = {}) {
       } catch (err) {
         try { showToast?.(String(err?.message || err || 'Could not add comment')); } catch {}
       } finally {
-        btn.disabled = false;
+        EC_PROFILE_COMMENT_ACTION_PENDING.delete(pendingKey);
+        _profileSetButtonBusy(btn, false);
       }
     });
   });
@@ -2081,7 +2380,10 @@ function _renderProfileFeed(root, username, profile, payload, opts = {}) {
         return;
       }
       if (act !== 'delete') return;
-      btn.disabled = true;
+      const pendingKey = _profilePendingKey('comment', postId, commentId, act);
+      if (_profileIsPending(EC_PROFILE_COMMENT_ACTION_PENDING, pendingKey)) return;
+      EC_PROFILE_COMMENT_ACTION_PENDING.add(pendingKey);
+      _profileSetButtonBusy(btn, true);
       try {
         const resp = await fetchWithAuth(`/api/profile/posts/${encodeURIComponent(String(postId))}/comments/${encodeURIComponent(String(commentId))}`, { method: 'DELETE' });
         const data = (typeof ecReadApiJson === 'function') ? await ecReadApiJson(resp, {}) : await resp.json().catch(() => ({}));
@@ -2093,7 +2395,8 @@ function _renderProfileFeed(root, username, profile, payload, opts = {}) {
       } catch (err) {
         try { showToast?.(String(err?.message || err || 'Could not delete comment')); } catch {}
       } finally {
-        btn.disabled = false;
+        EC_PROFILE_COMMENT_ACTION_PENDING.delete(pendingKey);
+        _profileSetButtonBusy(btn, false);
       }
     });
   });
@@ -2102,6 +2405,8 @@ function _renderProfileFeed(root, username, profile, payload, opts = {}) {
 async function _loadProfilePosts(root, username, profile, opts = {}) {
   if (!root) return;
   const append = !!opts.append;
+  const loadSeq = Number(opts.loadSeq || root.__ecProfileLoadSeq || 0) || 0;
+  const isStale = () => loadSeq && Number(root.__ecProfileLoadSeq || 0) && Number(root.__ecProfileLoadSeq || 0) !== loadSeq;
   const offset = append ? Number(root.__ecProfilePostOffset || 0) : 0;
   const statusNode = root.querySelector('[data-profile-posts-status]');
   const moreBtn = root.querySelector('[data-profile-posts-more]');
@@ -2109,7 +2414,8 @@ async function _loadProfilePosts(root, username, profile, opts = {}) {
   if (moreBtn) moreBtn.disabled = true;
   try {
     const payload = await _fetchProfilePosts(username, EC_PROFILE_POST_PAGE_LIMIT, offset);
-    _renderProfileFeed(root, username, profile, payload, { append });
+    if (isStale()) return;
+    _renderProfileFeed(root, username, profile, payload, { append, loadSeq });
   } catch (err) {
     if (statusNode) statusNode.textContent = String(err?.message || err || 'Could not load profile posts');
     if (moreBtn) moreBtn.disabled = false;
@@ -2187,6 +2493,7 @@ function _bindProfileComposer(root, username, profile) {
   const featureInput = wrap.querySelector('[data-profile-post-feature]');
   const status = wrap.querySelector('[data-profile-post-status]');
   const fileInput = wrap.querySelector('[data-profile-post-file]');
+  const submitBtn = wrap.querySelector('[data-profile-post-submit]');
 
   const setStatus = (msg = '', isError = false) => {
     if (!status) return;
@@ -2198,7 +2505,10 @@ function _bindProfileComposer(root, username, profile) {
     if (!textarea) return;
     const text = String(chunk || '');
     const before = textarea.value || '';
-    textarea.value = `${before}${before && !before.endsWith(' ') ? ' ' : ''}${text}`;
+    const next = `${before}${before && !before.endsWith(' ') ? ' ' : ''}${text}`;
+    const limited = (typeof ecLimitCodeEmoticonsInText === 'function') ? ecLimitCodeEmoticonsInText(next, { surface: 'profile post' }) : { text: next, removed: 0 };
+    textarea.value = String(limited?.text ?? next);
+    if (limited?.removed) setStatus(`Profile posts allow ${limited.max || 15} emoticons. Extra emoticons were removed.`, false);
     textarea.focus();
   };
 
@@ -2257,22 +2567,47 @@ function _bindProfileComposer(root, username, profile) {
     setStatus('Photo removed.');
   });
 
+  textarea?.addEventListener('input', () => {
+    const original = String(textarea.value || '');
+    const limited = (typeof ecLimitCodeEmoticonsInText === 'function') ? ecLimitCodeEmoticonsInText(original, { surface: 'profile post' }) : { text: original, removed: 0 };
+    if (limited?.removed) {
+      textarea.value = String(limited.text || '');
+      setStatus(`Profile posts allow ${limited.max || 15} emoticons. Extra emoticons were removed.`, false);
+    }
+  });
+
   linkInput?.addEventListener('input', () => {
     state.linkUrl = String(linkInput.value || '').trim();
     _renderComposerPreview(root);
   });
 
-  wrap.querySelector('[data-profile-post-submit]')?.addEventListener('click', async () => {
-    const body = String(textarea?.value || '').trim();
+  submitBtn?.addEventListener('click', async () => {
+    if (root.__ecProfileComposerBusy) return;
+    const limitedBody = await _profileLimitPostEmoticons(String(textarea?.value || '').trim(), { notify: true });
+    const body = String(limitedBody?.text || '').trim();
+    if (textarea && body !== String(textarea.value || '').trim()) textarea.value = body;
+    const linkCheck = _profileValidateOptionalLink(state.linkUrl || '', 'profile post link');
+    if (!linkCheck.ok) {
+      setStatus(linkCheck.error || 'Use a valid http/https link.', true);
+      try { linkInput?.focus(); } catch {}
+      return;
+    }
     const payload = {
       body,
-      visibility: String(visibility?.value || 'friends'),
+      visibility: _profilePostVisibilityValue(visibility?.value || _profileDefaultPostVisibility(profile)),
       gif_url: state.gifUrl || '',
       image_url: state.imageUrl || '',
-      link_url: state.linkUrl || '',
+      link_url: linkCheck.url,
       pin_post: !!pinInput?.checked,
       feature_post: !!featureInput?.checked,
     };
+    if (!payload.body && !payload.gif_url && !payload.image_url && !payload.link_url) {
+      setStatus('Add text, a GIF, a photo, or a link before publishing.', true);
+      try { textarea?.focus(); } catch {}
+      return;
+    }
+    root.__ecProfileComposerBusy = true;
+    _profileSetButtonBusy(submitBtn, true, 'Posting…');
     setStatus('Posting…');
     try {
       const resp = await fetchWithAuth('/api/profile/posts', {
@@ -2286,7 +2621,7 @@ function _bindProfileComposer(root, username, profile) {
         throw new Error(msg);
       }
       textarea.value = '';
-      if (visibility) visibility.value = 'friends';
+      if (visibility) visibility.value = _profileDefaultPostVisibility(profile);
       if (linkInput) linkInput.value = '';
       if (pinInput) pinInput.checked = false;
       if (featureInput) featureInput.checked = false;
@@ -2299,6 +2634,9 @@ function _bindProfileComposer(root, username, profile) {
       try { root.querySelector('[data-profile-tab="posts"]')?.click(); } catch {}
     } catch (err) {
       setStatus(String(err?.message || err || 'Could not create post'), true);
+    } finally {
+      root.__ecProfileComposerBusy = false;
+      _profileSetButtonBusy(submitBtn, false);
     }
   });
 
@@ -2489,7 +2827,7 @@ function _profileOwnerAvatarDialogNode(profile = {}) {
   const previewWrap = _profileEl('div');
   previewWrap.setAttribute('data-owner-avatar-preview-wrap', '');
   previewWrap.appendChild(_profileCreateAvatarPreviewNode(username, avatarUrl));
-  const file = _profileFormInput('input', { type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp,image/bmp,image/x-icon,image/vnd.microsoft.icon', hidden: true });
+  const file = _profileFormInput('input', { type: 'file', accept: (typeof ecProfileAvatarAcceptMimeTypes === 'function' ? ecProfileAvatarAcceptMimeTypes() : '.png,.jpg,.jpeg,.gif,.webp,.bmp,.ico,image/png,image/jpeg,image/gif,image/webp,image/bmp,image/x-icon,image/vnd.microsoft.icon'), hidden: true });
   file.setAttribute('data-owner-avatar-file', '');
   const status = _profileEl('div', 'ecProfileUploadStatus');
   status.setAttribute('data-owner-avatar-status', '');
@@ -2531,7 +2869,7 @@ function _profileOwnerBannerDialogNode(profile = {}) {
   previewWrap.appendChild(_profileCreateBannerPreviewNode(profile));
   const accentInput = _profileFormInput('input', { className: 'ecProfileColorInput', type: 'color', value: accent });
   accentInput.setAttribute('data-owner-banner-accent', '');
-  const file = _profileFormInput('input', { type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp,image/bmp,image/x-icon,image/vnd.microsoft.icon', hidden: true });
+  const file = _profileFormInput('input', { type: 'file', accept: (typeof ecProfileBannerAcceptMimeTypes === 'function' ? ecProfileBannerAcceptMimeTypes() : '.png,.jpg,.jpeg,.gif,.webp,.bmp,.ico,image/png,image/jpeg,image/gif,image/webp,image/bmp,image/x-icon,image/vnd.microsoft.icon'), hidden: true });
   file.setAttribute('data-owner-banner-file', '');
   const status = _profileEl('div', 'ecProfileUploadStatus');
   status.setAttribute('data-owner-banner-status', '');
@@ -2615,7 +2953,17 @@ function _bindProfileSelfEditing(root, win, username, profile) {
     avatarPresetStyle: (detectAvatarPresetSelection(String(profile.avatar_url || '').trim())?.style || LOCAL_AVATAR_PRESET_STYLES?.[0]?.key || DICEBEAR_DEFAULT_STYLE),
     avatarPresetPage: 0,
     avatarPresetSelected: detectAvatarPresetSelection(String(profile.avatar_url || '').trim()) ? { ...detectAvatarPresetSelection(String(profile.avatar_url || '').trim()), url: String(profile.avatar_url || '').trim() } : null,
+    avatarPreviewObjectUrl: '',
+    bannerPreviewObjectUrl: '',
   };
+
+  const cleanupPreviewObjectUrls = () => {
+    _profileRevokeObjectUrl(state.avatarPreviewObjectUrl);
+    _profileRevokeObjectUrl(state.bannerPreviewObjectUrl);
+    state.avatarPreviewObjectUrl = '';
+    state.bannerPreviewObjectUrl = '';
+  };
+  try { registerWindowCleanup(win, cleanupPreviewObjectUrls); } catch {}
 
   const closePanels = () => {
     layer.hidden = true;
@@ -2781,6 +3129,8 @@ function _bindProfileSelfEditing(root, win, username, profile) {
       if (!btn) return;
       state.avatarFile = null;
       state.avatarRemoved = false;
+      _profileRevokeObjectUrl(state.avatarPreviewObjectUrl);
+      state.avatarPreviewObjectUrl = '';
       if (avatarFileInput) avatarFileInput.value = '';
       state.avatarPresetSelected = {
         style: normalizeDiceBearStyleKey(btn.dataset.style || state.avatarPresetStyle || DICEBEAR_DEFAULT_STYLE),
@@ -2820,14 +3170,38 @@ function _bindProfileSelfEditing(root, win, username, profile) {
   };
 
   layer.querySelector('[data-owner-avatar-choose]')?.addEventListener('click', () => avatarFileInput?.click());
-  avatarFileInput?.addEventListener('change', () => {
+  avatarFileInput?.addEventListener('change', async () => {
     const file = avatarFileInput.files?.[0] || null;
-    state.avatarFile = file;
+    state.avatarFile = null;
     state.avatarRemoved = false;
     state.avatarPresetSelected = null;
+    _profileRevokeObjectUrl(state.avatarPreviewObjectUrl);
+    state.avatarPreviewObjectUrl = '';
     if (file) {
-      renderAvatarPreview(URL.createObjectURL(file), false);
-      setAvatarStatus(`Ready to upload ${file.name}`);
+      const fileError = (typeof ecProfileValidateImageFile === 'function') ? ecProfileValidateImageFile(file, 'avatar') : '';
+      if (fileError) {
+        setAvatarStatus(fileError, 'error');
+        try { showToast?.(`⚠️ ${fileError}`); } catch {}
+        try { avatarFileInput.value = ''; } catch {}
+        renderAvatarPreview('', false);
+        updateOwnerAvatarPresetSelection();
+        return;
+      }
+      state.avatarFile = file;
+      const previewUrl = _profileSafeObjectUrl(file, state, 'avatarPreviewObjectUrl');
+      renderAvatarPreview(previewUrl, false);
+      setAvatarStatus(`Uploading ${file.name}…`);
+      await uploadMyAvatarFile(file, {
+        setUploadStatus: setAvatarStatus,
+        afterSuccess: async () => {
+          state.avatarFile = null;
+          _profileRevokeObjectUrl(state.avatarPreviewObjectUrl);
+          state.avatarPreviewObjectUrl = '';
+          closePanels();
+          await refreshSelfProfile();
+        },
+      });
+      try { avatarFileInput.value = ''; } catch {}
     }
     updateOwnerAvatarPresetSelection();
   });
@@ -2835,6 +3209,8 @@ function _bindProfileSelfEditing(root, win, username, profile) {
     state.avatarFile = null;
     state.avatarRemoved = true;
     state.avatarPresetSelected = null;
+    _profileRevokeObjectUrl(state.avatarPreviewObjectUrl);
+    state.avatarPreviewObjectUrl = '';
     if (avatarFileInput) avatarFileInput.value = '';
     renderAvatarPreview('', true);
     setAvatarStatus('Avatar will be removed when you save.');
@@ -2874,6 +3250,8 @@ function _bindProfileSelfEditing(root, win, username, profile) {
           uploadBtn: btn,
           setUploadStatus: setAvatarStatus,
           afterSuccess: async () => {
+            _profileRevokeObjectUrl(state.avatarPreviewObjectUrl);
+            state.avatarPreviewObjectUrl = '';
             closePanels();
             await refreshSelfProfile();
           },
@@ -2913,17 +3291,31 @@ function _bindProfileSelfEditing(root, win, username, profile) {
   layer.querySelector('[data-owner-banner-choose]')?.addEventListener('click', () => bannerFileInput?.click());
   bannerFileInput?.addEventListener('change', () => {
     const file = bannerFileInput.files?.[0] || null;
-    state.bannerFile = file;
+    state.bannerFile = null;
     state.bannerRemoved = false;
+    _profileRevokeObjectUrl(state.bannerPreviewObjectUrl);
+    state.bannerPreviewObjectUrl = '';
     if (file) {
-      renderBannerPreview(URL.createObjectURL(file), false);
+      const fileError = (typeof ecProfileValidateImageFile === 'function') ? ecProfileValidateImageFile(file, 'banner') : '';
+      if (fileError) {
+        setBannerStatus(fileError, 'error');
+        try { showToast?.(`⚠️ ${fileError}`); } catch {}
+        try { bannerFileInput.value = ''; } catch {}
+        renderBannerPreview('', false);
+        return;
+      }
+      state.bannerFile = file;
+      const previewUrl = _profileSafeObjectUrl(file, state, 'bannerPreviewObjectUrl');
+      renderBannerPreview(previewUrl, false);
       setBannerStatus(`Ready to upload ${file.name}`);
     }
   });
-  bannerAccentInput?.addEventListener('input', () => renderBannerPreview(state.bannerFile ? URL.createObjectURL(state.bannerFile) : '', state.bannerRemoved));
+  bannerAccentInput?.addEventListener('input', () => renderBannerPreview(state.bannerPreviewObjectUrl || '', state.bannerRemoved));
   layer.querySelector('[data-owner-banner-remove]')?.addEventListener('click', () => {
     state.bannerFile = null;
     state.bannerRemoved = true;
+    _profileRevokeObjectUrl(state.bannerPreviewObjectUrl);
+    state.bannerPreviewObjectUrl = '';
     if (bannerFileInput) bannerFileInput.value = '';
     renderBannerPreview('', true);
     setBannerStatus('Banner will be removed when you save.');
@@ -2940,6 +3332,8 @@ function _bindProfileSelfEditing(root, win, username, profile) {
           uploadBtn: btn,
           setUploadStatus: setBannerStatus,
           afterSuccess: async () => {
+            _profileRevokeObjectUrl(state.bannerPreviewObjectUrl);
+            state.bannerPreviewObjectUrl = '';
             await savePatch(accentPatch, 'Banner updated');
           },
         });
@@ -3029,8 +3423,8 @@ function openProfileWindow(username, opts = {}) {
   const u = String(username || '').trim();
   if (!u) return;
 
-  const id = 'profile:' + u;
-  const title = (u === currentUser) ? `My profile — ${u}` : `Profile — ${u}`;
+  const id = 'profile:' + _profileWindowKey(u);
+  const title = ((typeof ecNormalizeUsernameKey === 'function' ? ecNormalizeUsernameKey(u) === ecNormalizeUsernameKey(currentUser) : u === currentUser)) ? `My profile — ${u}` : `Profile — ${u}`;
   const win = createWindow({ id, title, kind: 'room' });
   if (!win) return;
 
@@ -3038,6 +3432,7 @@ function openProfileWindow(username, opts = {}) {
     win.classList.add('ecProfileWindow');
     const compose = win.querySelector('.ym-compose');
     if (compose) compose.style.display = 'none';
+    _ensureProfileFullscreenButton(win);
   } catch {}
 
   const fitMode = String(opts?.fitMode || win.dataset.profileOpenMode || 'public');
@@ -3051,17 +3446,29 @@ function openProfileWindow(username, opts = {}) {
     win.dataset.profileOpenMode = fitMode;
   } catch {}
 
+  // Profiles open in the expanded app workspace by default, matching the room
+  // selector/chat workspace size instead of the smaller floating window layout.
+  try { _profileSetFullscreen(win, true); } catch {}
+  const topLockToken = _profileStartTopLock(win);
+  _profileForceTopScroll(win);
   bringToFront(win);
+
+  const loadSeq = (Number(win.__ecProfileLoadSeq || 0) || 0) + 1;
+  win.__ecProfileLoadSeq = loadSeq;
+  const isProfileLoadStale = () => Number(win.__ecProfileLoadSeq || 0) !== loadSeq;
 
   if (win._ym?.log) {
     try { win._profileViewCleanup?.(); } catch {}
     win._profileViewCleanup = null;
     _profileClearNode(win._ym.log);
+    _profileForceTopScroll(win._ym.log);
     win._ym.log.appendChild(_profileStatusCardNode(u, 'Opening profile shell. Loading live profile details…'));
+    _profileForceTopScroll(win._ym.log);
   }
 
   (async () => {
     const showFailure = (message, detail = '') => {
+      if (isProfileLoadStale()) return;
       const log = win._ym?.log;
       if (!log) return;
       _profileClearNode(log);
@@ -3071,6 +3478,7 @@ function openProfileWindow(username, opts = {}) {
       hint.textContent = detail || ('Profile failed to load. Check the server log for GET /api/profile/' + u + '.');
       card.appendChild(hint);
       log.appendChild(card);
+      _profileReleaseTopLock(win, topLockToken, 0);
     };
 
     try {
@@ -3084,8 +3492,10 @@ function openProfileWindow(username, opts = {}) {
       } catch (err) {
         res = { success: false, error: String(err?.message || err || 'profile_fetch_exception') };
       }
+      if (isProfileLoadStale()) return;
       const log = win._ym?.log;
       if (!log) return;
+      log.__ecProfileLoadSeq = loadSeq;
       if (!res?.success || !res?.profile) {
         showFailure(res?.error || 'Profile not available');
         return;
@@ -3098,7 +3508,9 @@ function openProfileWindow(username, opts = {}) {
       // profile instead of being stranded on “Loading profile page…”.
       try {
         _profileClearNode(log);
+        _profileForceTopScroll(log);
         log.appendChild(_profileBuildBasicProfileNode(p, u, { note: 'Profile loaded. Building full profile view…' }));
+        _profileForceTopScroll(log);
       } catch (basicErr) {
         console.warn(`${((typeof SERVER_NAME !== 'undefined' && SERVER_NAME) ? String(SERVER_NAME) : 'Echo-Chat')} basic profile renderer failed`, basicErr);
       }
@@ -3151,7 +3563,9 @@ function openProfileWindow(username, opts = {}) {
           lastSeen, created, isFriend, blockedByMe, blocksMe, isSelf, presDot,
         });
         _profileClearNode(log);
+        _profileForceTopScroll(log);
         log.appendChild(profileNode);
+        _profileForceTopScroll(log);
 
         _bindProfileTabs(log);
         const cleanupProfileResponsiveChrome = _bindProfileResponsiveChrome(log);
@@ -3179,23 +3593,30 @@ function openProfileWindow(username, opts = {}) {
             handleUserContextAction(act, u);
           });
         });
-        log.querySelector('[data-self-profile-act="refresh"]')?.addEventListener('click', async () => {
-          try {
-            await _loadProfilePosts(log, u, p);
-          } catch {}
+        log.querySelector('[data-self-profile-act="refresh"]')?.addEventListener('click', () => {
+          openProfileWindow(u, { fitMode: String(win?.dataset?.profileOpenMode || 'public') });
         });
       } catch (renderErr) {
         console.error(`${((typeof SERVER_NAME !== 'undefined' && SERVER_NAME) ? String(SERVER_NAME) : 'Echo-Chat')} profile renderer failed; showing safe profile fallback`, renderErr);
         _profileClearNode(log);
+        _profileForceTopScroll(log);
         log.appendChild(_profileBuildBasicProfileNode(p, u, {
           error: `Full profile view hit a browser-side render error, so ${((typeof SERVER_NAME !== 'undefined' && SERVER_NAME) ? String(SERVER_NAME) : 'Echo-Chat')} showed the safe profile view instead.`,
         }));
+        _profileForceTopScroll(log);
+        _profileReleaseTopLock(win, topLockToken, 0);
         return;
       }
 
       try {
-        await _loadProfilePosts(log, u, p);
-        _loadProfileGallery(log, u, p, 'all');
+        if (isProfileLoadStale()) return;
+        await _loadProfilePosts(log, u, p, { loadSeq });
+        if (isProfileLoadStale()) return;
+        _profileForceTopScroll(log);
+        await _loadProfileGallery(log, u, p, 'all', { loadSeq });
+        if (isProfileLoadStale()) return;
+        _profileForceTopScroll(log);
+        _profileReleaseTopLock(win, topLockToken, 0);
       } catch (err) {
         const feedRoot = log.querySelector('[data-profile-feed-root]');
         if (feedRoot) _profileReplaceTextBlock(feedRoot, 'ecProfileMeta dangerText', String(err?.message || err || 'Could not load posts'));
@@ -3205,6 +3626,7 @@ function openProfileWindow(username, opts = {}) {
     } catch (err) {
       console.error(`${((typeof SERVER_NAME !== 'undefined' && SERVER_NAME) ? String(SERVER_NAME) : 'Echo-Chat')} profile load crashed`, err);
       showFailure('Profile crashed while rendering', String(err?.message || err || 'profile_render_exception'));
+      _profileReleaseTopLock(win, topLockToken, 0);
     }
   })();
 }

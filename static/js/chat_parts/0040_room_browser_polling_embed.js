@@ -515,7 +515,7 @@ function openRoomEmbedded(room, opts = {}) {
       if (!roomNow) return toast("⚠️ Join a room first", "warn");
       openGifPicker(async (url) => {
         try {
-          const clean = _gifFallbackUrl(url) || url;
+          const clean = url;
           const msg = `gif:${clean}`;
           const res = await sendRoomTo(roomNow, msg);
           if (!res?.success) toast(`❌ ${res?.error || "Send failed"}`, "error");
@@ -535,7 +535,9 @@ function openRoomEmbedded(room, opts = {}) {
 
   // Wire send
   const sendFn = async () => {
-    const msg = pane._ym?.input?.value?.trim() || "";
+    const input = pane._ym?.input || null;
+    const sendBtn = pane._ym?.send || null;
+    const msg = input?.value?.trim() || "";
     if (!msg) return;
 
     // Slash command: /invite <username>
@@ -548,14 +550,19 @@ function openRoomEmbedded(room, opts = {}) {
         toast("Usage: /invite <username>", "info", 6000);
         return;
       }
+      const optimistic = (typeof ecComposerBeginOptimisticSend === 'function')
+        ? ecComposerBeginOptimisticSend(input, { text: msg, button: sendBtn })
+        : null;
       try {
         await apiJson("/api/rooms/invite", {
           method: "POST",
           body: JSON.stringify({ room, invitee: u })
         });
         toast(`✅ Invited ${u} to ${room}`, "ok");
-        if (pane._ym?.input) pane._ym.input.value = "";
+        if (typeof ecRoomTypingStop === 'function') ecRoomTypingStop(room, input, { force: true });
+        optimistic?.commit?.();
       } catch (e) {
+        optimistic?.restore?.(e?.message || 'Invite failed');
         toast(`❌ ${e.message}`, "error");
       }
       return;
@@ -565,6 +572,9 @@ function openRoomEmbedded(room, opts = {}) {
     if (isMagnetText(msg)) {
       const pm = parseMagnet(msg);
       if (!pm) return toast("⚠️ Invalid magnet link", "warn");
+      const optimistic = (typeof ecComposerBeginOptimisticSend === 'function')
+        ? ecComposerBeginOptimisticSend(input, { text: msg, button: sendBtn })
+        : null;
       try {
         // IMPORTANT (UX): do NOT block sending on tracker scrape.
         // Torrent cards already self-refresh swarm stats asynchronously.
@@ -596,28 +606,42 @@ function openRoomEmbedded(room, opts = {}) {
         };
         sendRoomTo(room, JSON.stringify(wire)).then((res) => {
           if (res?.success) {
-            if (typeof ecRoomTypingStop === 'function') ecRoomTypingStop(room, pane._ym?.input, { force: true });
-            if (pane._ym?.input) pane._ym.input.value = "";
+            if (typeof ecRoomTypingStop === 'function') ecRoomTypingStop(room, input, { force: true });
+            optimistic?.commit?.();
           } else {
+            optimistic?.restore?.(res?.error || "Send failed");
             toast(`❌ ${res?.error || "Send failed"}`, "error");
           }
+        }).catch((e) => {
+          optimistic?.restore?.(e?.message || 'Send failed');
+          console.error(e);
+          toast(`❌ Send failed: ${e?.message || e}`, "error");
         });
       } catch (e) {
+        optimistic?.restore?.(e?.message || 'Could not send magnet');
         console.error(e);
         toast("❌ Could not send magnet", "error");
       }
       return;
     }
 
+    const optimistic = (typeof ecComposerBeginOptimisticSend === 'function')
+      ? ecComposerBeginOptimisticSend(input, { text: msg, button: sendBtn })
+      : null;
     sendRoomTo(room, msg).then((res) => {
       if (res?.success) {
-        if (typeof ecRoomTypingStop === 'function') ecRoomTypingStop(room, pane._ym?.input, { force: true });
+        if (typeof ecRoomTypingStop === 'function') ecRoomTypingStop(room, input, { force: true });
         // Don't append locally; we wait for the server broadcast so we get
         // the authoritative message_id (needed for reactions).
-        if (pane._ym?.input) pane._ym.input.value = "";
+        optimistic?.commit?.();
       } else {
+        optimistic?.restore?.(res?.error || "Send failed");
         toast(`❌ ${res?.error || "Send failed"}`, "error");
       }
+    }).catch((e) => {
+      optimistic?.restore?.(e?.message || 'Send failed');
+      console.error(e);
+      toast(`❌ Send failed: ${e?.message || e}`, "error");
     });
   };
 
@@ -625,7 +649,10 @@ function openRoomEmbedded(room, opts = {}) {
   if (pane._ym?.input && typeof ecBindRoomTypingInput === 'function') ecBindRoomTypingInput(room, pane._ym.input);
   if (pane._ym?.input) {
     pane._ym.input.onkeydown = (e) => {
-      if (e.key === "Enter") sendFn();
+      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+        e.preventDefault();
+        sendFn();
+      }
     };
 
     // Torrent share (room)
@@ -745,20 +772,25 @@ function openRoomEmbedded(room, opts = {}) {
           await ecMediaToggleVoiceForRoom(room);
           return;
         }
-        if (VOICE_STATE.room.joined && VOICE_STATE.room.name === room) {
-          VOICE_STATE.room.wantRoomVoice = false;
-          voiceLeaveRoom("Voice disabled", true);
+        if (typeof voiceActionBusy === 'function' && voiceActionBusy('room', room)) return;
+        const runLegacyRoomVoice = async () => {
+          if (VOICE_STATE.room.joined && VOICE_STATE.room.name === room) {
+            VOICE_STATE.room.wantRoomVoice = false;
+            voiceLeaveRoom("Voice disabled", true);
+            voiceUpdateRoomVoiceButton();
+            return;
+          }
+          VOICE_STATE.room.wantRoomVoice = true;
+          voiceSetMute(false);
+          const res = await voiceJoinRoom(room, { silent: true });
+          if (!res?.success) {
+            if (res?.error_code === "voice_room_full") voiceShowRoomFull(room, res);
+            else toast(`❌ ${res?.error || "Voice join failed"}`, "error");
+          }
           voiceUpdateRoomVoiceButton();
-          return;
-        }
-        VOICE_STATE.room.wantRoomVoice = true;
-        voiceSetMute(false);
-        const res = await voiceJoinRoom(room, { silent: true });
-        if (!res?.success) {
-          if (res?.error_code === "voice_room_full") voiceShowRoomFull(room, res);
-          else toast(`❌ ${res?.error || "Voice join failed"}`, "error");
-        }
-        voiceUpdateRoomVoiceButton();
+        };
+        if (typeof voiceWithBusy === 'function') await voiceWithBusy('room', room, runLegacyRoomVoice);
+        else await runLegacyRoomVoice();
       } catch (e) {
         console.error(e);
         toast(`❌ Voice error: ${e?.message || e}`, "error");
@@ -787,6 +819,7 @@ function openRoomEmbedded(room, opts = {}) {
   // Webcam has its own top-level button in enhanced media mode.
   const btnCamTop = $("btnRoomEmbedCam");
   if (btnCamTop) {
+    btnCamTop.setAttribute('aria-label', 'Turn on your webcam');
     btnCamTop.onclick = async () => {
       try {
         if (!ecMediaModeReady()) return toast("📷 Webcam is not available in this room", "warn");
@@ -796,8 +829,9 @@ function openRoomEmbedded(room, opts = {}) {
         }
         await ecMediaToggleCamForRoom(room);
       } catch (e) {
-        console.error(e);
-        toast(`❌ Webcam error: ${e?.message || e}`, "error");
+        console.warn("Webcam could not start", e);
+        const msg = e && e.message ? e.message : String(e || "Webcam could not start.");
+        toast(`📷 ${msg}`, "warn", 7500);
       }
     };
   }

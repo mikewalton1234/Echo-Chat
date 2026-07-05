@@ -1,98 +1,234 @@
-function parseDmPayload(plaintext) {
-  if (typeof plaintext !== "string") return { kind: "text", text: String(plaintext) };
+function parseDmPayload(plaintext, depth = 0) {
+  if (depth > 5) return { kind: "text", text: (typeof plaintext === "string") ? plaintext : String(plaintext ?? "") };
 
-  // DM special payloads are encrypted JSON objects: {"_ec":"file"|"torrent", ...}
-  if (plaintext.startsWith("{")) {
-    try {
-      const obj = JSON.parse(plaintext);
-      if (obj && obj._ec === "file" && typeof obj.file_id === "string") {
-        return {
-          kind: "file",
-          file_id: obj.file_id,
-          name: String(obj.name || "file"),
-          size: Number(obj.size || 0) || 0,
-          mime: String(obj.mime || "application/octet-stream"),
-          sha256: obj.sha256 ? String(obj.sha256) : null,
-        };
-      }
-      if (obj && obj._ec === "torrent") {
-        return {
-          kind: "torrent",
-          t: {
-            name: String(obj.name || obj.display_name || "Torrent"),
-            infohash: String(obj.infohash || obj.infohash_hex || ""),
-            magnet: String(obj.magnet || ""),
-            total_size: Number(obj.total_size || 0) || 0,
-            seeds: (obj.seeds === null || obj.seeds === undefined) ? null : Number(obj.seeds),
-            leechers: (obj.leechers === null || obj.leechers === undefined) ? null : Number(obj.leechers),
-            completed: (obj.completed === null || obj.completed === undefined) ? null : Number(obj.completed),
-            trackers: Array.isArray(obj.trackers) ? obj.trackers.map(String) : [],
-            declared_tracker_count: Number(obj.declared_tracker_count ?? (obj.using_public_fallback_trackers ? 0 : (Array.isArray(obj.trackers) ? obj.trackers.length : 0)) ?? 0) || 0,
-            tracker_count: Number(obj.tracker_count || (Array.isArray(obj.trackers) ? obj.trackers.length : 0) || 0),
-            tracker_source: obj.tracker_source ? String(obj.tracker_source) : (obj.using_public_fallback_trackers ? "public_fallback" : "torrent"),
-            using_public_fallback_trackers: !!obj.using_public_fallback_trackers,
-            swarm_deferred: !!obj.swarm_deferred,
-            web_seeds: Array.isArray(obj.web_seeds) ? obj.web_seeds.map(String) : [],
-            web_seed_count: Number(obj.web_seed_count || (Array.isArray(obj.web_seeds) ? obj.web_seeds.length : 0) || 0),
-            scrape_status: obj.scrape_status ? String(obj.scrape_status) : "",
-            scrape_error: obj.scrape_error ? String(obj.scrape_error) : "",
-            trackers_tried: Number(obj.trackers_tried || 0),
-            comment: obj.comment ? String(obj.comment) : "",
-            created_by: obj.created_by ? String(obj.created_by) : "",
-            creation_date: obj.creation_date ? String(obj.creation_date) : "",
-            // Optional: if the sender also sent the .torrent file via server, they can include it.
-            file_id: typeof obj.file_id === "string" ? obj.file_id : null,
-          }
-        };
-      }
-    } catch {
-      // fall through
-    }
+  if (plaintext && typeof plaintext === "object" && !Array.isArray(plaintext)) {
+    const file = ecNormalizeDmFilePayload(plaintext);
+    if (file) return file;
+    const torrent = ecNormalizeTorrentWireObject(plaintext);
+    if (torrent) return { kind: "torrent", t: torrent };
+    return { kind: "text", text: String(plaintext?.text ?? plaintext?.message ?? "") };
   }
+
+  if (typeof plaintext !== "string") return { kind: "text", text: String(plaintext) };
+  const text = plaintext.trimStart();
+
+  // DM special payloads are encrypted JSON objects. Support the older `_ec`
+  // wire shape, the newer `kind/type` shape used by group/file helpers, and
+  // styled-text-wrapped special payloads created while formatting was enabled.
+  const obj = ecTryParseWireJsonObject(text);
+  if (obj) {
+    const ec = String(obj._ec || obj.kind || obj.type || "").trim().toLowerCase();
+    if (ec === "styled_text") {
+      const nested = obj.text ?? obj.message ?? obj.value ?? obj.html;
+      if (nested !== undefined && nested !== null) return parseDmPayload(String(nested), depth + 1);
+    }
+
+    const file = ecNormalizeDmFilePayload(obj);
+    if (file) return file;
+
+    const torrent = ecNormalizeTorrentWireObject(obj);
+    if (torrent) return { kind: "torrent", t: torrent };
+  }
+
   // If a user pastes a magnet link as plain text, render it as a torrent card.
-  if (isMagnetText(plaintext)) {
-    const pm = parseMagnet(plaintext);
-    if (pm) {
-      return {
-        kind: "torrent",
-        t: {
-          name: pm.name || "Magnet",
-          infohash: pm.infohash,
-          magnet: pm.magnet,
-          total_size: 0,
-          seeds: null,
-          leechers: null,
-          completed: null,
-          trackers: pm.trackers || [],
-          declared_tracker_count: Number(pm.declared_tracker_count || 0),
-          tracker_count: Number(pm.tracker_count || (pm.trackers || []).length || 0),
-          tracker_source: pm.tracker_source || (pm.using_public_fallback_trackers ? "public_fallback" : "magnet"),
-          using_public_fallback_trackers: !!pm.using_public_fallback_trackers,
-          swarm_deferred: true,
-          web_seeds: Array.isArray(pm.web_seeds) ? pm.web_seeds : [],
-          web_seed_count: Number(pm.web_seed_count || 0),
-          scrape_status: "pending",
-          scrape_error: "",
-          trackers_tried: 0,
-          comment: "",
-          created_by: "",
-          creation_date: "",
-          file_id: null,
-        }
-      };
-    }
-  }
+  const torrent = ecTryNormalizeTorrentMessage(text, depth + 1);
+  if (torrent) return { kind: "torrent", t: torrent };
+
   return { kind: "text", text: plaintext };
 }
 
-function appendDmPayload(winEl, who, payload, { peer, direction, ts } = {}) {
-  if (!payload || !winEl) return;
+function ecTryParseWireJsonObject(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  if (typeof value !== "string") return null;
+  const text = value.trimStart();
+  if (!text.startsWith("{")) return null;
+  try {
+    const obj = JSON.parse(text);
+    return (obj && typeof obj === "object" && !Array.isArray(obj)) ? obj : null;
+  } catch {
+    return null;
+  }
+}
+
+function ecNormalizeTorrentWireObject(obj) {
+  if (!obj || typeof obj !== "object") return null;
+  const ec = String(obj._ec || obj.kind || obj.type || "").trim().toLowerCase();
+  const looksTorrent = ec === "torrent" || ec === "magnet" || !!(obj.magnet || obj.infohash || obj.infohash_hex || obj.torrent_id || obj.download_url);
+  if (!looksTorrent) return null;
+  return {
+    name: String(obj.name || obj.display_name || obj.file_name || "Torrent"),
+    infohash: String(obj.infohash || obj.infohash_hex || ""),
+    magnet: String(obj.magnet || ""),
+    total_size: Number(obj.total_size || obj.size || 0) || 0,
+    seeds: (obj.seeds === null || obj.seeds === undefined) ? null : Number(obj.seeds),
+    leechers: (obj.leechers === null || obj.leechers === undefined) ? null : Number(obj.leechers),
+    completed: (obj.completed === null || obj.completed === undefined) ? null : Number(obj.completed),
+    trackers: Array.isArray(obj.trackers) ? obj.trackers.map(String) : [],
+    declared_tracker_count: Number(obj.declared_tracker_count ?? (obj.using_public_fallback_trackers ? 0 : (Array.isArray(obj.trackers) ? obj.trackers.length : 0)) ?? 0) || 0,
+    tracker_count: Number(obj.tracker_count || (Array.isArray(obj.trackers) ? obj.trackers.length : 0) || 0),
+    tracker_source: obj.tracker_source ? String(obj.tracker_source) : (obj.using_public_fallback_trackers ? "public_fallback" : "torrent"),
+    using_public_fallback_trackers: !!obj.using_public_fallback_trackers,
+    swarm_deferred: !!obj.swarm_deferred,
+    web_seeds: Array.isArray(obj.web_seeds) ? obj.web_seeds.map(String) : [],
+    web_seed_count: Number(obj.web_seed_count || (Array.isArray(obj.web_seeds) ? obj.web_seeds.length : 0) || 0),
+    scrape_status: obj.scrape_status ? String(obj.scrape_status) : (obj.swarm_status ? String(obj.swarm_status) : ""),
+    scrape_error: obj.scrape_error ? String(obj.scrape_error) : "",
+    trackers_tried: Number(obj.trackers_tried || 0),
+    dht_queries: Number(obj.dht_queries || 0),
+    dht_peers_seen: Number(obj.dht_peers_seen || 0),
+    comment: obj.comment ? String(obj.comment) : "",
+    created_by: obj.created_by ? String(obj.created_by) : "",
+    creation_date: obj.creation_date ? String(obj.creation_date) : "",
+    torrent_id: obj.torrent_id ? String(obj.torrent_id) : "",
+    file_name: obj.file_name ? String(obj.file_name) : "",
+    download_url: obj.download_url ? String(obj.download_url) : "",
+    file_id: typeof obj.file_id === "string" ? obj.file_id : null,
+  };
+}
+
+function ecNormalizeDmFilePayload(obj) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null;
+  const ec = String(obj._ec || obj.kind || obj.type || "").trim().toLowerCase();
+  const fileId = (typeof obj.file_id === "string" && obj.file_id)
+    ? obj.file_id
+    : ((ec === "file" && typeof obj.id === "string") ? obj.id : "");
+  const looksFile = ec === "file" || (!!fileId && !!(obj.name || obj.file_name || obj.mime || obj.size || obj.sha256));
+  if (!looksFile || !fileId) return null;
+
+  const out = {
+    kind: "file",
+    file_id: String(fileId),
+    name: String(obj.name || obj.file_name || obj.filename || "file"),
+    size: Number(obj.size || obj.total_size || 0) || 0,
+    mime: String(obj.mime || obj.content_type || "application/octet-stream"),
+    sha256: obj.sha256 ? String(obj.sha256) : null,
+  };
+  if (obj.source) out.source = String(obj.source);
+  if (obj.transfer_id) out.transfer_id = String(obj.transfer_id);
+  if (obj.group_id !== undefined && obj.group_id !== null && obj.group_id !== "") out.group_id = Number(obj.group_id);
+  return out;
+}
+
+function ecTryNormalizeTorrentMessage(message, depth = 0) {
+  if (depth > 5) return null;
+  const obj = ecTryParseWireJsonObject(message);
+  if (obj) {
+    const ec = String(obj._ec || obj.kind || obj.type || "").trim().toLowerCase();
+    if (ec === "styled_text") {
+      // Backward compatibility for messages sent while a formatting toggle was
+      // active: old composers could wrap torrent JSON inside styled_text.
+      const nestedText = obj.text ?? obj.message ?? obj.value ?? obj.html;
+      const nested = ecTryNormalizeTorrentMessage(nestedText, depth + 1);
+      if (nested) return nested;
+    }
+    const t = ecNormalizeTorrentWireObject(obj);
+    if (t) return t;
+  }
+  if (typeof message === "string") {
+    const text = message.trim();
+    try {
+      if (typeof isMagnetText === "function" && isMagnetText(text) && typeof parseMagnet === "function") {
+        const pm = parseMagnet(text);
+        if (pm) {
+          return {
+            name: pm.name || "Magnet",
+            infohash: pm.infohash,
+            magnet: pm.magnet,
+            total_size: 0,
+            seeds: null,
+            leechers: null,
+            completed: null,
+            trackers: pm.trackers || [],
+            declared_tracker_count: Number(pm.declared_tracker_count || 0),
+            tracker_count: Number(pm.tracker_count || (pm.trackers || []).length || 0),
+            tracker_source: pm.tracker_source || (pm.using_public_fallback_trackers ? "public_fallback" : "magnet"),
+            using_public_fallback_trackers: !!pm.using_public_fallback_trackers,
+            swarm_deferred: true,
+            web_seeds: Array.isArray(pm.web_seeds) ? pm.web_seeds : [],
+            web_seed_count: Number(pm.web_seed_count || 0),
+            scrape_status: "pending",
+            scrape_error: "",
+            trackers_tried: 0,
+            comment: "",
+            created_by: "",
+            creation_date: "",
+            download_url: "",
+            file_id: null,
+          };
+        }
+      }
+    } catch {}
+  }
+  return null;
+}
+
+function ecBuildSpecialMessageBody(message) {
+  const torrent = ecTryNormalizeTorrentMessage(message);
+  if (torrent) return buildTorrentCard(torrent);
+  return null;
+}
+
+function ecDmWireHash(value) {
+  const text = String(value ?? "");
+  if (!text) return "";
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36);
+}
+
+function ecDmPayloadSummary(payload) {
+  if (!payload || typeof payload !== "object") return String(payload ?? "").slice(0, 240);
+  if (payload.kind === "file") return `file:${payload.file_id || ""}:${payload.name || ""}:${payload.size || 0}`;
+  if (payload.kind === "torrent") {
+    const t = payload.t || payload;
+    return `torrent:${t.infohash || ""}:${t.magnet || ""}:${t.name || ""}`;
+  }
+  return `text:${String(payload.text ?? "").slice(0, 240)}`;
+}
+
+function ecDmPayloadDedupeKey(payload, { peer, direction, ts, messageId, fingerprint, cipher } = {}) {
+  const id = Number(messageId || 0) || 0;
+  const peerKey = (typeof ecPmPeerKey === "function") ? ecPmPeerKey(peer) : String(peer || "").trim().toLowerCase();
+  const dir = String(direction || "").trim().toLowerCase() || "unknown";
+  if (id > 0) return `dm:id:${id}`;
+  const fp = String(fingerprint || (cipher ? ecDmWireHash(cipher) : "")).trim();
+  if (!fp) return "";
+  const tsKey = (ts === null || ts === undefined || ts === "") ? "no-ts" : String(ts);
+  return `dm:${peerKey}:${dir}:${tsKey}:${fp}:${ecDmWireHash(ecDmPayloadSummary(payload))}`;
+}
+
+function ecRememberDmPayloadRendered(winEl, key) {
+  if (!winEl || !key) return true;
+  if (!winEl._ym) winEl._ym = {};
+  if (!(winEl._ym.dmRenderedKeys instanceof Set)) winEl._ym.dmRenderedKeys = new Set();
+  if (winEl._ym.dmRenderedKeys.has(key)) return false;
+  winEl._ym.dmRenderedKeys.add(key);
+  // Keep the set bounded for long-running tabs.
+  if (winEl._ym.dmRenderedKeys.size > 600) {
+    try {
+      const keys = Array.from(winEl._ym.dmRenderedKeys);
+      winEl._ym.dmRenderedKeys = new Set(keys.slice(-400));
+    } catch {}
+  }
+  return true;
+}
+
+function appendDmPayload(winEl, who, payload, { peer, direction, ts, messageId = null, fingerprint = "", cipher = "" } = {}) {
+  if (!payload || !winEl) return false;
+
+  const dedupeKey = ecDmPayloadDedupeKey(payload, { peer, direction, ts, messageId, fingerprint, cipher });
+  if (dedupeKey && !ecRememberDmPayloadRendered(winEl, dedupeKey)) return false;
+
   if (payload.kind === "file") {
-    appendFileLine(winEl, who, payload, { peer, direction, ts });
+    return appendFileLine(winEl, who, payload, { peer, direction, ts });
   } else if (payload.kind === "torrent") {
-    appendTorrentLine(winEl, who, payload.t, { peer, direction, ts });
+    return appendTorrentLine(winEl, who, payload.t, { peer, direction, ts });
   } else {
     appendLine(winEl, who, payload.text, { ts, context: "dm" });
+    return true;
   }
 }
 
@@ -163,10 +299,11 @@ function makeFileLineElement(who, filePayload, { peer, direction } = {}) {
 
 function appendFileLine(winEl, who, filePayload, { peer, direction, ts } = {}) {
   const log = winEl._ym?.log;
-  if (!log) return;
+  if (!log) return false;
   const card = buildFileCardElement(filePayload, { peer, direction });
-  appendGenericMessageItem(log, who, card, { ts, kind: "file" });
+  appendGenericMessageItem(log, who, card, { ts, kind: "file", context: "dm" });
   scheduleScrollLogToBottom(log);
+  return true;
 }
 
 function isTorrentName(name) {
@@ -587,7 +724,8 @@ function buildTorrentCard(t) {
 
 function appendTorrentLine(winEl, who, t, { peer, direction, ts } = {}) {
   const log = winEl._ym?.log;
-  if (!log) return;
-  appendGenericMessageItem(log, who, buildTorrentCard(t), { ts, kind: "torrent" });
+  if (!log) return false;
+  appendGenericMessageItem(log, who, buildTorrentCard(t), { ts, kind: "torrent", context: "dm" });
   scheduleScrollLogToBottom(log);
+  return true;
 }

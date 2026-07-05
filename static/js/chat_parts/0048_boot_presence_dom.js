@@ -35,8 +35,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   try { getFriends(); } catch (_) {}
   bindFriendsSectionContextMenu();
 
-  // Apply room text size preference
+  // Apply room composer typography / classic toolbar preferences
   applyRoomFontSize(UIState.prefs.roomFontSize);
+  try { ecBindClassicRoomComposerToolbar(); } catch (_) { try { ecApplyRoomComposerPrefs(); } catch (__) {} }
+  try { ecApplyEmoticonSizePrefs(UIState.prefs.emoticonSize); } catch (_) {}
   applyGifPickerPrefs();
 
   // Dock section ordering / drag-to-move
@@ -143,6 +145,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Live preview inside Settings
   $("setRoomFontSize")?.addEventListener("input", (e) => applyRoomFontSize(e.target.value));
+  $("setEmoticonSize")?.addEventListener("input", (e) => {
+    UIState.prefs.emoticonSize = (typeof ecClampEmoticonSize === "function") ? ecClampEmoticonSize(e.target.value) : clampInt(e.target.value, 22, 56, 26);
+    if (typeof ecApplyEmoticonSizePrefs === "function") ecApplyEmoticonSizePrefs(UIState.prefs.emoticonSize);
+  });
   $("setGifTileSize")?.addEventListener("input", (e) => {
     UIState.prefs.gifTileSize = clampInt(e.target.value, 96, 220, 140);
     applyGifPickerPrefs();

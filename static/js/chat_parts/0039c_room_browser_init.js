@@ -95,6 +95,19 @@ async function initRoomBrowser() {
   }
 
 
+  const customSearch = $('rbCustomSearch');
+  if (customSearch) {
+    customSearch.value = ROOM_BROWSER.customQuery || '';
+    const renderCustomSearch = (typeof ecRafThrottle === 'function') ? ecRafThrottle(() => {
+      rbRenderRoomLists();
+      rbUpdateCountsInDom();
+    }) : () => { rbRenderRoomLists(); rbUpdateCountsInDom(); };
+    customSearch.addEventListener('input', () => {
+      ROOM_BROWSER.customQuery = customSearch.value || '';
+      renderCustomSearch();
+    });
+  }
+
   const customFilter = $('rbCustomFilter');
   if (customFilter) {
     customFilter.value = ROOM_BROWSER.customFilter || 'all';

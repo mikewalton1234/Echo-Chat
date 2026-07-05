@@ -119,13 +119,16 @@ function ecProfileMediaConfig() {
 }
 
 function ecProfileAvatarAcceptMimeTypes() {
-  const base = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'image/x-icon', 'image/vnd.microsoft.icon'];
-  if (ecProfileMediaConfig().allow_svg_avatars === true) base.push('image/svg+xml');
+  const base = [
+    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico',
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'image/x-icon', 'image/vnd.microsoft.icon'
+  ];
+  if (ecProfileMediaConfig().allow_svg_avatars === true) base.push('.svg', 'image/svg+xml');
   return base.join(',');
 }
 
 function ecProfileBannerAcceptMimeTypes() {
-  return 'image/png,image/jpeg,image/gif,image/webp,image/bmp,image/x-icon,image/vnd.microsoft.icon';
+  return '.png,.jpg,.jpeg,.gif,.webp,.bmp,.ico,image/png,image/jpeg,image/gif,image/webp,image/bmp,image/x-icon,image/vnd.microsoft.icon';
 }
 
 function ecProfileValidateImageFile(file, kind = 'avatar') {
@@ -173,7 +176,9 @@ function uploadMyAvatarFile(file, ctx = {}) {
       UIState.myProfile = res.json.profile || { ...(UIState.myProfile || {}), avatar_url: res.json.avatar_url || '' };
       if (avatarInput) avatarInput.value = String(UIState.myProfile.avatar_url || '');
       renderMyHubIdentity(UIState.myProfile);
-      setUploadStatus?.('Avatar uploaded. You can keep it as-is or save additional profile changes.');
+      try { if (typeof ecRefreshMessageAvatarsForUsername === 'function') ecRefreshMessageAvatarsForUsername(currentUser); } catch {}
+      try { if (typeof socket !== 'undefined' && socket) socket.emit('get_presence_snapshot'); } catch {}
+      setUploadStatus?.('Avatar uploaded and applied.');
       if (typeof afterSuccess === 'function') {
         try { afterSuccess(UIState.myProfile); } catch {}
       }

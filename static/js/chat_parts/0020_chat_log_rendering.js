@@ -104,6 +104,109 @@ function getGroupAvatarInitial(label) {
   return (m ? m[0] : (s[0] || "?")).toUpperCase();
 }
 
+function ecMessageAvatarUsername(senderLabel) {
+  const raw = String(senderLabel || "").replace(/:\s*$/, "").trim();
+  if (/^you$/i.test(raw)) return String(currentUser || raw || "").trim();
+  return raw;
+}
+
+function ecDomAvatarUrlForUsername(username) {
+  const name = String(username || "").replace(/\s+/g, " ").trim();
+  const key = name.toLowerCase();
+  if (!key) return "";
+
+  const normalize = (raw) => {
+    let out = String(raw || "").trim();
+    if (!out) return "";
+    try {
+      if (typeof normalizeDockAvatarUrl === "function") out = normalizeDockAvatarUrl(out) || "";
+      else if (typeof ecNormalizeSafeUrl === "function") out = ecNormalizeSafeUrl(out, { allowRelative: true, allowExternal: true }) || "";
+    } catch { out = ""; }
+    return out;
+  };
+
+  const selfKey = String(currentUser || "").trim().toLowerCase();
+  if (selfKey && key === selfKey) {
+    const img = document.querySelector("#meAvatar img");
+    const url = normalize(img?.getAttribute("src") || img?.src || "");
+    if (url) return url;
+  }
+
+  const candidates = [
+    ...document.querySelectorAll("#friendsList li[data-name], #userList li[data-name], .roomUsersList li[data-name]")
+  ];
+  for (const li of candidates) {
+    const liKey = String(li?.dataset?.name || "").replace(/\s+/g, " ").trim().toLowerCase();
+    if (liKey !== key) continue;
+    const img = li.querySelector(".liAvatar img, img");
+    const url = normalize(img?.getAttribute("src") || img?.src || "");
+    if (url) return url;
+  }
+  return "";
+}
+
+function ecMessageAvatarUrlForSender(senderLabel) {
+  const username = ecMessageAvatarUsername(senderLabel);
+  if (!username) return "";
+  const selfKey = String(currentUser || "").trim().toLowerCase();
+  const userKey = String(username || "").trim().toLowerCase();
+  if (selfKey && userKey && selfKey === userKey) {
+    const mine = (window.UIState && UIState.myProfile && typeof UIState.myProfile === "object") ? UIState.myProfile : null;
+    if (mine && (mine.avatar_url || mine.avatarUrl)) return String(mine.avatar_url || mine.avatarUrl || "").trim();
+  }
+  try {
+    const presence = (typeof ecGetPresenceForUsername === "function") ? ecGetPresenceForUsername(username) : null;
+    if (presence && typeof presence === "object" && (presence.avatar_url || presence.avatarUrl)) {
+      return String(presence.avatar_url || presence.avatarUrl || "").trim();
+    }
+  } catch {}
+
+  // Last-resort live DOM lookup. This fixes messages that render before the
+  // profile/presence cache is hydrated, while the hub/friend list already has
+  // the real profile image on screen.
+  return ecDomAvatarUrlForUsername(username);
+}
+
+function ecRenderMessageAvatar(avatar, senderLabel) {
+  if (!avatar) return;
+  const username = ecMessageAvatarUsername(senderLabel);
+  const fallback = getGroupAvatarInitial(username || senderLabel);
+  const userKey = String(username || senderLabel || "").trim().toLowerCase();
+  avatar.dataset.ecAvatarUser = username || String(senderLabel || "");
+  avatar.dataset.ecAvatarUserKey = userKey;
+  avatar.classList.remove("hasImage");
+  avatar.replaceChildren(document.createTextNode(fallback));
+
+  let safeAvatarUrl = ecMessageAvatarUrlForSender(username || senderLabel);
+  try {
+    if (typeof normalizeDockAvatarUrl === "function") safeAvatarUrl = normalizeDockAvatarUrl(safeAvatarUrl);
+    else if (typeof ecNormalizeSafeUrl === "function") safeAvatarUrl = ecNormalizeSafeUrl(safeAvatarUrl, { allowRelative: true, allowExternal: true }) || "";
+  } catch { safeAvatarUrl = ""; }
+  if (!safeAvatarUrl) return;
+
+  const img = document.createElement("img");
+  img.src = safeAvatarUrl;
+  img.alt = `${username || senderLabel || "User"} avatar`;
+  img.loading = "lazy";
+  img.referrerPolicy = "no-referrer";
+  img.addEventListener("error", () => {
+    avatar.classList.remove("hasImage");
+    avatar.replaceChildren(document.createTextNode(fallback));
+  }, { once: true });
+  avatar.classList.add("hasImage");
+  avatar.replaceChildren(img);
+}
+
+function ecRefreshMessageAvatarsForUsername(username = "") {
+  const name = ecMessageAvatarUsername(username);
+  const key = String(name || username || "").trim().toLowerCase();
+  if (!key) return;
+  document.querySelectorAll('.ec-msgAvatar[data-ec-avatar-user-key]').forEach((avatar) => {
+    const avatarKey = String(avatar.dataset.ecAvatarUserKey || "").trim().toLowerCase();
+    if (avatarKey && avatarKey === key) ecRenderMessageAvatar(avatar, avatar.dataset.ecAvatarUser || name);
+  });
+}
+
 function makeChatGroupElement(senderLabel, tsMs, { variant = "generic" } = {}) {
   const group = document.createElement("div");
   group.className = `ec-msgGroup ec-msgGroup--${variant}`;
@@ -116,7 +219,7 @@ function makeChatGroupElement(senderLabel, tsMs, { variant = "generic" } = {}) {
   const avatar = document.createElement("div");
   avatar.className = "ec-msgAvatar";
   avatar.setAttribute("aria-hidden", "true");
-  avatar.textContent = getGroupAvatarInitial(senderLabel);
+  ecRenderMessageAvatar(avatar, senderLabel);
 
   const main = document.createElement("div");
   main.className = "ec-msgGroupMain";
@@ -636,15 +739,27 @@ function ecNormalizeChatLink(rawUrl) {
   return /^https?:\/\//i.test(raw) ? raw : '';
 }
 
+function ecAppendChatTextSegment(container, text, emoticonState = null) {
+  if (!container) return;
+  if (typeof window.ecAppendCodeEmoticons === 'function') {
+    try {
+      window.ecAppendCodeEmoticons(container, text, emoticonState ? { state: emoticonState } : {});
+      return;
+    } catch {}
+  }
+  container.appendChild(document.createTextNode(String(text ?? '')));
+}
+
 function ecAppendLinkifiedText(container, rawText) {
   const text = String(rawText ?? '');
+  const emoticonState = (typeof window.ecMakeEmoticonRenderState === 'function') ? window.ecMakeEmoticonRenderState() : null;
   const re = /(?:https?:\/\/|www\.)[^\s<>"']+/ig;
   let last = 0;
   let found = false;
   for (const match of text.matchAll(re)) {
     const start = match.index || 0;
     const rawMatch = String(match[0] || '');
-    if (start > last) container.appendChild(document.createTextNode(text.slice(last, start)));
+    if (start > last) ecAppendChatTextSegment(container, text.slice(last, start), emoticonState);
     const { url, tail } = ecSplitTrailingUrlPunctuation(rawMatch);
     const href = ecNormalizeChatLink(url);
     if (href) {
@@ -663,41 +778,178 @@ function ecAppendLinkifiedText(container, rawText) {
     if (tail) container.appendChild(document.createTextNode(tail));
     last = start + rawMatch.length;
   }
-  if (last < text.length) container.appendChild(document.createTextNode(text.slice(last)));
+  if (last < text.length) ecAppendChatTextSegment(container, text.slice(last), emoticonState);
   return found;
 }
 
-function buildTextMessageBody(text, { autoScrollLog = null } = {}) {
-  const gifUrl = parseGifMarker(text);
-  if (gifUrl) {
-    const wrap = document.createElement("div");
-    wrap.className = "ym-gifWrap is-loading";
 
-    const placeholder = document.createElement("div");
-    placeholder.className = "ym-gifPlaceholder";
-    placeholder.textContent = "Loading GIF…";
-    placeholder.setAttribute('aria-live', 'polite');
-    placeholder.setAttribute('aria-busy', 'true');
+function ecStyledTextSafeFont(value) {
+  const allowed = ["Arial", "Verdana", "Tahoma", "Times New Roman", "Georgia", "Courier New", "Trebuchet MS"];
+  const raw = String(value || "").trim();
+  return allowed.find((f) => f.toLowerCase() === raw.toLowerCase()) || "Arial";
+}
 
-    const img = document.createElement("img");
-    configureGifInlineImage(img, gifUrl, { wrap, placeholder });
-    if (autoScrollLog) img._ecScrollLog = autoScrollLog;
+function ecStyledTextSafeColor(value) {
+  const raw = String(value || "").trim();
+  return /^#[0-9a-f]{6}$/i.test(raw) ? raw.toLowerCase() : "#111111";
+}
 
-    wrap.appendChild(placeholder);
-    wrap.appendChild(img);
-    return wrap;
+function ecBuildStyledTextMessageBody(obj) {
+  const body = document.createElement("div");
+  body.className = "ec-msgText ec-msgText--styled";
+  const text = ecStyledTextInnerValue(obj);
+  const style = (obj && typeof obj.style === "object") ? obj.style : {};
+  const size = (typeof clampInt === "function") ? clampInt(style.size, 10, 22, 13) : Math.max(10, Math.min(22, parseInt(style.size || 13, 10) || 13));
+  body.style.setProperty("--ec-msg-font-family", `"${ecStyledTextSafeFont(style.font).replace(/"/g, "")}"`);
+  body.style.setProperty("--ec-msg-font-size", `${size}px`);
+  body.style.setProperty("--ec-msg-color", ecStyledTextSafeColor(style.color));
+  body.style.setProperty("--ec-msg-font-weight", style.bold ? "700" : "400");
+  body.style.setProperty("--ec-msg-font-style", style.italic ? "italic" : "normal");
+  body.style.setProperty("--ec-msg-text-decoration", style.underline ? "underline" : "none");
+  ecAppendLinkifiedText(body, text);
+  return body;
+}
+
+function ecTryParseChatWireObject(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  if (typeof value !== "string") return null;
+  const text = value.trimStart();
+  if (!text.startsWith("{")) return null;
+  try {
+    const obj = JSON.parse(text);
+    return (obj && typeof obj === "object" && !Array.isArray(obj)) ? obj : null;
+  } catch {
+    return null;
+  }
+}
+
+function ecTryGetStyledTextObject(rawMessage) {
+  const obj = ecTryParseChatWireObject(rawMessage);
+  return (obj && String(obj._ec || "").trim().toLowerCase() === "styled_text") ? obj : null;
+}
+
+function ecStyledTextInnerValue(obj) {
+  if (!obj || typeof obj !== "object") return "";
+  const inner = obj.text;
+  if (inner === null || inner === undefined) return "";
+  if (typeof inner === "string") return inner;
+  if (inner && typeof inner === "object") {
+    try { return JSON.stringify(inner); } catch {}
+  }
+  return String(inner);
+}
+
+function ecBuildGifMessageBody(gifUrl, { autoScrollLog = null } = {}) {
+  const wrap = document.createElement("div");
+  wrap.className = "ym-gifWrap is-loading";
+
+  const placeholder = document.createElement("div");
+  placeholder.className = "ym-gifPlaceholder";
+  placeholder.textContent = "Loading GIF…";
+  placeholder.setAttribute('aria-live', 'polite');
+  placeholder.setAttribute('aria-busy', 'true');
+
+  const img = document.createElement("img");
+  configureGifInlineImage(img, gifUrl, { wrap, placeholder });
+  if (autoScrollLog) img._ecScrollLog = autoScrollLog;
+
+  wrap.appendChild(placeholder);
+  wrap.appendChild(img);
+  return wrap;
+}
+
+function ecTryParseRoomRadioWireObject(message) {
+  const obj = ecTryParseChatWireObject(message);
+  if (!obj) return null;
+  if (String(obj._ec || obj.kind || obj.type || "").trim().toLowerCase() !== "room_radio") return null;
+  return obj;
+}
+
+function ecBuildRoomRadioWireCard(obj, { username = "" } = {}) {
+  let station = null;
+  try {
+    if (typeof roomMediaHandleWire === "function") station = roomMediaHandleWire(obj);
+  } catch {}
+  const card = document.createElement('div');
+  card.className = 'ecRoomRadioWireCard';
+  const title = document.createElement('div');
+  title.className = 'ecRoomRadioWireTitle';
+  title.textContent = '🎵 Shared radio updated';
+  const meta = document.createElement('div');
+  meta.className = 'ecRoomRadioWireMeta';
+  meta.textContent = `${String(obj?.actor || username || 'Someone')} switched this room to ${String(station?.label || obj?.label || obj?.name || 'a new station')}.`;
+  card.appendChild(title);
+  card.appendChild(meta);
+  return card;
+}
+
+function ecTryBuildWireSpecialMessageBody(message, { autoScrollLog = null, username = "" } = {}) {
+  const special = (typeof ecBuildSpecialMessageBody === "function") ? ecBuildSpecialMessageBody(message) : null;
+  if (special) return special;
+
+  const radio = ecTryParseRoomRadioWireObject(message);
+  if (radio) return ecBuildRoomRadioWireCard(radio, { username });
+
+  const rawText = (typeof message === "string") ? message : "";
+  const gifUrl = rawText ? parseGifMarker(rawText) : null;
+  if (gifUrl) return ecBuildGifMessageBody(gifUrl, { autoScrollLog });
+
+  const media = rawText ? ecParseSharedMediaUrl(rawText) : null;
+  if (media) return ecBuildSharedMediaCard(media);
+
+  return null;
+}
+
+function ecTryBuildStyledTextMessageBody(rawMessage, { autoScrollLog = null, username = "" } = {}) {
+  const obj = ecTryGetStyledTextObject(rawMessage);
+  if (!obj) return null;
+
+  // Backward compatibility and safety: if an older composer wrapped a media/control
+  // wire payload in styled_text, render the intended card instead of raw JSON/text.
+  const nestedSpecial = ecTryBuildWireSpecialMessageBody(ecStyledTextInnerValue(obj), { autoScrollLog, username });
+  if (nestedSpecial) return nestedSpecial;
+
+  return ecBuildStyledTextMessageBody(obj);
+}
+
+function ecClassifyChatMessageKind(message, depth = 0) {
+  if (depth > 4) return "text";
+  const styledObj = ecTryGetStyledTextObject(message);
+  if (styledObj) {
+    const innerKind = ecClassifyChatMessageKind(ecStyledTextInnerValue(styledObj), depth + 1);
+    return innerKind && innerKind !== "text" ? innerKind : "styled";
   }
 
-  const media = ecParseSharedMediaUrl(text);
-  if (media) {
-    return ecBuildSharedMediaCard(media);
+  try {
+    if (typeof ecTryNormalizeTorrentMessage === "function" && ecTryNormalizeTorrentMessage(message)) return "torrent";
+  } catch {}
+
+  if (ecTryParseRoomRadioWireObject(message)) return "room-radio";
+
+  if (typeof message === "string") {
+    if (parseGifMarker(message)) return "gif";
+    if (ecParseSharedMediaUrl(message)) return "media";
   }
+
+  return "text";
+}
+
+function buildTextMessageBody(text, { autoScrollLog = null, username = "" } = {}) {
+  const special = ecTryBuildWireSpecialMessageBody(text, { autoScrollLog, username });
+  if (special) return special;
+
+  const styled = ecTryBuildStyledTextMessageBody(text, { autoScrollLog, username });
+  if (styled) return styled;
 
   const body = document.createElement("div");
   body.className = "ec-msgText";
   const rawText = (typeof text === "string") ? text : String(text ?? "");
   ecAppendLinkifiedText(body, rawText);
   return body;
+}
+
+function ecBuildRoomMessageBody(message, { autoScrollLog = null, username = "" } = {}) {
+  return buildTextMessageBody(message, { autoScrollLog, username });
 }
 
 function ecMessageContextForLog(log) {
@@ -746,7 +998,7 @@ function appendLine(winEl, who, text, kind = "msg", opts = {}) {
   if (!log) return;
 
   const body = buildTextMessageBody(text, { autoScrollLog: log });
-  const msgKind = parseGifMarker(text) ? "gif" : "text";
+  const msgKind = (typeof ecClassifyChatMessageKind === "function") ? ecClassifyChatMessageKind(text) : (parseGifMarker(text) ? "gif" : "text");
   appendGenericMessageItem(log, who, body, { ts: opts?.ts, kind: msgKind, context: opts?.context || null });
   scheduleScrollLogToBottom(log);
 }

@@ -145,12 +145,14 @@ socket.on("disconnect", (reason) => {
 // Missed PM summary from server
 socket.on("missed_pm_summary", ({ items, total, generated_at } = {}) => {
   const list = normalizeMissedPmSummaryItems(items);
+  try { if (typeof ecMissedDebug === 'function') ecMissedDebug('socket.missed_pm_summary.received', { rawItems: items, total, generated_at, normalized: list }); } catch {}
 
   // IMPORTANT: Do not hide missed entries just because a DM window is open.
   // If private messages are not ready, auto-consuming would only "peek" and can make the UI look cleared
   // while the server still has undelivered messages (they then reappear after refresh).
   UIState.missedPmSummary = list;
   renderMissedPmList(list);
+  try { ecUpdateAllOpenDmStatuses(); } catch {}
   if (!list.length) closeDockRailPanelIfEmpty('missed');
 
 
@@ -162,25 +164,48 @@ socket.on("missed_pm_summary", ({ items, total, generated_at } = {}) => {
       const sender = it?.sender;
       const count = Number(it?.count ?? 0) || 0;
       if (!sender || count <= 0) continue;
-      if (UIState.windows && !!ecGetPmWindow(sender)) {
-        consumeOfflinePmsForPeer(sender, { promptUnlock: false, quiet: true });
+      const win = UIState.windows ? ecGetPmWindow(sender) : null;
+      const activelyReading = win && (typeof ecIsConversationWindowActive === 'function') && ecIsConversationWindowActive(win);
+      const autoOpenedFromIncoming = !!(win && win._ym && Number(win._ym.__incomingMissedAutoDrainAt || 0) > 0);
+      if (activelyReading || autoOpenedFromIncoming) {
+        consumeOfflinePmsForPeer(sender, { promptUnlock: false, quiet: true })
+          .finally(() => { try { ecUpdateAllOpenDmStatuses(); } catch {} });
       }
     }
   } catch {}
 
 
-  const summaryTotal = Math.max(0, Number(total ?? list.reduce((acc, it) => acc + (Number(it?.count ?? 0) || 0), 0)) || 0);
-  if (MISSED_SUMMARY_TOAST_ARMED && UIState.prefs.missedToast && summaryTotal > 0) {
-    toast(`📨 You have ${summaryTotal} missed PM(s)`, "info", 3500, { event: "dm" });
-    maybeBrowserNotify("Missed private messages", `You have ${summaryTotal} missed PM(s).`);
-  }
+  const listTotal = list.reduce((acc, it) => acc + (Number(it?.count ?? 0) || 0), 0);
+  const serverTotal = Number(total);
+  // beta.390: do not let a stale/zero server total hide a non-empty front-end list.
+  // beta.322 counted directly from the normalized list, which is the behavior users saw working.
+  const summaryTotal = Math.max(0, Number.isFinite(serverTotal) ? serverTotal : 0, listTotal);
+  try { if (typeof ecMissedDebug === 'function') ecMissedDebug('socket.missed_pm_summary.rendered', { listTotal, serverTotal, summaryTotal, list }); } catch {}
+  try {
+    if (typeof ecMaybePopupMissedPmSummary === 'function') {
+      ecMaybePopupMissedPmSummary(list, { total: summaryTotal, reason: 'server_summary' });
+    } else if (MISSED_SUMMARY_TOAST_ARMED && UIState.prefs.missedToast && summaryTotal > 0) {
+      toast(`📨 You have ${summaryTotal} missed PM(s)`, "info", 3500, { event: "dm" });
+      maybeBrowserNotify("Missed private messages", `You have ${summaryTotal} missed PM(s).`);
+    }
+  } catch {}
   MISSED_SUMMARY_TOAST_ARMED = false;
 });
 
 // Friend request ping
 socket.on("friend_request", ({ from }) => {
-  toast(`🎉 Friend request from ${from}`, "info", 3500, { event: "friend_request" });
-  maybeBrowserNotify("Friend request", `From: ${from}`);
+  const who = String(from || '').replace(/\s+/g, ' ').trim();
+  if (who && !ecUserSetHasName(UIState.blockedSet, who) && !ecUserSetHasName(UIState.friendSet, who)) {
+    const existing = ecCanonicalUsernameList(UIState.pendingRequests || []);
+    if (!existing.some((name) => ecNormalizeUsernameKey(name) === ecNormalizeUsernameKey(who))) {
+      UIState.pendingRequests = existing.concat([who]);
+      try { renderPendingFriendRequestsInto($('pendingRequestsList'), UIState.pendingRequests); } catch {}
+      try { renderPendingFriendRequestsInto($('railPendingRequestsList'), UIState.pendingRequests); } catch {}
+      try { updateDockSummaryCounts(); } catch {}
+    }
+  }
+  toast(`🎉 Friend request from ${who || from}`, "info", 3500, { event: "friend_request" });
+  maybeBrowserNotify("Friend request", `From: ${who || from}`);
   getPendingFriendRequests();
 });
 
@@ -189,6 +214,7 @@ socket.on("friend_request_accepted", ({ by }) => {
   const who = String(by || "").trim();
   toast(`✅ ${who || "A user"} accepted your friend request`, "ok", 5000, { event: "friend_request" });
   maybeBrowserNotify("Friend request accepted", who ? `${who} accepted your request` : "Accepted");
+  getPendingFriendRequests();
   getFriends();
 });
 
@@ -196,6 +222,7 @@ socket.on("friend_request_accepted", ({ by }) => {
 socket.on("friend_request_rejected", ({ by }) => {
   const who = String(by || "").trim();
   toast(`ℹ️ ${who || "A user"} rejected your friend request`, "info", 4500, { event: "friend_request" });
+  getPendingFriendRequests();
 });
 
 function _inviteKey(room, by, kind = "room") {

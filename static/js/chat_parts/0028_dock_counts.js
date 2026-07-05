@@ -98,10 +98,14 @@ function bindDockAlertRail() {
 }
 
 function updateDockSummaryCounts() {
-  const missedThreads = Array.isArray(UIState.missedPmSummary) ? UIState.missedPmSummary.length : 0;
-  const missedTotal = Array.isArray(UIState.missedPmSummary)
-    ? UIState.missedPmSummary.reduce((sum, it) => sum + (Number(it?.count || 0) || 0), 0)
-    : 0;
+  const missedTotals = (typeof ecGetMissedPmTotals === 'function')
+    ? ecGetMissedPmTotals()
+    : {
+        threads: Array.isArray(UIState.missedPmSummary) ? UIState.missedPmSummary.length : 0,
+        total: Array.isArray(UIState.missedPmSummary) ? UIState.missedPmSummary.reduce((sum, it) => sum + (Number(it?.count || 0) || 0), 0) : 0,
+      };
+  const missedThreads = Number(missedTotals.threads || 0) || 0;
+  const missedTotal = Number(missedTotals.total || 0) || 0;
   const friendCount = UIState.friendSet instanceof Set ? UIState.friendSet.size : 0;
   const pendingCount = Array.isArray(UIState.pendingRequests) ? UIState.pendingRequests.length : 0;
   const blockedCount = UIState.blockedSet instanceof Set ? UIState.blockedSet.size : 0;
@@ -124,9 +128,15 @@ function updateDockSummaryCounts() {
   setDockBadge('groupInvitesCount', alertInviteCount, 'Pending important notifications');
 
   setDockAlertBubbleState('railMissedBtn', missedTotal, missedTotal > 0 ? `${missedTotal} unread private message${missedTotal === 1 ? '' : 's'}` : 'Missed messages');
+  try { if (typeof ecMissedDebug === 'function') ecMissedDebug('dock_counts.update', { missedThreads, missedTotal, pendingCount, alertInviteCount }); } catch {}
   setDockAlertBubbleState('railPendingBtn', pendingCount, pendingCount > 0 ? `${pendingCount} incoming friend request${pendingCount === 1 ? '' : 's'}` : 'Pending friend requests');
   setDockAlertBubbleState('railAlertsBtn', alertInviteCount, alertInviteCount > 0 ? `${alertInviteCount} important notification${alertInviteCount === 1 ? '' : 's'}` : 'Important notifications');
   updateDockAlertRailPresentation();
+  try {
+    if (typeof ecForceMissedBubbleVisible === 'function') {
+      ecForceMissedBubbleVisible(missedTotal, { pulse: false, reason: 'dock_count_sync' });
+    }
+  } catch {}
   syncDockAlertFlyoutMeta();
 
   applyDockSearchFilter($('dockSearch')?.value || '');

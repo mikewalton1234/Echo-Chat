@@ -413,7 +413,8 @@ async function sendTorrentMagnetShare(toUser, magnetText, { win } = {}) {
     swarm_deferred: true
   };
 
-  await sendPrivateTo(toUser, JSON.stringify(meta));
+  const ok = await sendPrivateTo(toUser, JSON.stringify(meta));
+  if (!ok) return null;
   if (win) appendTorrentLine(win, "You:", meta);
   return meta;
 }
@@ -438,6 +439,15 @@ function ensureDmHistoryRendered(win, peer) {
   appendLine(win, "System:", `Loaded ${hist.length} local history message(s).`, { ts: Date.now() });
   for (const h of hist) {
     const tag = (h.dir === "out") ? "You:" : `${peer}:`;
-    appendLine(win, tag, h.text, { ts: h.ts });
+    try {
+      if (typeof parseDmPayload === "function" && typeof appendDmPayload === "function") {
+        const payload = parseDmPayload(h.text);
+        if (payload && (payload.kind === "file" || payload.kind === "torrent")) {
+          appendDmPayload(win, tag, payload, { peer, direction: h.dir, ts: h.ts });
+          continue;
+        }
+      }
+    } catch {}
+    appendLine(win, tag, h.text, { ts: h.ts, context: "dm" });
   }
 }

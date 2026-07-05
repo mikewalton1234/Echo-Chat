@@ -390,7 +390,7 @@ function initHelpMetadata() {
     ['#rbCustomSort', { title: 'Custom room sort', text: 'Sort custom rooms by activity or alphabetically.', placement: 'bottom' }],
     ['#btnOpenCreateRoom', { title: 'Create room', text: 'Open the custom-room creator. Pick a category, visibility, and optional age / NSFW flags. After a room is created, you are moved into it automatically.', placement: 'left' }],
     ['#roomEmbedTitle', { title: 'Active room', text: 'When you join a room, the live chat opens here on the left side.', placement: 'right' }],
-    ['#roomEmbedInput', { title: 'Room message box', text: 'Type a room message here. Use the emoji, torrent, and GIF buttons beside it for extras.', placement: 'top' }],
+    ['#roomEmbedInput', { title: 'Room message box', text: 'Type a room message here. The toolbar above it has font, size, bold, italic, underline, text color, emoticons, GIFs, torrent sharing, voice, and webcam.', placement: 'top' }],
     ['#roomEmbedEmojiBtn', { title: 'Emoji picker', text: 'Open the emoji picker for the current room message.', placement: 'top' }],
     ['#roomEmbedGifBtn', { title: 'GIF picker', text: 'Search and send a GIF into the current room.', placement: 'top' }],
     ['#roomEmbedTorrentBtn', { title: 'Torrent share', text: 'Attach a .torrent file or magnet-style share into the current room.', placement: 'top' }],
@@ -491,7 +491,7 @@ function buildHelpTourSteps() {
       selector: '#roomEmbedInput',
       section: 'Chat',
       title: 'Send a room message',
-      text: 'Type your message here. The nearby buttons add emoji, GIFs, torrent/file shares, and room voice tools when available.',
+      text: 'Type your message here. The classic toolbar above the box holds formatting, emoticons, GIFs, torrent sharing, voice, and webcam.',
       placement: 'top',
       skipIfMissing: true,
       waitMs: 180

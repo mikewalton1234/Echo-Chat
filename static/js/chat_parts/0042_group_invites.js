@@ -43,6 +43,35 @@ function normalizeGroupNameInput(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
+function selectGroupDockRow(groupId, rowEl = null) {
+  const gid = String(groupId || '').trim();
+  document.querySelectorAll('#groupList .groupDockItem.selected').forEach((el) => el.classList.remove('selected'));
+  if (!rowEl && gid) rowEl = document.querySelector(`#groupList .groupDockItem[data-group-id="${CSS.escape(gid)}"]`);
+  if (rowEl) rowEl.classList.add('selected');
+}
+
+function dockGroupUnreadSet(groupId, count) {
+  const gid = String(groupId || '').trim();
+  const n = Math.max(0, Number(count || 0) || 0);
+  if (!gid) return;
+  try {
+    if (!UIState.groupUnreadCounts) UIState.groupUnreadCounts = new Map();
+    UIState.groupUnreadCounts.set(gid, n);
+    const numeric = Number(gid);
+    if (Number.isFinite(numeric) && numeric > 0) UIState.groupUnreadCounts.set(numeric, n);
+  } catch {}
+}
+
+function groupRoleChip(role, unreadCount = 0) {
+  const r = String(role || 'member').toLowerCase();
+  if (Number(unreadCount || 0) > 0) return String(unreadCount);
+  if (r === 'owner') return 'Owner';
+  if (r === 'admin') return 'Admin';
+  if (r === 'moderator') return 'Mod';
+  return 'Group';
+}
+
+
 async function sendGroupInviteFromDock(groupId, groupName) {
   const u = await ecPrompt('Invite which username?', '', {
     title: `Invite to ${groupName || 'group'}`,
@@ -102,14 +131,14 @@ async function refreshMyGroups() {
 
     groups.forEach(g => {
       const gid = String(g.id || g.group_id || '');
-      const gname = String(g.group_name || gid);
+      const gname = normalizeGroupNameInput(g.group_name || gid) || gid;
       const role = String(g.role || 'member').toLowerCase();
       const memberCount = Number(g.member_count || 0) || 0;
       const unreadCount = Number(g.unread_count ?? g.unread ?? 0) || 0;
-      try { UIState.groupUnreadCounts?.set?.(Number(gid), unreadCount); } catch {}
+      dockGroupUnreadSet(gid, unreadCount);
       const li = document.createElement('li');
       li.dataset.name = gname;
-      li.dataset.search = `${gname} ${gid} group`;
+      li.dataset.search = `${gname} ${gid} group ${role} ${memberCount} member ${unreadCount} unread`;
       li.dataset.groupId = gid;
       li.classList.add('isInteractive', 'groupDockItem');
       li.classList.toggle('hasUnread', unreadCount > 0);
@@ -121,7 +150,7 @@ async function refreshMyGroups() {
         name: gname,
         presenceClass: 'online',
         meta: `Group chat · ID #${gid}${memberCount ? ` · ${memberCount} member${memberCount === 1 ? '' : 's'}` : ''}${unreadCount ? ` · ${unreadCount} unread` : ''}`,
-        chip: unreadCount ? String(unreadCount) : (role === 'owner' ? 'Owner' : (role === 'admin' ? 'Admin' : (role === 'moderator' ? 'Mod' : 'Group')))
+        chip: groupRoleChip(role, unreadCount)
       });
 
       const actions = document.createElement('div');
@@ -131,7 +160,7 @@ async function refreshMyGroups() {
       openBtn.className = 'iconBtn';
       openBtn.textContent = '💬';
       openBtn.title = 'Open';
-      openBtn.onclick = (ev) => { ev.stopPropagation(); openGroupWindow(gid, gname); };
+      openBtn.onclick = (ev) => { ev.stopPropagation(); selectGroupDockRow(gid, li); openGroupWindow(gid, gname); };
 
       const inviteBtn = document.createElement('button');
       inviteBtn.className = 'iconBtn';
@@ -139,10 +168,14 @@ async function refreshMyGroups() {
       inviteBtn.title = 'Invite user';
       inviteBtn.onclick = async (ev) => {
         ev.stopPropagation();
+        setMiniActionBusy(inviteBtn, true, '➕');
         try {
           await sendGroupInviteFromDock(gid, gname);
+          try { await refreshGroupInvites(); } catch {}
         } catch (e) {
           toast(`❌ ${e.message}`, 'error');
+        } finally {
+          setMiniActionBusy(inviteBtn, false, '➕');
         }
       };
 
@@ -152,10 +185,14 @@ async function refreshMyGroups() {
       revokeInviteBtn.title = 'Revoke pending invite';
       revokeInviteBtn.onclick = async (ev) => {
         ev.stopPropagation();
+        setMiniActionBusy(revokeInviteBtn, true, '↩');
         try {
           await revokeGroupInviteFromDock(gid, gname);
+          try { await refreshGroupInvites(); } catch {}
         } catch (e) {
           toast(`❌ ${e.message}`, 'error');
+        } finally {
+          setMiniActionBusy(revokeInviteBtn, false, '↩');
         }
       };
 
@@ -193,12 +230,13 @@ async function refreshMyGroups() {
 
       li.appendChild(left);
       li.appendChild(actions);
-      li.onclick = () => openGroupWindow(gid, gname);
-      li.ondblclick = () => openGroupWindow(gid, gname);
+      li.onclick = () => { selectGroupDockRow(gid, li); openGroupWindow(gid, gname); };
+      li.ondblclick = () => { selectGroupDockRow(gid, li); openGroupWindow(gid, gname); };
 
       ul.appendChild(li);
     });
     updateDockSummaryCounts();
+    try { applyDockSearchFilter($('dockSearch')?.value || ''); } catch {}
   } catch (e) {
     if (requestId !== _myGroupsRefreshTicket) return;
     console.error(e);
@@ -224,18 +262,49 @@ function groupInvitePendingKey(groupId) {
   return `groupinvite:${String(groupId || '').trim()}`;
 }
 
+function groupInviteActionKey(inv) {
+  return groupInvitePendingKey(String(inv?.group_id || '').trim());
+}
+
+function groupInviteActionIsPending(inv) {
+  const key = groupInviteActionKey(inv);
+  return !!(key && _groupInviteActionPending.has(key));
+}
+
+function setGroupInviteButtonsBusy(buttons, busy) {
+  (Array.isArray(buttons) ? buttons : []).forEach((btn) => {
+    if (!btn) return;
+    btn.disabled = !!busy;
+    btn.classList.toggle('isBusy', !!busy);
+    btn.setAttribute('aria-busy', busy ? 'true' : 'false');
+  });
+}
+
+async function runGroupInviteButtonAction(inv, buttons, actionFn) {
+  if (!inv || typeof actionFn !== 'function') return;
+  if (groupInviteActionIsPending(inv)) return;
+  setGroupInviteButtonsBusy(buttons, true);
+  try {
+    await actionFn(inv);
+  } finally {
+    setGroupInviteButtonsBusy(buttons, groupInviteActionIsPending(inv));
+  }
+}
+
 function mergeGroupInvites(invites) {
   const existing = new Map();
   (Array.isArray(UIState.groupInvites) ? UIState.groupInvites : []).forEach((inv) => {
     existing.set(groupInviteKey(inv), inv);
   });
   (Array.isArray(invites) ? invites : []).forEach((inv) => {
+    const groupId = String(inv?.group_id || '').trim();
+    if (!groupId) return;
     const normalized = {
       ...inv,
-      group_id: Number(inv?.group_id || 0) || inv?.group_id,
-      group_name: String(inv?.group_name || inv?.group_id || ''),
+      group_id: Number(groupId) || groupId,
+      group_name: normalizeGroupNameInput(inv?.group_name || groupId) || groupId,
       group_description: String(inv?.group_description || ''),
-      from_user: String(inv?.from_user || ''),
+      from_user: String(inv?.from_user || '').replace(/\s+/g, ' ').trim(),
       created_at: String(inv?.created_at || inv?.sent_at || new Date().toISOString()),
       sent_at: String(inv?.sent_at || inv?.created_at || new Date().toISOString()),
     };
@@ -367,6 +436,14 @@ async function acceptRoomInvite(inv) {
   if (kind === 'custom_private') {
     const accepted = await apiJson(url, { method: 'POST', body: JSON.stringify({ room }) });
     acceptedRoom = String(accepted?.room || room).trim() || room;
+    try {
+      if (accepted?.category && accepted?.subcategory && typeof ROOM_BROWSER === 'object') {
+        ROOM_BROWSER.selectedCategory = String(accepted.category);
+        ROOM_BROWSER.selectedSubcategory = String(accepted.subcategory);
+        ROOM_BROWSER.roomScope = 'custom';
+        if (typeof rbRenderCategoryTree === 'function') rbRenderCategoryTree();
+      }
+    } catch {}
   }
 
   const res = await joinRoom(acceptedRoom);
@@ -384,6 +461,7 @@ async function acceptRoomInvite(inv) {
   try { forgetInviteSeen(_inviteKey(room, by, kind)); } catch {}
   renderAlertsInviteListInto($('railAlertsList'), UIState.groupInvites, UIState.roomInvites, { openRail: true });
   updateDockSummaryCounts();
+  try { if (typeof rbScheduleInviteBrowserRefresh === 'function') rbScheduleInviteBrowserRefresh('accepted_room_invite'); } catch {}
   toast(`✅ Joined ${acceptedRoom}`, 'ok');
 }
 
@@ -398,6 +476,7 @@ async function declineRoomInvite(inv) {
   try { forgetInviteSeen(_inviteKey(room, by, kind)); } catch {}
   renderAlertsInviteListInto($('railAlertsList'), UIState.groupInvites, UIState.roomInvites, { openRail: true });
   updateDockSummaryCounts();
+  try { if (typeof rbScheduleInviteBrowserRefresh === 'function') rbScheduleInviteBrowserRefresh('declined_room_invite'); } catch {}
   toast('Invite declined', 'info');
 }
 
@@ -412,6 +491,7 @@ async function refreshCustomRoomInvites() {
     });
     renderAlertsInviteListInto($('railAlertsList'), UIState.groupInvites, UIState.roomInvites, { openRail: true });
     updateDockSummaryCounts();
+    try { if (typeof rbScheduleInviteBrowserRefresh === 'function') rbScheduleInviteBrowserRefresh('custom_invites_poll'); } catch {}
   } catch (e) {
     // ignore
   }
@@ -428,6 +508,7 @@ async function refreshRoomInvites() {
     });
     renderAlertsInviteListInto($('railAlertsList'), UIState.groupInvites, UIState.roomInvites, { openRail: true });
     updateDockSummaryCounts();
+    try { applyDockSearchFilter($('dockSearch')?.value || ''); } catch {}
   } catch (e) {
     // ignore
   }
@@ -455,6 +536,7 @@ async function refreshProfilePostNotifications() {
     mergeProfilePostNotifications(Array.isArray(data?.notifications) ? data.notifications : []);
     renderAlertsInviteListInto($('railAlertsList'), UIState.groupInvites, UIState.roomInvites, { openRail: true });
     updateDockSummaryCounts();
+    try { applyDockSearchFilter($('dockSearch')?.value || ''); } catch {}
   } catch (e) {
     // ignore: profile alerts should not block group/room invite rendering
   }
@@ -682,7 +764,7 @@ function renderAlertsInviteListInto(ul, groupInvites, roomInvites, opts = {}) {
       acceptBtn.onclick = async (ev) => {
         ev.stopPropagation();
         try {
-          await acceptGroupInvite(inv);
+          await runGroupInviteButtonAction(inv, [acceptBtn, declineBtn], acceptGroupInvite);
         } catch (e) {
           toast(`❌ ${e.message}`, 'error');
         }
@@ -695,12 +777,13 @@ function renderAlertsInviteListInto(ul, groupInvites, roomInvites, opts = {}) {
       declineBtn.onclick = async (ev) => {
         ev.stopPropagation();
         try {
-          await declineGroupInvite(inv);
+          await runGroupInviteButtonAction(inv, [acceptBtn, declineBtn], declineGroupInvite);
         } catch (e) {
           toast(`❌ ${e.message}`, 'error');
         }
       };
 
+      setGroupInviteButtonsBusy([acceptBtn, declineBtn], groupInviteActionIsPending(inv));
       actions.appendChild(acceptBtn);
       actions.appendChild(declineBtn);
       li.appendChild(left);
@@ -801,7 +884,7 @@ function renderGroupInviteListInto(ul, invites, opts = {}) {
     acceptBtn.onclick = async (ev) => {
       ev.stopPropagation();
       try {
-        await acceptGroupInvite(inv);
+        await runGroupInviteButtonAction(inv, [acceptBtn, declineBtn], acceptGroupInvite);
       } catch (e) {
         toast(`❌ ${e.message}`, 'error');
       }
@@ -814,12 +897,13 @@ function renderGroupInviteListInto(ul, invites, opts = {}) {
     declineBtn.onclick = async (ev) => {
       ev.stopPropagation();
       try {
-        await declineGroupInvite(inv);
+        await runGroupInviteButtonAction(inv, [acceptBtn, declineBtn], declineGroupInvite);
       } catch (e) {
         toast(`❌ ${e.message}`, 'error');
       }
     };
 
+    setGroupInviteButtonsBusy([acceptBtn, declineBtn], groupInviteActionIsPending(inv));
     actions.appendChild(acceptBtn);
     actions.appendChild(declineBtn);
 
@@ -846,6 +930,7 @@ async function refreshGroupInvites() {
     renderGroupInviteListInto($('groupInviteList'), UIState.groupInvites);
     renderAlertsInviteListInto($('railAlertsList'), UIState.groupInvites, UIState.roomInvites, { openRail: true });
     updateDockSummaryCounts();
+    try { applyDockSearchFilter($('dockSearch')?.value || ''); } catch {}
   } catch (e) {
     if (requestId !== _groupInvitesRefreshTicket) return;
     // Do not clear already-known pending invites on a transient auth/network

@@ -183,6 +183,7 @@
       win.classList.add("hidden");
     }
     setPanel("hub", { allowEmptyChat: true });
+    window.setTimeout(syncMobileWindows, 0);
   }
 
   function closeMobileWindow(win) {
@@ -193,6 +194,7 @@
     } catch (e) {
       win?.remove?.();
     }
+    window.setTimeout(syncMobileWindows, 0);
   }
 
   function toggleMobileWindowTools(win) {
@@ -213,6 +215,30 @@
     if (usersBtn) usersBtn.setAttribute("aria-expanded", "false");
     const panel = win.querySelector(".ym-groupMembersPanel");
     if (panel) panel.setAttribute("aria-hidden", "true");
+  }
+
+  function closeMobileWindowTools(win) {
+    if (!win) return;
+    win.classList.remove("is-mobile-window-tools-open");
+    const toolsBtn = win.querySelector(".ym-mobileWindowToolsBtn");
+    if (toolsBtn) toolsBtn.setAttribute("aria-expanded", "false");
+  }
+
+  function closeMobileProfileEditDrawer(win) {
+    if (!win) return;
+    win.classList.remove("is-mobile-profile-edit-open");
+    const editBtn = win.querySelector(".ym-mobileProfileEditBtn");
+    if (editBtn) editBtn.setAttribute("aria-expanded", "false");
+  }
+
+  function resetMobileOnlyWindowState(win) {
+    if (!win || win.nodeType !== 1) return;
+    try { closeMobileWindowTools(win); } catch (e) {}
+    try { closeMobileGroupMembers(win); } catch (e) {}
+    try { closeMobileProfileEditDrawer(win); } catch (e) {}
+    try { win.classList.remove("is-mobile-active-window"); } catch (e) {}
+    try { if (win.getAttribute("aria-hidden") === "true") win.setAttribute("aria-hidden", "false"); } catch (e) {}
+    try { if (win.dataset.kind === "dm" || win.dataset.kind === "group" || win.classList.contains("ecProfileWindow")) win.setAttribute("aria-modal", "false"); } catch (e) {}
   }
 
   function ensureMobileGroupMembersBackdrop(win) {
@@ -494,17 +520,101 @@
     syncMobileProfileEditAvailability(win);
   }
 
+  function isMobileWindowVisible(win) {
+    if (!win || win.nodeType !== 1) return false;
+    if (!win.classList || !win.classList.contains("ym-window")) return false;
+    if (win.classList.contains("hidden")) return false;
+    return true;
+  }
+
+  function mobileWindowZ(win) {
+    const z = parseInt((win && win.style && win.style.zIndex) || win?.dataset?.mobileZ || "0", 10);
+    return Number.isFinite(z) ? z : 0;
+  }
+
+  function setMobileActiveWindow(win, options) {
+    const opts = options || {};
+    const layer = document.getElementById("windowsLayer");
+    if (!layer) return;
+    if (!root.classList.contains("is-mobile-shell") && !opts.forceClear) return;
+    const mobile = root.classList.contains("is-mobile-shell");
+    const wanted = win && isMobileWindowVisible(win) ? win : null;
+    layer.querySelectorAll(".ym-window").forEach((node) => {
+      const managed = node.dataset.kind === "dm" || node.dataset.kind === "group" || node.classList.contains("ecProfileWindow");
+      const visible = isMobileWindowVisible(node);
+      const active = !!(mobile && wanted && node === wanted && visible);
+      node.classList.toggle("is-mobile-active-window", active);
+      if (mobile) {
+        if (visible) node.setAttribute("aria-hidden", active ? "false" : "true");
+        if (managed) node.setAttribute("aria-modal", active ? "true" : "false");
+        if (!active) {
+          try { closeMobileWindowTools(node); } catch (e) {}
+          try { closeMobileGroupMembers(node); } catch (e) {}
+          try { closeMobileProfileEditDrawer(node); } catch (e) {}
+        }
+      } else {
+        resetMobileOnlyWindowState(node);
+      }
+    });
+  }
+
+  function chooseTopMobileWindow() {
+    const layer = document.getElementById("windowsLayer");
+    if (!layer) return null;
+    let top = null;
+    layer.querySelectorAll(".ym-window").forEach((win) => {
+      if (!isMobileWindowVisible(win)) return;
+      if (!top || mobileWindowZ(win) >= mobileWindowZ(top)) top = win;
+    });
+    return top;
+  }
+
+  function bindMobileWindowActivation(win) {
+    if (!win || win.dataset.mobileActivationBound === "1") return;
+    win.dataset.mobileActivationBound = "1";
+    ["pointerdown", "focusin"].forEach((eventName) => {
+      win.addEventListener(eventName, () => {
+        if (!root.classList.contains("is-mobile-shell")) return;
+        setMobileActiveWindow(win);
+      }, { passive: true });
+    });
+  }
+
   function syncMobileWindows() {
     const layer = document.getElementById("windowsLayer");
     if (!layer) return;
+    let existingActive = null;
+    let top = null;
     layer.querySelectorAll(".ym-window").forEach((win) => {
       decorateMobileProfileWindow(win);
       decorateMobileWindow(win);
       syncMobileProfileEditAvailability(win);
+      bindMobileWindowActivation(win);
+      if (!isMobileWindowVisible(win)) return;
+      if (win.classList.contains("is-mobile-active-window")) existingActive = win;
+      if (!top || mobileWindowZ(win) >= mobileWindowZ(top)) top = win;
     });
+    if (root.classList.contains("is-mobile-shell")) {
+      setMobileActiveWindow(isMobileWindowVisible(existingActive) ? existingActive : top);
+    } else {
+      setMobileActiveWindow(null, { forceClear: true });
+    }
   }
 
   window.ecSyncMobileWindows = syncMobileWindows;
+
+  if (typeof window.bringToFront === "function" && !window.bringToFront.__ecMobileWrapped) {
+    const originalBringToFront = window.bringToFront;
+    const wrappedBringToFront = function ecMobileBringToFront(winEl) {
+      const result = originalBringToFront.apply(this, arguments);
+      if (winEl && root.classList.contains("is-mobile-shell")) {
+        setMobileActiveWindow(winEl);
+      }
+      return result;
+    };
+    wrappedBringToFront.__ecMobileWrapped = true;
+    window.bringToFront = wrappedBringToFront;
+  }
 
   function mobileRoomStepKey() {
     const user = String(window.USERNAME || "guest").replace(/[^a-zA-Z0-9_.-]/g, "_");
@@ -650,28 +760,44 @@
   function ensureMobileComposerTools() {
     const composer = document.querySelector(".roomEmbedCompose");
     if (!composer) return null;
-    ["roomEmbedEmojiBtn", "roomEmbedTorrentBtn", "roomEmbedGifBtn"].forEach((id) => {
+    [
+      "roomEmbedFontFamily",
+      "roomEmbedFontSize",
+      "roomEmbedBoldBtn",
+      "roomEmbedItalicBtn",
+      "roomEmbedUnderlineBtn",
+      "roomEmbedTextColor",
+      "roomEmbedEmojiBtn",
+      "roomEmbedTorrentBtn",
+      "roomEmbedGifBtn",
+      "btnRoomEmbedVoice",
+      "btnRoomEmbedCam"
+    ].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.setAttribute("data-mobile-compose-tool", "true");
     });
     mobileComposerToolsBtn = document.getElementById("btnRoomEmbedToolsMobile");
-    if (mobileComposerToolsBtn) return mobileComposerToolsBtn;
     const send = document.getElementById("roomEmbedSend");
-    const btn = document.createElement("button");
+    const btn = mobileComposerToolsBtn || document.createElement("button");
     btn.id = "btnRoomEmbedToolsMobile";
     btn.className = "ym-toolBtn mobileComposeMoreBtn";
     btn.type = "button";
-    btn.textContent = "More";
-    btn.setAttribute("aria-label", "Show chat tools");
-    btn.setAttribute("aria-expanded", "false");
-    btn.addEventListener("click", () => {
-      const opened = !root.classList.contains("is-mobile-compose-tools-open");
-      root.classList.toggle("is-mobile-compose-tools-open", opened);
-      btn.setAttribute("aria-expanded", opened ? "true" : "false");
-      btn.setAttribute("aria-label", opened ? "Hide chat tools" : "Show chat tools");
-    });
-    if (send && send.parentNode === composer) composer.insertBefore(btn, send);
-    else composer.appendChild(btn);
+    btn.textContent = "Tools";
+    btn.setAttribute("aria-label", root.classList.contains("is-mobile-compose-tools-open") ? "Hide chat tools" : "Show chat tools");
+    btn.setAttribute("aria-expanded", root.classList.contains("is-mobile-compose-tools-open") ? "true" : "false");
+    if (btn.dataset.mobileComposerBound !== "1") {
+      btn.dataset.mobileComposerBound = "1";
+      btn.addEventListener("click", () => {
+        const opened = !root.classList.contains("is-mobile-compose-tools-open");
+        root.classList.toggle("is-mobile-compose-tools-open", opened);
+        btn.setAttribute("aria-expanded", opened ? "true" : "false");
+        btn.setAttribute("aria-label", opened ? "Hide chat tools" : "Show chat tools");
+      });
+    }
+    if (!mobileComposerToolsBtn) {
+      if (send && send.parentNode === composer) composer.insertBefore(btn, send);
+      else composer.appendChild(btn);
+    }
     mobileComposerToolsBtn = btn;
     return btn;
   }
@@ -821,9 +947,8 @@
       if (mobileUsersBtn) mobileUsersBtn.setAttribute("aria-expanded", "false");
       if (mobileComposerToolsBtn) mobileComposerToolsBtn.setAttribute("aria-expanded", "false");
       updateMobileLatestButton();
-      document.querySelectorAll('.ym-window[data-kind="dm"], .ym-window[data-kind="group"]').forEach((win) => {
-        try { win.setAttribute("aria-modal", "false"); } catch (e) {}
-      });
+      setMobileActiveWindow(null, { forceClear: true });
+      document.querySelectorAll('.ym-window').forEach((win) => resetMobileOnlyWindowState(win));
     }
   }
 
@@ -835,10 +960,35 @@
     document.body.classList.toggle("ec-mobile-keyboard-open", root.classList.contains("is-mobile-shell") && (shortViewport || visualShort));
   }
 
-  function sync() {
-    setMobile(isMobileNow());
+  function syncAfterViewportChange(options) {
+    const opts = options || {};
     syncViewportMetrics();
     syncKeyboardHint();
+    if (root.classList.contains("is-mobile-shell")) {
+      syncMobileWindows();
+      updateMobileLatestButton();
+      if (opts.scrollChat && root.getAttribute("data-mobile-panel") === "chat" && isRoomLogNearBottom()) {
+        scrollActiveRoomToBottom();
+      }
+    }
+  }
+
+  let mobileViewportSyncRaf = 0;
+  function scheduleMobileViewportSync(options) {
+    const opts = options || {};
+    if (mobileViewportSyncRaf && window.cancelAnimationFrame) window.cancelAnimationFrame(mobileViewportSyncRaf);
+    const run = () => {
+      mobileViewportSyncRaf = 0;
+      setMobile(isMobileNow());
+      syncAfterViewportChange(opts);
+    };
+    if (window.requestAnimationFrame) mobileViewportSyncRaf = window.requestAnimationFrame(run);
+    else window.setTimeout(run, 0);
+  }
+
+  function sync() {
+    setMobile(isMobileNow());
+    syncAfterViewportChange({ scrollChat: true });
   }
 
   if (nav) {
@@ -889,10 +1039,17 @@
   }
   const windowsLayer = document.getElementById("windowsLayer");
   if (windowsLayer && window.MutationObserver) {
-    const winObserver = new MutationObserver(() => {
-      if (root.classList.contains("is-mobile-shell")) syncMobileWindows();
-    });
-    winObserver.observe(windowsLayer, { childList: true, subtree: false });
+    let mobileWindowSyncTimer = 0;
+    const scheduleMobileWindowSync = () => {
+      if (!root.classList.contains("is-mobile-shell")) return;
+      if (mobileWindowSyncTimer) window.clearTimeout(mobileWindowSyncTimer);
+      mobileWindowSyncTimer = window.setTimeout(() => {
+        mobileWindowSyncTimer = 0;
+        syncMobileWindows();
+      }, 30);
+    };
+    const winObserver = new MutationObserver(scheduleMobileWindowSync);
+    winObserver.observe(windowsLayer, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style", "aria-hidden"] });
   }
 
 
@@ -938,11 +1095,11 @@
     if (keyboardMq.addEventListener) keyboardMq.addEventListener("change", syncKeyboardHint);
     else if (keyboardMq.addListener) keyboardMq.addListener(syncKeyboardHint);
   }
-  window.addEventListener("resize", sync, { passive: true });
-  window.addEventListener("orientationchange", sync, { passive: true });
+  window.addEventListener("resize", () => scheduleMobileViewportSync({ scrollChat: true }), { passive: true });
+  window.addEventListener("orientationchange", () => window.setTimeout(() => scheduleMobileViewportSync({ scrollChat: true }), 80), { passive: true });
   if (window.visualViewport) {
-    window.visualViewport.addEventListener("resize", () => { syncViewportMetrics(); syncKeyboardHint(); }, { passive: true });
-    window.visualViewport.addEventListener("scroll", () => { syncViewportMetrics(); syncKeyboardHint(); }, { passive: true });
+    window.visualViewport.addEventListener("resize", () => scheduleMobileViewportSync({ scrollChat: true }), { passive: true });
+    window.visualViewport.addEventListener("scroll", () => scheduleMobileViewportSync({ scrollChat: false }), { passive: true });
   }
 
   document.addEventListener("DOMContentLoaded", sync, { once: true });

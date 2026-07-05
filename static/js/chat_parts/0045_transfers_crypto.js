@@ -455,7 +455,9 @@ function ecIsBlockedPrivateMessageSender(username) {
   return false;
 }
 
-socket.on("private_message", async ({ sender, cipher, ts }) => {
+socket.on("private_message", async (evt = {}) => {
+  const { sender, cipher, ts } = evt || {};
+  const msgId = Number(evt?.id ?? evt?.message_id ?? evt?.messageId ?? 0) || 0;
   const senderName = ecPmPeerName(sender);
   if (!senderName) return;
 
@@ -474,10 +476,68 @@ socket.on("private_message", async ({ sender, cipher, ts }) => {
   // dedupeKey: `pm-file:${sender}:
   // dedupeKey: `pm-decrypt:${sender}:
   // Runtime uses the canonicalized senderName so case/spacing aliases hit the same PM window.
-  const hadOpenPmWindow = !!ecGetPmWindow(senderName);
-  const suppressActivePmAlert = hadOpenPmWindow &&
-    (typeof ecIsWindowActivelyFocused === "function") && ecIsWindowActivelyFocused();
-  const win = openPrivateChat(senderName) || ecGetPmWindow(senderName);
+  const existingPmWindow = ecGetPmWindow(senderName);
+  const hadOpenPmWindow = !!existingPmWindow;
+  const pmWindowWasVisible = !!(existingPmWindow && !existingPmWindow.classList.contains('hidden') && document.body?.contains(existingPmWindow));
+  const appWasFocused = (typeof ecIsWindowActivelyFocused === "function")
+    ? ecIsWindowActivelyFocused()
+    : (document.visibilityState === 'visible' && (!document.hasFocus || document.hasFocus()));
+  const pmWindowIsActive = (typeof ecIsConversationWindowActive === 'function')
+    ? ecIsConversationWindowActive(existingPmWindow)
+    : (hadOpenPmWindow && pmWindowWasVisible && appWasFocused);
+  const suppressActivePmAlert = hadOpenPmWindow && pmWindowWasVisible && appWasFocused && pmWindowIsActive;
+  const missedBacklogCountForSender = (typeof ecMissedPmCountForPeer === 'function')
+    ? ecMissedPmCountForPeer(senderName)
+    : 0;
+  const hadMissedBacklogForSender = missedBacklogCountForSender > 0;
+  const missedBacklogWasAlreadyVisible = (typeof ecMissedPmSeenLongEnoughForAutoDrain === 'function')
+    ? ecMissedPmSeenLongEnoughForAutoDrain(senderName, 750)
+    : missedBacklogCountForSender > 1;
+  // If this sender already had a visible missed-PM entry before this live PM, treat
+  // the new PM as a catch-up trigger: open/show the conversation, load that sender's
+  // stored missed queue, and do not add another missed bubble for the same sender.
+  // The short first-seen guard prevents a race where the server summary for the
+  // current live PM arrives milliseconds before the live PM packet.
+  const shouldAutoDrainSenderMissed = !!(hadMissedBacklogForSender && missedBacklogWasAlreadyVisible);
+  const shouldCountAsMissedPm = !suppressActivePmAlert && !shouldAutoDrainSenderMissed;
+  try {
+    if (typeof ecMissedDebug === 'function') {
+      ecMissedDebug('socket.private_message.received', {
+        senderName,
+        msgId,
+        hadOpenPmWindow,
+        pmWindowWasVisible,
+        appWasFocused,
+        pmWindowIsActive,
+        suppressActivePmAlert,
+        shouldCountAsMissedPm,
+        missedBacklogCountForSender,
+        hadMissedBacklogForSender,
+        missedBacklogWasAlreadyVisible,
+        shouldAutoDrainSenderMissed,
+      });
+    }
+  } catch {}
+
+  // Prime the missed bubble BEFORE openPrivateChat() can create/activate the PM
+  // window.  The later post-decrypt bump reuses the same server message id, and
+  // ecBumpLivePmUnread dedupes it, so this does not double count.
+  if (shouldCountAsMissedPm && msgId > 0) {
+    try { if (typeof ecMissedDebug === 'function') ecMissedDebug('socket.private_message.preopen_bump', { senderName, msgId }); } catch {}
+    try {
+      ecBumpLivePmUnread(senderName, 1, {
+        last_ts: liveTs || Date.now(),
+        serverBacked: true,
+        id: msgId,
+        reason: 'incoming_private_message_preopen',
+        incomingPrivateMessage: true,
+        forceActiveConversationPopup: true,
+      });
+    } catch {}
+  }
+
+  const win = openPrivateChat(senderName, { clearLiveUnread: suppressActivePmAlert, consumeOffline: false }) || ecGetPmWindow(senderName);
+  try { if (typeof ecSetConversationTyping === 'function') ecSetConversationTyping('pm', senderName, senderName, false, 0); } catch {}
   try {
     let plaintext;
 
@@ -495,7 +555,20 @@ socket.on("private_message", async ({ sender, cipher, ts }) => {
 
     const payload = parseDmPayload(plaintext);
     const w = ecGetPmWindow(senderName);
-    if (w) appendDmPayload(w, `${senderName}:`, payload, { peer: senderName, direction: "in", ts: liveTs });
+    const rendered = w
+      ? appendDmPayload(w, `${senderName}:`, payload, {
+          peer: senderName,
+          direction: "in",
+          ts: liveTs,
+          messageId: msgId,
+          fingerprint: (typeof ecDmWireHash === "function") ? ecDmWireHash(cipher) : ""
+        })
+      : true;
+    if (w) {
+      try { ecUpdateDmStatus(w, senderName); } catch {}
+    }
+
+    if (!rendered) return;
 
     if (payload.kind === "file") {
       addPmHistory(senderName, "in", `📎 ${payload.name} (${humanBytes(payload.size)})`, liveTs);
@@ -504,6 +577,48 @@ socket.on("private_message", async ({ sender, cipher, ts }) => {
       addPmHistory(senderName, "in", `🧲 ${nm}`, liveTs);
     } else {
       addPmHistory(senderName, "in", payload.text, liveTs);
+    }
+
+    if (msgId > 0) {
+      try { UIState.pendingOfflineDmSeen.add(msgId); } catch {}
+    }
+
+    if (shouldAutoDrainSenderMissed) {
+      try {
+        const autoWin = ecGetPmWindow(senderName);
+        if (autoWin && autoWin._ym) autoWin._ym.__incomingMissedAutoDrainAt = Date.now();
+      } catch {}
+      try {
+        consumeOfflinePmsForPeer(senderName, { promptUnlock: false, quiet: true })
+          .then(() => {
+            try { ecClearLivePmUnread(senderName); } catch {}
+            try { closeDockRailPanelIfEmpty('missed'); } catch {}
+          })
+          .finally(() => {
+            try { ecUpdateAllOpenDmStatuses(); } catch {}
+          });
+      } catch {
+        try { socket.emit("get_missed_pm_summary"); } catch {}
+      }
+    }
+
+    if (shouldCountAsMissedPm) {
+      try { if (typeof ecMissedDebug === 'function') ecMissedDebug('socket.private_message.postdecrypt_bump', { senderName, msgId, payloadKind: payload.kind }); } catch {}
+      try {
+        ecBumpLivePmUnread(senderName, 1, {
+          last_ts: liveTs || Date.now(),
+          serverBacked: msgId > 0,
+          id: msgId,
+          reason: 'incoming_private_message',
+          incomingPrivateMessage: true,
+          forceActiveConversationPopup: true,
+        });
+      } catch {}
+    } else {
+      try { ecClearLivePmUnread(senderName); } catch {}
+      if (msgId > 0 && typeof ackOfflinePmIds === 'function') {
+        try { ackOfflinePmIds([msgId], { quiet: true }); } catch {}
+      }
     }
 
     if (!suppressActivePmAlert) {
@@ -541,7 +656,27 @@ socket.on("private_message", async ({ sender, cipher, ts }) => {
       toastMsg = `🔑 PM from ${senderName} (key mismatch)`;
     }
 
-    if (w) appendLine(w, "System:", sysLine);
+    if (w) {
+      appendLine(w, "System:", sysLine);
+      try { ecUpdateDmStatus(w, senderName); } catch {}
+    }
+    if (msgId > 0) {
+      try { UIState.pendingOfflineDmSeen.add(msgId); } catch {}
+    }
+    if (shouldCountAsMissedPm) {
+      try {
+        ecBumpLivePmUnread(senderName, 1, {
+          last_ts: liveTs || Date.now(),
+          serverBacked: msgId > 0,
+          id: msgId,
+          reason: 'incoming_private_message',
+          incomingPrivateMessage: true,
+          forceActiveConversationPopup: true,
+        });
+      } catch {}
+    }
+    // Do not ACK a server-backed unread row on decrypt failure.  The user may
+    // still need the missed icon/status strip to retry after unlocking/fixing keys.
     if (!suppressActivePmAlert) toast(toastMsg, "warn", 3500, { event: "error", dedupeKey: `pm-decrypt:${senderName}:${toastMsg}` });
   }
 });

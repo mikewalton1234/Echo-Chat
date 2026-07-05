@@ -233,7 +233,10 @@ window.ecPrompt = ecPrompt;
 
 function getFriends() {
   socket.emit("get_friends", {}, (res) => {
-    if (res && Array.isArray(res.friends)) updateFriendsListUI(res.friends);
+    if (res && Array.isArray(res.friends)) {
+      updateFriendsListUI(res.friends);
+      try { socket.emit("get_friend_presence"); } catch (_) {}
+    }
   });
 }
 
@@ -249,6 +252,8 @@ const FRIEND_GROUP_DEFAULT_KEY = '__friends__';
 const FRIEND_GROUP_DEFAULT_LABEL = 'Friends';
 let EC_FRIEND_GROUP_CTX_MENU = null;
 let EC_ACTIVE_FRIEND_DRAG = null;
+const EC_PENDING_FRIEND_ACTIONS = new Set();
+let EC_FRIENDS_RENDER_REFRESH_TIMER = null;
 
 function getFriendGroupStorageKey() {
   return `friendGroups_${String(currentUser || 'guest')}`;
@@ -257,6 +262,43 @@ function getFriendGroupStorageKey() {
 function normalizeFriendGroupName(name) {
   return String(name || '').replace(/\s+/g, ' ').trim().slice(0, 40);
 }
+
+function scheduleFriendsListRenderRefresh(reason = '') {
+  if (EC_FRIENDS_RENDER_REFRESH_TIMER) window.clearTimeout(EC_FRIENDS_RENDER_REFRESH_TIMER);
+  EC_FRIENDS_RENDER_REFRESH_TIMER = window.setTimeout(() => {
+    EC_FRIENDS_RENDER_REFRESH_TIMER = null;
+    try { updateFriendsListUI(UIState.friendsListCache || []); } catch (e) {}
+  }, 120);
+}
+
+function ecDumpFriendsPresenceState() {
+  const friends = Array.isArray(UIState.friendsListCache) ? UIState.friendsListCache.slice() : [];
+  const presence = friends.map((friend) => {
+    const p = (typeof ecGetPresenceForUsername === 'function') ? ecGetPresenceForUsername(friend) : null;
+    return { friend, presence: p || null };
+  });
+  const dom = [...document.querySelectorAll('#friendsList .friendItem')].map((li) => ({
+    name: li.dataset.name || '',
+    offlineClass: li.classList.contains('offline'),
+    text: li.textContent || ''
+  }));
+  const out = { friends, presence, dom };
+  try { console.table(presence.map((row) => ({ friend: row.friend, online: !!row.presence?.online, presence: row.presence?.presence || 'missing' }))); } catch (_) {}
+  console.log('[Echo-Chat] friends presence state', out);
+  return out;
+}
+window.ecDumpFriendsPresenceState = ecDumpFriendsPresenceState;
+
+function getFriendAssignmentKey(friend) {
+  return ecNormalizeUsernameKey(friend);
+}
+
+function getCanonicalFriendNameFromCache(friend) {
+  const key = ecNormalizeUsernameKey(friend);
+  if (!key) return String(friend || '').trim();
+  return (Array.isArray(UIState.friendsListCache) ? UIState.friendsListCache : []).find((name) => ecNormalizeUsernameKey(name) === key) || String(friend || '').trim();
+}
+
 
 function friendGroupStoredNameFromKey(groupKey) {
   return String(groupKey || '') === FRIEND_GROUP_DEFAULT_KEY ? '' : String(groupKey || '');
@@ -277,11 +319,16 @@ function getFriendGroupingState() {
     seen.add(key);
     return true;
   });
+  const normalizedAssignments = {};
   Object.keys(state.assignments).forEach((friend) => {
+    const friendKey = getFriendAssignmentKey(friend);
     const grp = normalizeFriendGroupName(state.assignments[friend]);
-    if (!grp || !state.groups.some((name) => name.toLowerCase() === grp.toLowerCase())) delete state.assignments[friend];
-    else state.assignments[friend] = state.groups.find((name) => name.toLowerCase() === grp.toLowerCase()) || grp;
+    if (!friendKey || !grp) return;
+    const actualGroup = state.groups.find((name) => name.toLowerCase() === grp.toLowerCase()) || '';
+    if (!actualGroup) return;
+    normalizedAssignments[friendKey] = actualGroup;
   });
+  state.assignments = normalizedAssignments;
   UIState.friendGroups = state;
   return state;
 }
@@ -343,7 +390,7 @@ function deleteFriendGroup(groupName) {
 
 function getFriendGroupForFriend(friend) {
   const state = getFriendGroupingState();
-  return findFriendGroupName(state.assignments[String(friend || '')]) || '';
+  return findFriendGroupName(state.assignments[getFriendAssignmentKey(friend)]) || '';
 }
 
 function setFriendCollapsed(groupKey, collapsed) {
@@ -356,11 +403,12 @@ function setFriendCollapsed(groupKey, collapsed) {
 
 function assignFriendToGroup(friend, groupName) {
   const u = String(friend || '').trim();
-  if (!u) return false;
+  const key = getFriendAssignmentKey(u);
+  if (!u || !key) return false;
   const state = getFriendGroupingState();
   const existing = findFriendGroupName(groupName);
-  if (existing) state.assignments[u] = existing;
-  else delete state.assignments[u];
+  if (existing) state.assignments[key] = existing;
+  else delete state.assignments[key];
   saveFriendGroupingState();
   return true;
 }
@@ -386,9 +434,9 @@ async function promptForFriendGroup(defaultValue = '', opts = {}) {
 
 function getFriendGroupMeta(friends) {
   const state = getFriendGroupingState();
-  const knownFriends = new Set((Array.isArray(friends) ? friends : []).map((name) => String(name)));
-  Object.keys(state.assignments).forEach((friend) => {
-    if (!knownFriends.has(friend)) delete state.assignments[friend];
+  const knownFriendKeys = new Set((Array.isArray(friends) ? friends : []).map((name) => getFriendAssignmentKey(name)).filter(Boolean));
+  Object.keys(state.assignments).forEach((friendKey) => {
+    if (!knownFriendKeys.has(friendKey)) delete state.assignments[friendKey];
   });
 
   const buckets = new Map();
@@ -476,7 +524,7 @@ function bindFriendGroupDropTarget(el, groupKey) {
 }
 
 function createFriendListItem(friend, groupKey) {
-  const p = UIState.presence.get(friend);
+  const p = ecGetPresenceForUsername(friend);
   const online = (p && typeof p === 'object') ? !!p.online : !!p;
   const presence = (p && typeof p === 'object') ? (p.presence || (online ? 'online' : 'offline')) : (online ? 'online' : 'offline');
   const customStatus = (p && typeof p === 'object') ? (p.custom_status || '') : '';
@@ -847,7 +895,7 @@ function updateFriendsListUI(friends) {
   ul.replaceChildren();
   ul.dataset.friendGroups = '1';
 
-  const friendNames = Array.isArray(friends) ? friends.map(String) : [];
+  const friendNames = ecCanonicalUsernameList(Array.isArray(friends) ? friends : [], { excludeSelf: true, excludeBlocked: true });
   UIState.friendsListCache = friendNames.slice();
   try { refreshDockPmSuggestions(); } catch {}
 

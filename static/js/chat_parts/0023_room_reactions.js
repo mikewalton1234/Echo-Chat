@@ -2,33 +2,77 @@
 // Message reactions (rooms)
 // ───────────────────────────────────────────────────────────────────────────────
 const DEFAULT_REACTION_EMOJIS = ["👍", "👎", "😂", "❤️", "😮"]; // fast common set
+const EC_MAX_REACTION_PILLS = 20;
+
+function _roomMsgIdKey(messageId) {
+  const key = String(messageId ?? "").trim();
+  return key || "";
+}
+
+function _normalizeRoomReactionCounts(counts) {
+  if (!counts || typeof counts !== "object" || Array.isArray(counts)) return {};
+  const out = {};
+  const keys = Object.keys(counts);
+  const ordered = [
+    ...DEFAULT_REACTION_EMOJIS.filter((emoji) => keys.includes(emoji)),
+    ...keys.filter((emoji) => !DEFAULT_REACTION_EMOJIS.includes(emoji)).sort(),
+  ];
+  for (const rawEmoji of ordered) {
+    if (Object.keys(out).length >= EC_MAX_REACTION_PILLS) break;
+    const emoji = String(rawEmoji || "").trim();
+    if (!emoji || emoji.length > 16) continue;
+    const n = Math.max(0, Math.min(999, Math.floor(Number(counts[rawEmoji] || 0) || 0)));
+    if (n > 0) out[emoji] = n;
+  }
+  return out;
+}
+
+function _storeRoomReactionCounts(viewEl, messageId, counts) {
+  _ensureMsgIndex(viewEl);
+  const key = _roomMsgIdKey(messageId);
+  if (!key || !viewEl?._ym?.reactionCounts) return;
+  const normalized = _normalizeRoomReactionCounts(counts);
+  viewEl._ym.reactionCounts.set(key, normalized);
+}
+
+function _getRoomReactionCounts(viewEl, messageId) {
+  _ensureMsgIndex(viewEl);
+  const key = _roomMsgIdKey(messageId);
+  if (!key) return {};
+  return viewEl?._ym?.reactionCounts?.get(key) || {};
+}
 
 function _ensureMsgIndex(viewEl) {
   if (!viewEl) return;
   if (!viewEl._ym) viewEl._ym = {};
   if (!viewEl._ym.msgIndex) viewEl._ym.msgIndex = new Map();
   if (!viewEl._ym.myReactions) viewEl._ym.myReactions = new Map(); // message_id -> emoji (current user)
+  if (!viewEl._ym.reactionCounts) viewEl._ym.reactionCounts = new Map(); // message_id -> latest counts, including early socket events
 }
 
 function _findMsgEl(viewEl, messageId) {
   _ensureMsgIndex(viewEl);
-  return viewEl._ym.msgIndex.get(messageId) || null;
+  const key = _roomMsgIdKey(messageId);
+  return key ? (viewEl._ym.msgIndex.get(key) || null) : null;
 }
 
 
 function _removeRoomMessage(viewEl, messageId, reason) {
-  if (!viewEl || !messageId) return false;
+  const key = _roomMsgIdKey(messageId);
+  if (!viewEl || !key) return false;
   _ensureMsgIndex(viewEl);
-  const msgEl = _findMsgEl(viewEl, messageId);
+  const msgEl = _findMsgEl(viewEl, key);
   if (!msgEl) {
-    try { viewEl._ym?.msgIndex?.delete(messageId); } catch {}
-    try { viewEl._ym?.myReactions?.delete(messageId); } catch {}
+    try { viewEl._ym?.msgIndex?.delete(key); } catch {}
+    try { viewEl._ym?.myReactions?.delete(key); } catch {}
+    try { viewEl._ym?.reactionCounts?.delete(key); } catch {}
     return false;
   }
   try { clearTimeout(Number(msgEl._ecExpiryTimer || 0)); } catch {}
-  try { viewEl._ym?.msgIndex?.delete(messageId); } catch {}
-  try { viewEl._ym?.myReactions?.delete(messageId); } catch {}
-  if (viewEl?._ym?.pinnedMessageId === messageId) {
+  try { viewEl._ym?.msgIndex?.delete(key); } catch {}
+  try { viewEl._ym?.myReactions?.delete(key); } catch {}
+  try { viewEl._ym?.reactionCounts?.delete(key); } catch {}
+  if (_roomMsgIdKey(viewEl?._ym?.pinnedMessageId) === key) {
     viewEl._ym.pinnedMessageId = null;
   }
   msgEl.classList.add("ec-msgItem--expired");
@@ -68,15 +112,18 @@ function _scheduleRoomMessageExpiry(viewEl, messageId, payload) {
 
 function _getMyReaction(viewEl, messageId) {
   _ensureMsgIndex(viewEl);
-  return viewEl?._ym?.myReactions?.get(messageId) || null;
+  const key = _roomMsgIdKey(messageId);
+  return key ? (viewEl?._ym?.myReactions?.get(key) || null) : null;
 }
 
 function _setMyReaction(viewEl, messageId, emojiOrNull) {
   _ensureMsgIndex(viewEl);
   if (!viewEl?._ym?.myReactions) return;
 
-  if (emojiOrNull) viewEl._ym.myReactions.set(messageId, emojiOrNull);
-  else viewEl._ym.myReactions.delete(messageId);
+  const key = _roomMsgIdKey(messageId);
+  if (!key) return;
+  if (emojiOrNull) viewEl._ym.myReactions.set(key, emojiOrNull);
+  else viewEl._ym.myReactions.delete(key);
 
   const msgEl = _findMsgEl(viewEl, messageId);
   if (!msgEl) return;
@@ -98,8 +145,10 @@ function _lockReactions(viewEl, messageId) {
 function _setRoomPinnedMessage(viewEl, messageId, pinPayload) {
   _ensureMsgIndex(viewEl);
   if (!viewEl?._ym) return;
-  const currentPinned = viewEl._ym.pinnedMessageId || null;
-  if (currentPinned && currentPinned !== messageId) {
+  const messageKey = _roomMsgIdKey(messageId);
+  if (!messageKey) return;
+  const currentPinned = _roomMsgIdKey(viewEl._ym.pinnedMessageId || null);
+  if (currentPinned && currentPinned !== messageKey) {
     const oldEl = _findMsgEl(viewEl, currentPinned);
     if (oldEl) {
       oldEl.classList.remove("ec-msgItem--pinned");
@@ -107,7 +156,8 @@ function _setRoomPinnedMessage(viewEl, messageId, pinPayload) {
       oldEl.querySelectorAll(".pinRoomBtn").forEach((b) => { b.textContent = "📌 Pin"; });
     }
   }
-  viewEl._ym.pinnedMessageId = messageId || null;
+  viewEl._ym.pinnedMessageId = messageKey || null;
+  viewEl._ym.pinnedPayload = pinPayload ? { ...pinPayload } : null;
   const msgEl = _findMsgEl(viewEl, messageId);
   if (!msgEl) return;
   msgEl.classList.add("ec-msgItem--pinned");
@@ -127,9 +177,12 @@ function _setRoomPinnedMessage(viewEl, messageId, pinPayload) {
 function _clearRoomPinnedMessage(viewEl, messageId) {
   _ensureMsgIndex(viewEl);
   if (!viewEl?._ym) return;
-  if (messageId && viewEl._ym.pinnedMessageId && viewEl._ym.pinnedMessageId !== messageId) return;
-  const oldId = messageId || viewEl._ym.pinnedMessageId;
+  const messageKey = _roomMsgIdKey(messageId);
+  const pinnedKey = _roomMsgIdKey(viewEl._ym.pinnedMessageId);
+  if (messageKey && pinnedKey && pinnedKey !== messageKey) return;
+  const oldId = messageKey || pinnedKey;
   viewEl._ym.pinnedMessageId = null;
+  viewEl._ym.pinnedPayload = null;
   const msgEl = _findMsgEl(viewEl, oldId);
   if (!msgEl) return;
   msgEl.classList.remove("ec-msgItem--pinned");
@@ -158,17 +211,17 @@ function _sendRoomUnpin(viewEl, room, messageId) {
 function _renderReactionPills(container, counts) {
   if (!container) return;
   container.replaceChildren();
-  if (!counts) return;
+  const normalized = _normalizeRoomReactionCounts(counts);
 
-  // Stable ordering: show default emojis first, then any others the server sends.
-  const keys = Object.keys(counts);
+  // Stable ordering: show default emojis first, then any other sanitized server emojis.
+  const keys = Object.keys(normalized);
   const ordered = [
     ...DEFAULT_REACTION_EMOJIS.filter(e => keys.includes(e)),
     ...keys.filter(e => !DEFAULT_REACTION_EMOJIS.includes(e)).sort()
   ];
 
   ordered.forEach((emoji) => {
-    const n = counts[emoji];
+    const n = normalized[emoji];
     if (!n) return;
     const pill = document.createElement("span");
     pill.className = "reactPill";
@@ -190,9 +243,10 @@ function _sendReaction(viewEl, room, messageId, emoji) {
   socket.emit("react_to_message", { room, message_id: messageId, emoji }, (res) => {
     if (!res?.success) {
       if (res?.counts) {
+        _storeRoomReactionCounts(viewEl, messageId, res.counts);
         const msgEl = _findMsgEl(viewEl, messageId);
         const rx = msgEl?.querySelector(".msgReactions");
-        if (rx) _renderReactionPills(rx, res.counts);
+        if (rx) _renderReactionPills(rx, _getRoomReactionCounts(viewEl, messageId));
       }
       if (res?.current) {
         _setMyReaction(viewEl, messageId, res.current);
@@ -210,7 +264,10 @@ function _sendReaction(viewEl, room, messageId, emoji) {
     const msgEl = _findMsgEl(viewEl, messageId);
     if (msgEl) {
       const rx = msgEl.querySelector(".msgReactions");
-      if (rx && res?.counts) _renderReactionPills(rx, res.counts);
+      if (rx && res?.counts) {
+        _storeRoomReactionCounts(viewEl, messageId, res.counts);
+        _renderReactionPills(rx, _getRoomReactionCounts(viewEl, messageId));
+      }
     }
   });
 }
@@ -220,12 +277,35 @@ function appendRoomMessage(viewEl, payload) {
   if (!log) return;
 
   const username = payload?.username || "";
+  if (typeof ecRoomShouldHideBlockedSender === "function" && ecRoomShouldHideBlockedSender(username)) return null;
   const message = payload?.message ?? "";
   const room = payload?.room || UIState.currentRoom || null;
   const tsMs = normalizeChatTs(payload?.timestamp || payload?.ts || payload?.created_at || payload?.createdAt);
 
-  const messageId = payload?.message_id || payload?.messageId || payload?.id || `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const messageId = _roomMsgIdKey(payload?.message_id || payload?.messageId || payload?.id || `local-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   _ensureMsgIndex(viewEl);
+
+  // Reconnect/history can replay a room message that was already appended live.
+  // Do not duplicate the visible row; refresh dynamic state instead.
+  const existing = _findMsgEl(viewEl, messageId);
+  if (existing) {
+    const incomingCounts = payload?.reaction_counts || payload?.reactions || payload?.counts || null;
+    if (incomingCounts) {
+      _storeRoomReactionCounts(viewEl, messageId, incomingCounts);
+      const rx = existing.querySelector(".msgReactions");
+      if (rx) _renderReactionPills(rx, _getRoomReactionCounts(viewEl, messageId));
+    }
+    const myReactionExisting = payload?.my_reaction || payload?.current_reaction || null;
+    if (myReactionExisting) {
+      _setMyReaction(viewEl, messageId, myReactionExisting);
+      _lockReactions(viewEl, messageId);
+    }
+    if (viewEl._ym.pinnedMessageId && _roomMsgIdKey(viewEl._ym.pinnedMessageId) === messageId) {
+      _setRoomPinnedMessage(viewEl, messageId, viewEl._ym.pinnedPayload || {});
+    }
+    _scheduleRoomMessageExpiry(viewEl, messageId, payload);
+    return existing;
+  }
 
   const group = getOrCreateChatGroup(log, username ? String(username) : "?", tsMs, { variant: "room", context: "room" });
   if (!group?.itemsEl) return;
@@ -235,91 +315,20 @@ function appendRoomMessage(viewEl, payload) {
   item.dataset.msgid = messageId;
 
   // Content
+  const renderedKind = (typeof ecClassifyChatMessageKind === "function") ? ecClassifyChatMessageKind(message) : "text";
+  item.classList.add(`ec-msgItem--${renderedKind}`);
+
   const contentWrap = document.createElement("div");
   contentWrap.className = "ec-msgContent";
-
-  let _ecObj = null;
-  if (typeof message === "string" && message.startsWith("{")) {
-    try { _ecObj = JSON.parse(message); } catch { _ecObj = null; }
+  contentWrap.dataset.messageKind = renderedKind;
+  if (["torrent", "gif", "media", "room-radio"].includes(renderedKind)) {
+    contentWrap.classList.add("ec-msgContent--rich");
   }
 
-  if (_ecObj && _ecObj._ec === "torrent") {
-    const t = {
-      name: String(_ecObj.name || _ecObj.file_name || "Torrent"),
-      infohash: String(_ecObj.infohash || _ecObj.infohash_hex || ""),
-      magnet: String(_ecObj.magnet || ""),
-      total_size: Number(_ecObj.total_size || 0) || 0,
-      seeds: (_ecObj.seeds === null || _ecObj.seeds === undefined) ? null : Number(_ecObj.seeds),
-      leechers: (_ecObj.leechers === null || _ecObj.leechers === undefined) ? null : Number(_ecObj.leechers),
-      completed: (_ecObj.completed === null || _ecObj.completed === undefined) ? null : Number(_ecObj.completed),
-      trackers: Array.isArray(_ecObj.trackers) ? _ecObj.trackers.map(String) : [],
-      tracker_count: Number(_ecObj.tracker_count || (Array.isArray(_ecObj.trackers) ? _ecObj.trackers.length : 0) || 0),
-      declared_tracker_count: Number(_ecObj.declared_tracker_count || 0),
-      tracker_source: _ecObj.tracker_source ? String(_ecObj.tracker_source) : "torrent",
-      using_public_fallback_trackers: !!_ecObj.using_public_fallback_trackers,
-      web_seeds: Array.isArray(_ecObj.web_seeds) ? _ecObj.web_seeds.map(String) : [],
-      web_seed_count: Number(_ecObj.web_seed_count || (Array.isArray(_ecObj.web_seeds) ? _ecObj.web_seeds.length : 0) || 0),
-      scrape_status: _ecObj.scrape_status ? String(_ecObj.scrape_status) : "",
-      scrape_error: _ecObj.scrape_error ? String(_ecObj.scrape_error) : "",
-      swarm_deferred: !!_ecObj.swarm_deferred,
-      trackers_tried: Number(_ecObj.trackers_tried || 0),
-      dht_queries: Number(_ecObj.dht_queries || 0),
-      dht_peers_seen: Number(_ecObj.dht_peers_seen || 0),
-      comment: _ecObj.comment ? String(_ecObj.comment) : "",
-      created_by: _ecObj.created_by ? String(_ecObj.created_by) : "",
-      creation_date: _ecObj.creation_date ? String(_ecObj.creation_date) : "",
-      torrent_id: _ecObj.torrent_id ? String(_ecObj.torrent_id) : "",
-      file_name: _ecObj.file_name ? String(_ecObj.file_name) : "",
-      download_url: _ecObj.download_url ? String(_ecObj.download_url) : ""
-    };
-    contentWrap.appendChild(buildTorrentCard(t));
-  } else if (_ecObj && _ecObj._ec === "room_radio") {
-    const station = roomMediaHandleWire(_ecObj);
-    const card = document.createElement('div');
-    card.className = 'ecRoomRadioWireCard';
-    const title = document.createElement('div');
-    title.className = 'ecRoomRadioWireTitle';
-    title.textContent = '🎵 Shared radio updated';
-    const meta = document.createElement('div');
-    meta.className = 'ecRoomRadioWireMeta';
-    meta.textContent = `${String(_ecObj.actor || username || 'Someone')} switched this room to ${String(station?.label || 'a new station')}.`;
-    card.appendChild(title);
-    card.appendChild(meta);
-    contentWrap.appendChild(card);
-  } else if (typeof message === "string" && isMagnetText(message)) {
-    const pm = parseMagnet(message);
-    if (pm) {
-      const t = {
-        name: pm.name || "Magnet",
-        infohash: pm.infohash,
-        magnet: pm.magnet,
-        total_size: 0,
-        seeds: null,
-        leechers: null,
-        completed: null,
-        trackers: pm.trackers || [],
-        declared_tracker_count: Number(pm.declared_tracker_count || 0),
-        tracker_count: Number(pm.tracker_count || (pm.trackers || []).length || 0),
-        tracker_source: pm.tracker_source || (pm.using_public_fallback_trackers ? "public_fallback" : "magnet"),
-        using_public_fallback_trackers: !!pm.using_public_fallback_trackers,
-        swarm_deferred: true,
-        web_seeds: Array.isArray(pm.web_seeds) ? pm.web_seeds : [],
-        web_seed_count: Number(pm.web_seed_count || 0),
-        scrape_status: "pending",
-        scrape_error: "",
-        trackers_tried: 0,
-        comment: "",
-        created_by: "",
-        creation_date: "",
-        download_url: ""
-      };
-      contentWrap.appendChild(buildTorrentCard(t));
-    } else {
-      contentWrap.appendChild(buildTextMessageBody(message, { autoScrollLog: log }));
-    }
-  } else {
-    contentWrap.appendChild(buildTextMessageBody(message, { autoScrollLog: log }));
-  }
+  const body = (typeof ecBuildRoomMessageBody === "function")
+    ? ecBuildRoomMessageBody(message, { autoScrollLog: log, username })
+    : buildTextMessageBody(message, { autoScrollLog: log, username });
+  contentWrap.appendChild(body);
 
   const line = document.createElement("div");
   line.className = "msgLine";
@@ -367,6 +376,13 @@ function appendRoomMessage(viewEl, payload) {
     actions.appendChild(unpinBtn);
   }
 
+  const initialCounts = payload?.reaction_counts || payload?.reactions || payload?.counts || null;
+  if (initialCounts) _storeRoomReactionCounts(viewEl, messageId, initialCounts);
+  const effectiveCounts = _getRoomReactionCounts(viewEl, messageId);
+  if (effectiveCounts && Object.keys(effectiveCounts).length) _renderReactionPills(rx, effectiveCounts);
+  const myReaction = payload?.my_reaction || payload?.current_reaction || null;
+  if (myReaction) _setMyReaction(viewEl, messageId, myReaction);
+
   reactionWrap.appendChild(rx);
   reactionWrap.appendChild(actions);
   contentWrap.appendChild(reactionWrap);
@@ -377,6 +393,13 @@ function appendRoomMessage(viewEl, payload) {
   group.itemsEl.appendChild(item);
   try { window.ecAnimateMessageOnce?.(item, 'room'); } catch {}
   viewEl._ym.msgIndex.set(messageId, item);
+  if (viewEl._ym.pinnedMessageId && _roomMsgIdKey(viewEl._ym.pinnedMessageId) === messageId) {
+    _setRoomPinnedMessage(viewEl, messageId, viewEl._ym.pinnedPayload || {});
+  }
+  if (myReaction) {
+    _setMyReaction(viewEl, messageId, myReaction);
+    _lockReactions(viewEl, messageId);
+  }
   _scheduleRoomMessageExpiry(viewEl, messageId, payload);
 
   const media = item.querySelector('img[data-ec-gif="1"]');

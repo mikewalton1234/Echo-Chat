@@ -121,6 +121,14 @@ function voiceDmCleanup(peer, reason = "") {
 }
 
 async function voiceStartDmCall(peer) {
+  peer = String(peer || "").trim();
+  if (!peer) return;
+  if (typeof voiceActionBusy === "function" && voiceActionBusy("dm", peer)) return;
+  if (typeof voiceWithBusy === "function") return voiceWithBusy("dm", peer, async () => voiceStartDmCallUnlocked(peer));
+  return voiceStartDmCallUnlocked(peer);
+}
+
+async function voiceStartDmCallUnlocked(peer) {
   if (!VOICE_ENABLED) return toast("🎤 Voice is disabled on this server", "warn");
   // Ensure DM window exists
   openPrivateChat(peer);
@@ -164,6 +172,14 @@ async function voiceStartDmCall(peer) {
 }
 
 async function voiceAcceptDmCall(peer) {
+  peer = String(peer || "").trim();
+  if (!peer) return;
+  if (typeof voiceActionBusy === "function" && voiceActionBusy("dm", peer)) return;
+  if (typeof voiceWithBusy === "function") return voiceWithBusy("dm", peer, async () => voiceAcceptDmCallUnlocked(peer));
+  return voiceAcceptDmCallUnlocked(peer);
+}
+
+async function voiceAcceptDmCallUnlocked(peer) {
   const call = VOICE_STATE.dmCalls.get(peer);
   if (!call || call.state !== "incoming") return;
   try {
@@ -199,11 +215,22 @@ async function voiceAcceptDmCall(peer) {
 }
 
 function voiceDeclineDmCall(peer, reason = "Declined") {
-  const call = VOICE_STATE.dmCalls.get(peer);
-  if (!call) return;
-  call.ending = true;
-  socket.emit("voice_dm_decline", { to: peer, call_id: call.call_id, reason }, () => {});
-  voiceDmCleanup(peer, reason);
+  peer = String(peer || "").trim();
+  if (!peer) return;
+  const run = () => {
+    const call = VOICE_STATE.dmCalls.get(peer);
+    if (!call) return;
+    call.ending = true;
+    socket.emit("voice_dm_decline", { to: peer, call_id: call.call_id, reason }, () => {});
+    voiceDmCleanup(peer, reason);
+  };
+  if (typeof voiceActionBusy === "function" && voiceActionBusy("dm", peer)) return;
+  if (typeof voiceSetActionBusy === "function") {
+    voiceSetActionBusy("dm", peer, true);
+    try { run(); } finally { setTimeout(() => voiceSetActionBusy("dm", peer, false), 250); }
+    return;
+  }
+  run();
 }
 
 async function voiceToggleDmMain(peer) {
@@ -220,11 +247,22 @@ async function voiceToggleDmMain(peer) {
 }
 
 function voiceHangupDm(peer, reason = "Ended", notifyPeer = true) {
-  const call = VOICE_STATE.dmCalls.get(peer);
-  if (!call) return;
-  call.ending = true;
-  if (notifyPeer) socket.emit("voice_dm_end", { to: peer, call_id: call.call_id, reason }, () => {});
-  voiceDmCleanup(peer, reason);
+  peer = String(peer || "").trim();
+  if (!peer) return;
+  const run = () => {
+    const call = VOICE_STATE.dmCalls.get(peer);
+    if (!call) return;
+    call.ending = true;
+    if (notifyPeer) socket.emit("voice_dm_end", { to: peer, call_id: call.call_id, reason }, () => {});
+    voiceDmCleanup(peer, reason);
+  };
+  if (typeof voiceActionBusy === "function" && voiceActionBusy("dm", peer)) return;
+  if (typeof voiceSetActionBusy === "function") {
+    voiceSetActionBusy("dm", peer, true);
+    try { run(); } finally { setTimeout(() => voiceSetActionBusy("dm", peer, false), 250); }
+    return;
+  }
+  run();
 }
 
 function voiceToggleMuteDm(peer) {

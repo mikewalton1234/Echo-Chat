@@ -31,20 +31,11 @@ function bindDockMenus() {
 let EC_USER_CTX_MENU = null;
 
 function ecCtxSameUser(a, b) {
-  return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+  return ecNormalizeUsernameKey(a) === ecNormalizeUsernameKey(b);
 }
 
 function ecCtxUserSetHas(setLike, username) {
-  const u = String(username || '').trim();
-  if (!u || !setLike || typeof setLike.has !== 'function') return false;
-  if (setLike.has(u)) return true;
-  const lc = u.toLowerCase();
-  try {
-    for (const value of setLike) {
-      if (ecCtxSameUser(value, lc)) return true;
-    }
-  } catch {}
-  return false;
+  return ecUserSetHasName(setLike, username);
 }
 
 function ecCtxRoomUsersContain(room, username) {
@@ -276,6 +267,72 @@ function showUserContextMenu(ev, username, opts = {}) {
   menu.style.top = `${top}px`;
 }
 
+
+function ecRemoveLocalBlockedUserEverywhere(username) {
+  const raw = String(username || '').replace(/\s+/g, ' ').trim();
+  const key = (typeof ecNormalizeUsernameKey === 'function') ? ecNormalizeUsernameKey(raw) : raw.toLowerCase();
+  if (!key) return false;
+  let changed = false;
+  try {
+    const oldSet = (UIState.blockedSet instanceof Set) ? UIState.blockedSet : new Set();
+    const next = new Set();
+    oldSet.forEach((value) => {
+      const item = String(value || '').replace(/\s+/g, ' ').trim();
+      const itemKey = (typeof ecNormalizeUsernameKey === 'function') ? ecNormalizeUsernameKey(item) : item.toLowerCase();
+      if (itemKey === key) {
+        changed = true;
+        return;
+      }
+      if (item) next.add(item);
+    });
+    UIState.blockedSet = next;
+  } catch {
+    try { UIState.blockedSet = new Set(); } catch {}
+  }
+  try {
+    if (Array.isArray(UIState.blockedUsersCache)) {
+      const before = UIState.blockedUsersCache.length;
+      UIState.blockedUsersCache = UIState.blockedUsersCache.filter((value) => {
+        const itemKey = (typeof ecNormalizeUsernameKey === 'function')
+          ? ecNormalizeUsernameKey(value)
+          : String(value || '').trim().toLowerCase();
+        return itemKey !== key;
+      });
+      if (UIState.blockedUsersCache.length !== before) changed = true;
+    }
+  } catch {}
+  try {
+    const cacheKey = key;
+    if (typeof RSA_PUBKEY_CACHE !== 'undefined' && RSA_PUBKEY_CACHE?.delete) RSA_PUBKEY_CACHE.delete(cacheKey);
+  } catch {}
+  try {
+    const blockedCountEl = $('blockedUsersCount');
+    if (blockedCountEl && UIState.blockedSet instanceof Set) blockedCountEl.textContent = String(UIState.blockedSet.size);
+  } catch {}
+  try { updateDockSummaryCounts?.(); } catch {}
+  try { if (typeof rbRenderRoomLists === 'function' && typeof rbHasUI === 'function' && rbHasUI()) rbRenderRoomLists(); } catch {}
+  return changed;
+}
+
+function ecRefreshCurrentRoomAfterBlockStateChange(peer, reason = 'block_state_change') {
+  const room = String(UIState?.currentRoom || UIState?.roomEmbedRoom || '').trim();
+  if (!room) return;
+  try { if (typeof getUsersInRoom === 'function') getUsersInRoom(room); } catch {}
+  try {
+    if (typeof requestRoomUsers === 'function') {
+      requestRoomUsers(room, 2200).catch(() => {});
+    }
+  } catch {}
+  try {
+    if (reason === 'unblock' && typeof ecScheduleRoomRosterSelfHeal === 'function') {
+      ecScheduleRoomRosterSelfHeal(room, 'unblock');
+    }
+  } catch {}
+  try {
+    if (typeof ecClearRoomTyping === 'function' && peer) ecClearRoomTyping(room, peer);
+  } catch {}
+}
+
 function getBlockConfirmMessage(username) {
   const u = String(username || '').trim();
   const isFriend = ecCtxUserSetHas(UIState.friendSet, u);
@@ -315,6 +372,26 @@ function blockUserWithPrompt(username, opts = {}) {
       let msg = `🚫 Blocked ${canonicalBlocked}`;
       if (details.length) msg += ` and ${details.join(', ')}`;
       toast(res?.success ? msg : `❌ ${res?.error || "Block failed"}`, res?.success ? "ok" : "error");
+      if (res?.success) {
+        // Apply the local block immediately. Waiting for the next blocked-users
+        // refresh can leave a blocked room user in the outbound E2EE recipient
+        // list long enough to fail the next room send with "missing public keys".
+        try {
+          if (!(UIState.blockedSet instanceof Set)) UIState.blockedSet = new Set();
+          UIState.blockedSet.add(canonicalBlocked);
+          UIState.blockedSet.add(String(canonicalBlocked || '').trim().toLowerCase());
+        } catch {}
+        try {
+          if (typeof RSA_PUBKEY_CACHE !== 'undefined' && RSA_PUBKEY_CACHE?.delete) {
+            RSA_PUBKEY_CACHE.delete(String(canonicalBlocked || '').trim().toLowerCase());
+          }
+        } catch {}
+        try {
+          if (typeof ecPruneRoomMessagesFromBlockedUser === 'function') ecPruneRoomMessagesFromBlockedUser(canonicalBlocked);
+          if (typeof ecClearRoomTyping === 'function') ecClearRoomTyping(UIState.currentRoom, canonicalBlocked);
+        } catch {}
+        ecRefreshCurrentRoomAfterBlockStateChange(canonicalBlocked, 'block');
+      }
       if (res?.success && typeof cleanupBlockedPairAlerts === 'function') cleanupBlockedPairAlerts(canonicalBlocked, { refresh: true });
       getFriends();
       getPendingFriendRequests();
@@ -458,7 +535,12 @@ async function handleUserContextAction(action, username, opts = {}) {
     if (u === currentUser) return;
     socket.emit("unblock_user", { blocked: u }, (res) => {
       const canonicalBlocked = String(res?.blocked || u).trim() || u;
-      toast(res?.success ? `↩ Unblocked ${canonicalBlocked}` : `❌ ${res?.error || "Unblock failed"}`, res?.success ? "ok" : "error");
+      const localOk = !!res?.success || /not\s*blocked/i.test(String(res?.error || ''));
+      toast(res?.success ? `↩ Unblocked ${canonicalBlocked}` : localOk ? `↩ ${canonicalBlocked} is already unblocked` : `❌ ${res?.error || "Unblock failed"}`, localOk ? "ok" : "error");
+      if (localOk) {
+        ecRemoveLocalBlockedUserEverywhere(canonicalBlocked);
+        ecRefreshCurrentRoomAfterBlockStateChange(canonicalBlocked, 'unblock');
+      }
       getFriends();
       getPendingFriendRequests();
       getBlockedUsers();

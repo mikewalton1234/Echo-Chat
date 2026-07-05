@@ -255,3 +255,211 @@ function ecOpenSafeUrl(raw, opts = {}) {
   }
   return false;
 }
+
+// ───────────────────────────────────────────────────────────────────────────────
+// Optimistic composer clearing
+// ───────────────────────────────────────────────────────────────────────────────
+let EC_COMPOSER_OPTIMISTIC_SEND_SEQ = 0;
+
+function ecComposerPendingCount(input) {
+  try {
+    const active = input?._ecComposerOptimisticTokens;
+    const tokenCount = active && typeof active.size === 'number' ? Number(active.size || 0) : 0;
+    return Math.max(tokenCount, Number(input?._ecComposerPendingCount || 0));
+  } catch {
+    return 0;
+  }
+}
+
+function ecComposerStopTypingAfterClear(input) {
+  if (!input) return;
+  try {
+    if (typeof ecConversationTypingStop === 'function' && input._ecTypingSurface) {
+      ecConversationTypingStop(input, { force: true });
+    }
+  } catch {}
+  try {
+    if (typeof ecRoomTypingStop === 'function' && input._ecTypingRoom) {
+      ecRoomTypingStop(input._ecTypingRoom, input, { force: true });
+    }
+  } catch {}
+}
+
+function ecComposerFailedDrafts(input) {
+  if (!input) return [];
+  try {
+    if (!Array.isArray(input._ecFailedDrafts)) input._ecFailedDrafts = [];
+    return input._ecFailedDrafts;
+  } catch {
+    return [];
+  }
+}
+
+function ecComposerMarkFailedDraftState(input) {
+  if (!input) return;
+  try {
+    const drafts = ecComposerFailedDrafts(input);
+    if (drafts.length) {
+      input.setAttribute('data-ec-failed-draft', '1');
+      input.setAttribute('aria-description', 'A failed message draft is saved. Press Control plus Arrow Up to restore it.');
+    } else {
+      input.removeAttribute('data-ec-failed-draft');
+      input.removeAttribute('aria-description');
+    }
+  } catch {}
+}
+
+function ecComposerSaveFailedDraft(input, draft, reason = '', token = '') {
+  if (!input) return;
+  try {
+    const text = String(draft ?? '');
+    if (!text) return;
+    const drafts = ecComposerFailedDrafts(input);
+    drafts.push({ text, reason: String(reason || ''), token: String(token || ''), savedAt: Date.now() });
+    while (drafts.length > 5) drafts.shift();
+    input._ecLastFailedDraft = text;
+    ecComposerMarkFailedDraftState(input);
+    if (typeof toast === 'function') {
+      const suffix = reason ? ` ${reason}` : '';
+      toast(`Send failed; original draft was saved. Press Ctrl+↑ in the composer to restore it.${suffix}`, 'warn', 6500, {
+        event: 'composer_restore',
+        dedupeKey: `composer-restore:${token || Date.now()}`
+      });
+    }
+  } catch {}
+}
+
+function ecComposerRestoreSavedFailedDraft(input, opts = {}) {
+  if (!input) return false;
+  try {
+    if (String(input.value || '').trim() && !opts.force) return false;
+    const drafts = ecComposerFailedDrafts(input);
+    const entry = drafts.pop();
+    if (!entry?.text) {
+      ecComposerMarkFailedDraftState(input);
+      return false;
+    }
+    input.value = String(entry.text || '');
+    ecComposerMarkFailedDraftState(input);
+    try { input.dispatchEvent(new Event('input', { bubbles: true })); } catch {}
+    try { input.focus(); if (opts.select !== false) input.select?.(); } catch {}
+    if (typeof toast === 'function') toast('Restored failed draft.', 'info', 2600, { event: 'composer_restore_saved' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function ecComposerBindFailedDraftShortcut(input) {
+  if (!input || input._ecFailedDraftShortcutBound) return;
+  input._ecFailedDraftShortcutBound = true;
+  input.addEventListener('keydown', (ev) => {
+    try {
+      if ((ev.ctrlKey || ev.metaKey) && ev.key === 'ArrowUp') {
+        if (ecComposerRestoreSavedFailedDraft(input, { select: true })) {
+          ev.preventDefault();
+          ev.stopPropagation();
+        }
+      }
+    } catch {}
+  });
+}
+
+function ecComposerBeginOptimisticSend(input, opts = {}) {
+  const original = String(opts.text !== undefined ? opts.text : (input?.value ?? ''));
+  const token = `send-${Date.now()}-${++EC_COMPOSER_OPTIMISTIC_SEND_SEQ}`;
+  const button = opts.button || null;
+
+  const finishInput = () => {
+    if (!input) return;
+    try {
+      const active = input._ecComposerOptimisticTokens;
+      if (active && typeof active.delete === 'function') active.delete(token);
+      input._ecComposerPendingCount = Math.max(0, Number(input._ecComposerPendingCount || 0) - 1);
+      const hasPending = ecComposerPendingCount(input) > 0;
+      if (!hasPending) {
+        input.classList.remove('ecComposerSending');
+        input.removeAttribute('aria-busy');
+        input.removeAttribute('data-ec-sending');
+      }
+      return hasPending;
+    } catch {}
+    return false;
+  };
+
+  const finishButton = () => {
+    if (!button) return false;
+    try {
+      const active = button._ecComposerOptimisticTokens;
+      if (active && typeof active.delete === 'function') active.delete(token);
+      const hasPending = active && active.size > 0;
+      if (!hasPending) {
+        button.classList.remove('ecComposerSending');
+        button.removeAttribute('aria-busy');
+        button.removeAttribute('data-ec-sending');
+      }
+      return !!hasPending;
+    } catch {}
+    return false;
+  };
+
+  try {
+    if (input) {
+      ecComposerBindFailedDraftShortcut(input);
+      if (!input._ecComposerOptimisticTokens) input._ecComposerOptimisticTokens = new Set();
+      input._ecComposerOptimisticTokens.add(token);
+      input._ecComposerPendingCount = Number(input._ecComposerPendingCount || 0) + 1;
+      input._ecLastOptimisticSendToken = token;
+      input._ecLastOptimisticDraft = original;
+      input.value = '';
+      input.classList.add('ecComposerSending');
+      input.setAttribute('aria-busy', 'true');
+      input.setAttribute('data-ec-sending', '1');
+      try { input.dispatchEvent(new Event('input', { bubbles: true })); } catch {}
+      ecComposerStopTypingAfterClear(input);
+      try { input.focus(); } catch {}
+    }
+    if (button) {
+      if (!button._ecComposerOptimisticTokens) button._ecComposerOptimisticTokens = new Set();
+      button._ecComposerOptimisticTokens.add(token);
+      button.classList.add('ecComposerSending');
+      button.setAttribute('aria-busy', 'true');
+      button.setAttribute('data-ec-sending', '1');
+    }
+  } catch {}
+
+  let closed = false;
+  const finish = () => {
+    if (closed) return { hasPendingInput: false, hasPendingButton: false };
+    closed = true;
+    const hasPendingInput = finishInput();
+    const hasPendingButton = finishButton();
+    return { hasPendingInput, hasPendingButton };
+  };
+
+  return {
+    token,
+    original,
+    commit() {
+      finish();
+    },
+    restore(reason = '') {
+      const state = finish();
+      if (!input) return;
+      try {
+        const current = String(input.value || '');
+        const canRestoreNow = !current.trim() && !state.hasPendingInput && (input.isConnected !== false);
+        if (canRestoreNow) {
+          input.value = original;
+          try { input.dispatchEvent(new Event('input', { bubbles: true })); } catch {}
+          try { input.focus(); input.select?.(); } catch {}
+        } else {
+          ecComposerSaveFailedDraft(input, original, reason, token);
+        }
+      } catch {
+        ecComposerSaveFailedDraft(input, original, reason, token);
+      }
+    }
+  };
+}
+

@@ -1,3 +1,69 @@
+
+const VOICE_UI_BUSY = (window.VOICE_UI_BUSY instanceof Set) ? window.VOICE_UI_BUSY : new Set();
+window.VOICE_UI_BUSY = VOICE_UI_BUSY;
+
+function voiceActionKey(name, target = "") {
+  return `${String(name || "voice").trim().toLowerCase()}::${String(target || "").trim().toLowerCase()}`;
+}
+
+function voiceActionBusy(name, target = "") {
+  return VOICE_UI_BUSY.has(voiceActionKey(name, target));
+}
+
+function voiceSetActionBusy(name, target = "", busy = false) {
+  const key = voiceActionKey(name, target);
+  if (busy) VOICE_UI_BUSY.add(key);
+  else VOICE_UI_BUSY.delete(key);
+  try { voiceRefreshBusyUi(); } catch {}
+}
+
+async function voiceWithBusy(name, target = "", fn) {
+  if (voiceActionBusy(name, target)) return { success: false, busy: true, error: "voice_action_busy" };
+  voiceSetActionBusy(name, target, true);
+  try { return await fn(); }
+  finally { voiceSetActionBusy(name, target, false); }
+}
+
+function voiceSetBtnBusy(btn, busy, label) {
+  if (!btn) return;
+  if (busy) {
+    if (!btn.dataset.ecVoiceBusyOriginalText) btn.dataset.ecVoiceBusyOriginalText = btn.textContent || "";
+    if (label) btn.textContent = label;
+    btn.classList.add("isBusy");
+    btn.setAttribute("aria-busy", "true");
+    btn.disabled = true;
+  } else {
+    btn.classList.remove("isBusy");
+    btn.removeAttribute("aria-busy");
+    if (btn.dataset.ecVoiceBusyOriginalText && !label) btn.textContent = btn.dataset.ecVoiceBusyOriginalText;
+    delete btn.dataset.ecVoiceBusyOriginalText;
+  }
+}
+
+function voiceRefreshBusyUi() {
+  try {
+    const room = String(UIState.currentRoom || UIState.roomEmbedRoom || "");
+    const roomVoiceBusy = voiceActionBusy("room", room) || voiceActionBusy("room-voice", room);
+    voiceSetBtnBusy($("btnRoomEmbedVoice"), roomVoiceBusy, "🎤 Voice…");
+    const camBusy = (typeof echoMediaIsBusy === "function") && echoMediaIsBusy("cam", room);
+    voiceSetBtnBusy($("btnRoomEmbedCam"), !!camBusy, "📷 Webcam…");
+  } catch {}
+  try {
+    UIState.windows.forEach((win) => {
+      if (!win || !win._ym) return;
+      if (win.dataset.kind === "pm") {
+        const peer = String(win.dataset.peer || win.dataset.windowTitle || "").trim();
+        const busy = voiceActionBusy("dm", peer) || voiceActionBusy("dm-call", peer) || voiceActionBusy("dm-accept", peer) || voiceActionBusy("dm-end", peer);
+        [win._ym.voiceBtn, win._ym.voiceBtnCall, win._ym.voiceBtnHang, win._ym.voiceBtnAccept, win._ym.voiceBtnDecline].forEach((btn) => voiceSetBtnBusy(btn, busy, btn === win._ym.voiceBtn ? "🎤…" : null));
+      }
+      if (win.dataset.kind === "group") {
+        const gid = String(win.dataset.groupId || "").trim();
+        const busy = voiceActionBusy("group", gid);
+        voiceSetBtnBusy(win._ym.groupVoiceBtn, busy, "🎤 Voice…");
+      }
+    });
+  } catch {}
+}
 function voiceSecureContextOk() {
   // getUserMedia requires a secure context (HTTPS) except on localhost.
   const h = (location && location.hostname) || "";
@@ -552,10 +618,18 @@ function voiceDmUi(peer, patch = {}) {
   const handsFree = win._ym.voiceHandsFree || null;
   const bCam = win._ym.voiceBtnCam || null;
 
-  if (bar) bar.classList.remove("hidden");
+  if (bar) {
+    bar.classList.remove("hidden");
+    bar.setAttribute("role", "group");
+    bar.setAttribute("aria-label", "Private voice controls");
+  }
   if (patch.hideBar && bar) bar.classList.add("hidden");
 
-  if (status && patch.statusText !== undefined) status.textContent = patch.statusText;
+  if (status) {
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
+    if (patch.statusText !== undefined) status.textContent = patch.statusText;
+  }
 
   const mode = patch.mode || null; // idle|calling|incoming|active
   if (mode) {
@@ -571,6 +645,13 @@ function voiceDmUi(peer, patch = {}) {
   if (bMute && patch.muteLabel) bMute.textContent = patch.muteLabel;
   if (bCam) bCam.style.display = "none";
   if (bCam && patch.camLabel) bCam.textContent = patch.camLabel;
+  const peerLabel = String(peer || "");
+  if (bCall) bCall.setAttribute("aria-label", `Start voice call with ${peerLabel}`);
+  if (bHang) bHang.setAttribute("aria-label", `Hang up voice call with ${peerLabel}`);
+  if (bMute) bMute.setAttribute("aria-label", VOICE_STATE.micMuted ? "Unmute microphone" : "Mute microphone");
+  if (bAcc) bAcc.setAttribute("aria-label", `Accept voice call from ${peerLabel}`);
+  if (bDec) bDec.setAttribute("aria-label", `Decline voice call from ${peerLabel}`);
+  try { voiceRefreshBusyUi(); } catch {}
 
   // Voice button state
   try { voiceUpdateDmVoiceButton(peer); } catch (e) {}
@@ -584,20 +665,29 @@ function voiceUpdateDmVoiceButton(peer) {
   if (!call) {
     win._ym.voiceBtn.textContent = "🎤";
     win._ym.voiceBtn.title = "Voice chat — click to call (hands‑free)";
+    win._ym.voiceBtn.setAttribute("aria-pressed", "false");
+    win._ym.voiceBtn.setAttribute("aria-label", `Start voice call with ${peer}`);
     return;
   }
   if (call.state === "incoming") {
     win._ym.voiceBtn.textContent = "📞";
     win._ym.voiceBtn.title = "Incoming voice — click to accept • Decline button in bar";
+    win._ym.voiceBtn.setAttribute("aria-pressed", "false");
+    win._ym.voiceBtn.setAttribute("aria-label", `Accept incoming voice call from ${peer}`);
     return;
   }
   if (VOICE_STATE.micMuted) {
     win._ym.voiceBtn.textContent = "🔇";
     win._ym.voiceBtn.title = "Voice is on (muted) — click to hang up • right‑click to unmute";
+    win._ym.voiceBtn.setAttribute("aria-pressed", "true");
+    win._ym.voiceBtn.setAttribute("aria-label", `Voice call with ${peer} is muted; click to hang up`);
   } else {
     win._ym.voiceBtn.textContent = "📞";
     win._ym.voiceBtn.title = "Voice is on — click to hang up • right‑click to mute";
+    win._ym.voiceBtn.setAttribute("aria-pressed", "true");
+    win._ym.voiceBtn.setAttribute("aria-label", `Voice call with ${peer} is active; click to hang up`);
   }
+  try { voiceRefreshBusyUi(); } catch {}
 }
 
 function voiceShowRoomFull(room, payload = {}) {
@@ -626,7 +716,11 @@ function voiceRoomUi(patch = {}) {
     if (patch.show === true) bar.classList.remove("hidden");
     if (patch.show === false) bar.classList.add("hidden");
   }
-  if (status && patch.statusText !== undefined) status.textContent = patch.statusText;
+  if (status) {
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
+    if (patch.statusText !== undefined) status.textContent = patch.statusText;
+  }
   if (bJoin) bJoin.style.display = patch.joinVisible === false ? "none" : "";
   if (bLeave) bLeave.style.display = patch.leaveVisible === false ? "none" : "";
   if (bMute) bMute.style.display = patch.muteVisible === false ? "none" : "";
@@ -646,6 +740,8 @@ function voiceUpdateRoomVoiceButton() {
     btn.style.display = "";
     const active = !!(media.voiceDesired || media.micEnabled);
     btn.classList.toggle("active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+    btn.setAttribute("aria-label", active ? "Turn off room voice" : "Turn on room voice");
     if (!active) {
       btn.textContent = "🎤 Voice";
       btn.title = "Turn on microphone voice for this room";
@@ -667,10 +763,14 @@ function voiceUpdateRoomVoiceButton() {
     btn.textContent = "🎤 Voice";
     btn.title = "Voice chat (room) — click to join (hands-free)";
     btn.classList.remove("active");
+    btn.setAttribute("aria-pressed", "false");
+    btn.setAttribute("aria-label", "Turn on room voice");
     try { voiceUpdateRoomCamButton(); } catch {}
     return;
   }
   btn.classList.add("active");
+  btn.setAttribute("aria-pressed", "true");
+  btn.setAttribute("aria-label", "Turn off room voice");
   if (VOICE_STATE.micMuted) {
     btn.textContent = "🔇 Voice";
     btn.title = "Voice is on (muted) — click to disable voice • right-click to unmute";
@@ -687,6 +787,8 @@ function voiceUpdateRoomCamButton() {
   if (!ecMediaModeReady()) {
     btn.classList.add("hidden");
     btn.classList.remove("active");
+    btn.setAttribute("aria-pressed", "false");
+    btn.setAttribute("aria-label", "Webcam is unavailable");
     return;
   }
   btn.classList.remove("hidden");
@@ -697,11 +799,15 @@ function voiceUpdateRoomCamButton() {
     btn.classList.remove("active");
     btn.textContent = "📷 Webcam";
     btn.title = (typeof ecMediaWebcamUnavailableReason === "function") ? ecMediaWebcamUnavailableReason() : "Webcam is not available.";
+    btn.setAttribute("aria-pressed", "false");
+    btn.setAttribute("aria-label", btn.title || "Webcam is unavailable");
     return;
   }
   const media = ecMediaStateSnapshot();
   const active = !!(media.camDesired || media.camEnabled);
   btn.classList.toggle("active", active);
+  btn.setAttribute("aria-pressed", active ? "true" : "false");
+  btn.setAttribute("aria-label", active ? "Turn off your webcam" : "Turn on your webcam");
   if (!active) {
     btn.textContent = "📷 Webcam";
     btn.title = "Turn on your webcam for this room";

@@ -6,13 +6,14 @@ function rbRowsForScope() {
   if (scope === 'custom') return { rows: custom, sections: [{ key: 'custom', label: 'Custom rooms', rows: custom }] };
   if (scope === 'current') {
     const roomName = String(UIState.currentRoom || '').trim();
-    const storedCurrent = (ROOM_BROWSER.recentRooms || []).find((r) => String(r?.name || '') === roomName)
-      || (ROOM_BROWSER.favoriteRooms || []).find((r) => String(r?.name || '') === roomName)
-      || (ROOM_BROWSER.customRooms || []).find((r) => String(r?.name || '') === roomName)
+    const roomNameKey = rbRoomNameKey(roomName);
+    const storedCurrent = (ROOM_BROWSER.recentRooms || []).find((r) => rbRoomNameKey(r?.name) === roomNameKey)
+      || (ROOM_BROWSER.favoriteRooms || []).find((r) => rbRoomNameKey(r?.name) === roomNameKey)
+      || (ROOM_BROWSER.customRooms || []).find((r) => rbRoomNameKey(r?.name) === roomNameKey)
       || null;
     const row = roomName ? (rbBuildRow(roomName, {
-      isCustom: !!(storedCurrent?.isCustom || storedCurrent?.is_private || (ROOM_BROWSER.selectedRoomIsCustom && ROOM_BROWSER.selectedRoom === roomName)),
-      meta: ROOM_BROWSER.selectedRoom === roomName ? ROOM_BROWSER.selectedRoomMeta : storedCurrent,
+      isCustom: !!(storedCurrent?.isCustom || storedCurrent?.is_private || (ROOM_BROWSER.selectedRoomIsCustom && rbSameRoomName(ROOM_BROWSER.selectedRoom, roomName))),
+      meta: rbSameRoomName(ROOM_BROWSER.selectedRoom, roomName) ? ROOM_BROWSER.selectedRoomMeta : storedCurrent,
       category: storedCurrent?.category || null,
       subcategory: storedCurrent?.subcategory || null,
     }) || rbBuildRow(roomName, { isCustom: false })) : null;
@@ -33,12 +34,19 @@ function rbRowsForScope() {
   }
   if (scope === 'unread') {
     const unreadEntries = Array.from(ROOM_BROWSER.unreadCounts.entries()).filter(([, count]) => Number(count || 0) > 0).map(([name]) => ({ name }));
-    let rows = unreadEntries.map((entry) => rbBuildRow(entry.name, {
-      isCustom: !!(ROOM_BROWSER.favoriteRooms.find((f) => String(f?.name || '') === entry.name)?.isCustom),
-      meta: ROOM_BROWSER.favoriteRooms.find((f) => String(f?.name || '') === entry.name) || ROOM_BROWSER.recentRooms.find((f) => String(f?.name || '') === entry.name) || null,
-      category: ROOM_BROWSER.favoriteRooms.find((f) => String(f?.name || '') === entry.name)?.category || ROOM_BROWSER.recentRooms.find((f) => String(f?.name || '') === entry.name)?.category || null,
-      subcategory: ROOM_BROWSER.favoriteRooms.find((f) => String(f?.name || '') === entry.name)?.subcategory || ROOM_BROWSER.recentRooms.find((f) => String(f?.name || '') === entry.name)?.subcategory || null,
-    })).filter(Boolean);
+    let rows = unreadEntries.map((entry) => {
+      const entryKey = rbRoomNameKey(entry.name);
+      const fav = ROOM_BROWSER.favoriteRooms.find((f) => rbRoomNameKey(f?.name) === entryKey) || null;
+      const recent = ROOM_BROWSER.recentRooms.find((f) => rbRoomNameKey(f?.name) === entryKey) || null;
+      const custom = ROOM_BROWSER.customRooms.find((f) => rbRoomNameKey(f?.name) === entryKey) || null;
+      const stored = fav || recent || custom || null;
+      return rbBuildRow(entry.name, {
+        isCustom: !!(stored?.isCustom || stored?.is_private),
+        meta: stored,
+        category: stored?.category || null,
+        subcategory: stored?.subcategory || null,
+      });
+    }).filter(Boolean);
     rows = rbApplyQueriesToMixedRows(rows);
     rows.sort((a, b) => (b.unread - a.unread) || a.name.localeCompare(b.name));
     return { rows, sections: [{ key: 'unread', label: 'Unread rooms', rows }] };
@@ -91,12 +99,23 @@ function rbRoomActivityLabel(count) {
   return 'Empty right now';
 }
 
+function rbFindRoomMapEntry(mapLike, roomName) {
+  if (!(mapLike instanceof Map)) return null;
+  const wanted = rbRoomNameKey(roomName);
+  if (!wanted) return null;
+  if (mapLike.has(roomName)) return { key: roomName, value: mapLike.get(roomName) };
+  for (const [candidate, value] of mapLike.entries()) {
+    if (rbRoomNameKey(candidate) === wanted) return { key: candidate, value };
+  }
+  return null;
+}
+
 function rbHasOccupantSnapshot(roomName) {
   const key = String(roomName || '').trim();
   if (!key) return false;
-  if (ROOM_BROWSER.roomOccupants.has(key)) return true;
-  if (key === String(UIState.currentRoom || '').trim()) {
-    return UIState.roomUsers.has(key);
+  if (rbFindRoomMapEntry(ROOM_BROWSER.roomOccupants, key)) return true;
+  if (rbSameRoomName(key, UIState.currentRoom || '')) {
+    return !!rbFindRoomMapEntry(UIState.roomUsers, key);
   }
   return false;
 }
@@ -104,11 +123,11 @@ function rbHasOccupantSnapshot(roomName) {
 function rbOccupantsForRoom(roomName) {
   const key = String(roomName || '').trim();
   if (!key) return [];
-  const cached = ROOM_BROWSER.roomOccupants.get(key);
-  if (Array.isArray(cached)) return cached;
-  if (key === String(UIState.currentRoom || '').trim()) {
-    const live = UIState.roomUsers.get(key);
-    if (Array.isArray(live)) return live;
+  const cached = rbFindRoomMapEntry(ROOM_BROWSER.roomOccupants, key);
+  if (Array.isArray(cached?.value)) return cached.value;
+  if (rbSameRoomName(key, UIState.currentRoom || '')) {
+    const live = rbFindRoomMapEntry(UIState.roomUsers, key);
+    if (Array.isArray(live?.value)) return live.value;
   }
   return [];
 }
@@ -122,16 +141,16 @@ function rbEnsureOccupantsForRoom(roomLike) {
   const row = roomLike && typeof roomLike === 'object' ? roomLike : rbSelectedRowSnapshot();
   const room = String(row?.name || '').trim();
   if (!room) return;
-  if (room === String(UIState.currentRoom || '').trim()) {
-    const live = UIState.roomUsers.get(room);
-    if (Array.isArray(live)) {
-      ROOM_BROWSER.roomOccupants.set(room, live);
-      ROOM_BROWSER.roomOccupantsMeta.set(room, Date.now());
+  if (rbSameRoomName(room, UIState.currentRoom || '')) {
+    const liveEntry = rbFindRoomMapEntry(UIState.roomUsers, room);
+    if (Array.isArray(liveEntry?.value)) {
+      ROOM_BROWSER.roomOccupants.set(room, liveEntry.value);
+      ROOM_BROWSER.roomOccupantsMeta.set(rbRoomNameKey(room), Date.now());
       return;
     }
   }
-  const lastAt = Number(ROOM_BROWSER.roomOccupantsMeta.get(room) || 0) || 0;
-  if (ROOM_BROWSER.roomOccupants.has(room) && (Date.now() - lastAt) < 20000) return;
+  const lastAt = Number(rbMapGetRoomValue(ROOM_BROWSER.roomOccupantsMeta, rbRoomNameKey(room), 0) || 0) || 0;
+  if (rbFindRoomMapEntry(ROOM_BROWSER.roomOccupants, room) && (Date.now() - lastAt) < 20000) return;
   try { socket.emit('get_users_in_room', { room }, () => {}); } catch {}
 }
 

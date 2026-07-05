@@ -45,6 +45,23 @@ function rbRoomKindLabel(row) {
   return row.meta?.is_private ? 'Private' : 'Custom';
 }
 
+function rbCustomRoomAccessLabel(row) {
+  if (!row?.isCustom) return '';
+  const role = String(row?.meta?.my_room_role || '').trim().toLowerCase();
+  if (rbIsCurrentUserRoomCreator(row?.meta?.created_by) || role === 'owner') return 'Owner';
+  if (role === 'moderator') return 'Moderator';
+  if (row?.meta?.is_private) return 'Invited';
+  return '';
+}
+
+function rbCanInviteToCustomRoom(row) {
+  if (!row?.isCustom || !row?.meta?.is_private) return false;
+  if (rbIsCurrentUserRoomCreator(row?.meta?.created_by)) return true;
+  if (!!row?.meta?.can_room_moderate) return true;
+  const role = String(row?.meta?.my_room_role || '').trim().toLowerCase();
+  return role === 'owner' || role === 'moderator';
+}
+
 function rbRoomMetaText(row, countOverride = null) {
   if (!row) return '';
   const cnt = Number(countOverride ?? row.cnt ?? 0) || 0;
@@ -57,6 +74,8 @@ function rbRoomMetaText(row, countOverride = null) {
   if (row.isCustom && row.meta?.created_by) {
     parts.push(rbIsCurrentUserRoomCreator(row.meta.created_by) ? 'by you' : `by ${row.meta.created_by}`);
   }
+  const access = (typeof rbCustomRoomAccessLabel === 'function') ? rbCustomRoomAccessLabel(row) : '';
+  if (access && access !== 'Owner') parts.push(access.toLowerCase());
   const friendCount = rbSelectedFriendCount(row);
   if (friendCount > 0) parts.push(`${friendCount} friend${friendCount === 1 ? '' : 's'} inside`);
   if (row.unread > 0) parts.push(`${row.unread} unread`);
@@ -83,7 +102,7 @@ function rbMakeRoomLi(row) {
   li.dataset.roomStatus = (typeof rbRoomStatusLabel === 'function') ? rbRoomStatusLabel(row) : '';
   if (row.current) li.classList.add('is-current');
   if (row.favorite) li.classList.add('is-favorite');
-  if (ROOM_BROWSER.selectedRoom === row.name && !!ROOM_BROWSER.selectedRoomIsCustom === !!row.isCustom) li.classList.add('active');
+  if (rbRoomKey(ROOM_BROWSER.selectedRoom, !!ROOM_BROWSER.selectedRoomIsCustom) === row.key) li.classList.add('active');
 
   const flags = [];
   if (row.isCustom && row.meta?.is_private) flags.push('Invite-only');
@@ -113,6 +132,8 @@ function rbMakeRoomLi(row) {
   const tags = document.createElement('div');
   tags.className = 'rbRowTags';
   const tagDefs = [rbRoomKindLabel(row)];
+  const accessLabel = (typeof rbCustomRoomAccessLabel === 'function') ? rbCustomRoomAccessLabel(row) : '';
+  if (accessLabel) tagDefs.push(accessLabel);
   if (row.full) tagDefs.push('Full');
   if (row.locked) tagDefs.push('Locked');
   if (row.readonly) tagDefs.push('Read-only');
@@ -133,9 +154,10 @@ function rbMakeRoomLi(row) {
   tagDefs.forEach((txt) => {
     const tag = document.createElement('span');
     tag.className = 'rbRowTag';
-    if (txt === 'Private' || txt === 'Invite-only') tag.classList.add('is-private-tag');
+    if (txt === 'Private' || txt === 'Invite-only' || txt === 'Invited') tag.classList.add('is-private-tag');
     if (txt === 'Custom') tag.classList.add('is-custom-tag');
     if (txt === 'Official') tag.classList.add('is-official-tag');
+    if (txt === 'Owner' || txt === 'Moderator') tag.classList.add('is-role-tag');
     if (txt === 'Full' || txt === 'Locked') tag.classList.add('is-blocked-tag');
     if (txt === 'Read-only' || String(txt).startsWith('Slow ')) tag.classList.add('is-policy-tag');
     tag.textContent = txt;
@@ -190,7 +212,7 @@ function rbMakeRoomLi(row) {
   });
   right.appendChild(favBtn);
 
-  if (row.isCustom && row.meta?.is_private && rbIsCurrentUserRoomCreator(row.meta?.created_by)) {
+  if ((typeof rbCanInviteToCustomRoom === 'function') ? rbCanInviteToCustomRoom(row) : (row.isCustom && row.meta?.is_private && rbIsCurrentUserRoomCreator(row.meta?.created_by))) {
     const inviteBtn = document.createElement('button');
     inviteBtn.className = 'rbInviteBtn';
     inviteBtn.type = 'button';

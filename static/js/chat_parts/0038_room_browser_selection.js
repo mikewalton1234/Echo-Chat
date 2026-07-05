@@ -22,7 +22,7 @@ function rbUpdateCountsInDom() {
     lists.forEach((list) => {
       list.querySelectorAll('li[data-room]').forEach((li) => {
         const room = li.dataset.room;
-        const cnt = ROOM_BROWSER.counts.get(room) || 0;
+        const cnt = rbMapGetRoomValue(ROOM_BROWSER.counts, room, 0) || 0;
         li.classList.toggle('has-online', cnt > 0);
         const roomCountBadge = li.querySelector('.rbCountBadge');
         if (roomCountBadge) {
@@ -33,8 +33,14 @@ function rbUpdateCountsInDom() {
         }
         const mt = li.querySelector('.rbItemMeta');
         if (mt) {
-          const currentRow = ROOM_BROWSER.lastRenderedRows.find((r) => r.name === room && String(!!r.isCustom) === String(li.dataset.custom === '1'));
-          if (currentRow && typeof rbRoomMetaText === 'function') mt.textContent = rbRoomMetaText(currentRow, cnt);
+          const roomKey = rbRoomKey(room, li.dataset.custom === '1');
+          const currentRow = ROOM_BROWSER.lastRenderedRows.find((r) => r.key === roomKey || (r.isCustom === (li.dataset.custom === '1') && rbSameRoomName(r.name, room)));
+          if (currentRow && typeof rbRoomMetaText === 'function') {
+            currentRow.cnt = Number(cnt || 0) || 0;
+            const capacity = Number(currentRow.capacity || currentRow.meta?.capacity || 0) || 0;
+            currentRow.full = capacity > 0 ? currentRow.cnt >= capacity : !!currentRow.meta?.full;
+            mt.textContent = rbRoomMetaText(currentRow, cnt);
+          }
         }
       });
     });
@@ -230,7 +236,7 @@ function rbSelectRoom(row, opts = {}) {
     rbRenderRoomLists();
   } else {
     rbSyncSelectionInDom();
-    }
+  }
 }
 
 function rbRenderEmptyRooms(list, message, subMessage = '') {
@@ -270,9 +276,13 @@ function rbUniqueRows(rows) {
   return out;
 }
 
-function rbRenderCustomRoomsPanel(list, rows) {
+function rbRenderCustomRoomsPanel(list, rows, opts = {}) {
   if (!list) return;
   list.replaceChildren();
+  if (opts.suppressedByScope) {
+    rbRenderEmptyRooms(list, 'Custom scope active', 'Custom rooms are shown in the main room list while the Custom scope is selected.');
+    return;
+  }
   if (!rows.length) {
     const noMatch = !!(ROOM_BROWSER.customQuery || ROOM_BROWSER.customFilter !== 'all' || ROOM_BROWSER.hideEmpty);
     rbRenderEmptyRooms(
@@ -301,7 +311,9 @@ function rbRenderRoomLists() {
 
   const { rows, sections } = rbRowsForScope();
   const mainRows = Array.isArray(rows) ? rows.slice() : [];
-  const customPanelRows = rbCustomRowsForSelection();
+  const allCustomPanelRows = rbCustomRowsForSelection();
+  const suppressCustomPanel = ROOM_BROWSER.roomScope === 'custom';
+  const customPanelRows = suppressCustomPanel ? [] : allCustomPanelRows;
   ROOM_BROWSER.lastRenderedRows = rbUniqueRows([...mainRows, ...customPanelRows]);
 
   const selectedKey = rbRoomKey(ROOM_BROWSER.selectedRoom, !!ROOM_BROWSER.selectedRoomIsCustom);
@@ -341,7 +353,7 @@ function rbRenderRoomLists() {
     }
   }
 
-  rbRenderCustomRoomsPanel(customList, customPanelRows);
+  rbRenderCustomRoomsPanel(customList, customPanelRows, { suppressedByScope: suppressCustomPanel });
   rbSyncSelectionInDom();
 }
 

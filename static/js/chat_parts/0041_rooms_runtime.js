@@ -363,7 +363,7 @@ function ecRoomJoinContext(requestedRoom, joinedRoom, res, opts) {
     category: category || null,
     subcategory: subcategory || null,
     meta: meta || null,
-    cnt: (ROOM_BROWSER?.counts instanceof Map) ? (ROOM_BROWSER.counts.get(joined) || 0) : 0,
+    cnt: (typeof rbMapGetRoomValue === 'function') ? (rbMapGetRoomValue(ROOM_BROWSER?.counts, joined, 0) || 0) : ((ROOM_BROWSER?.counts instanceof Map) ? (ROOM_BROWSER.counts.get(joined) || 0) : 0),
   };
 }
 
@@ -693,8 +693,17 @@ function ecRenderRoomUsersPayload(payload) {
   const activeRoom = String(UIState.currentRoom || "").trim();
   const payloadRoom = String(room || activeRoom || "").trim();
   const selfName = String(currentUser || "").replace(/\s+/g, " ").trim();
+  const selfKey = selfName.toLowerCase();
+  const priorUsers = (() => {
+    try { return Array.isArray(UIState.roomUsers.get(activeRoom)) ? UIState.roomUsers.get(activeRoom) : []; } catch { return []; }
+  })();
+  const staleSoloAfterUnblock = !!(
+    activeRoom && payloadRoom === activeRoom && selfName &&
+    rawUsers.length === 1 && String(rawUsers[0] || '').replace(/\s+/g, ' ').trim().toLowerCase() === selfKey &&
+    priorUsers.length > 1 && Number(UIState.roomUnblockRefreshUntil || 0) > Date.now()
+  );
   const provisionalSelfHeal = !!(activeRoom && payloadRoom === activeRoom && rawUsers.length === 0 && selfName);
-  const users = provisionalSelfHeal ? [selfName] : rawUsers;
+  const users = staleSoloAfterUnblock ? priorUsers : (provisionalSelfHeal ? [selfName] : rawUsers);
 
   try {
     const cur = activeRoom;
@@ -710,7 +719,7 @@ function ecRenderRoomUsersPayload(payload) {
       // active-room waiter. Named payloads only resolve matching room requests.
       if (room && waiterRoom && waiterRoom !== room) continue;
       ecRemoveRoomUsersWaiter(waiter);
-      try { waiter.resolve(rawUsers); } catch {}
+      try { waiter.resolve(users); } catch {}
     }
   } catch {}
   try {
@@ -745,7 +754,10 @@ function ecRenderRoomUsersPayload(payload) {
   }
 
   setRoomUsersCount(users.length);
-  if (provisionalSelfHeal) {
+  if (staleSoloAfterUnblock) {
+    ecSetRoomUsersPanelStatus(`Re-syncing users in ${activeRoom}…`);
+    ecScheduleRoomRosterSelfHeal(activeRoom, "unblock");
+  } else if (provisionalSelfHeal) {
     ecSetRoomUsersPanelStatus(`Re-syncing users in ${activeRoom}…`);
     ecScheduleRoomRosterSelfHeal(activeRoom, "empty_roster");
   } else {
@@ -875,7 +887,7 @@ function applyRoomPolicyToView(room, viewEl, policy) {
 
   const canSend = !!p.can_send;
   const ym = viewEl._ym || {};
-  const controls = [ym.input, ym.send, ym.gifBtn, ym.emojiBtn, ym.torrentBtn, ym.fileBtn].filter(Boolean);
+  const controls = [ym.input, ym.send, ym.gifBtn, ym.emojiBtn, ym.torrentBtn, ym.fileBtn, ...(Array.isArray(ym.formatControls) ? ym.formatControls : [])].filter(Boolean);
   for (const el of controls) {
     try { el.disabled = !canSend; } catch {}
   }
@@ -961,6 +973,11 @@ const EC_ROOM_TYPING_TIMEOUT_MS = 6500;
 const EC_ROOM_TYPING_SEND_THROTTLE_MS = 2200;
 const EC_ROOM_TYPING_STATE = new Map();
 
+function ecRoomTypingIndicatorsEnabled() {
+  const cfg = window.ECHOCHAT_CFG || {};
+  return (typeof ecConfigBool === 'function') ? ecConfigBool(cfg.enable_room_typing_indicators, false) : cfg.enable_room_typing_indicators === true;
+}
+
 function ecRoomTypingKey(room, username) {
   return `${String(room || '').trim()}\x1f${String(username || '').trim().toLowerCase()}`;
 }
@@ -1002,6 +1019,7 @@ function ecFormatRoomTypingUsers(users) {
 }
 
 function ecRenderRoomTyping(room) {
+  if (!ecRoomTypingIndicatorsEnabled()) return;
   const r = String(room || '').trim();
   if (!r) return;
   const now = Date.now();
@@ -1024,6 +1042,7 @@ function ecRenderRoomTyping(room) {
 }
 
 function ecSetRoomTyping(room, username, isTyping, expiresInSec) {
+  if (!ecRoomTypingIndicatorsEnabled()) return;
   const r = String(room || '').trim();
   const u = String(username || '').trim();
   if (!r || !u || u === String(currentUser || '').trim()) return;
@@ -1050,6 +1069,7 @@ function ecClearRoomTyping(room, username) {
 }
 
 function ecRoomTypingEmit(eventName, room) {
+  if (!ecRoomTypingIndicatorsEnabled()) return;
   const r = String(room || '').trim();
   if (!r || !socket?.connected) return;
   try { socket.emit(eventName, { room: r }, () => {}); } catch {}
@@ -1068,7 +1088,7 @@ function ecRoomTypingStop(room, input, opts = {}) {
 }
 
 function ecBindRoomTypingInput(room, input) {
-  if (!input) return;
+  if (!input || !ecRoomTypingIndicatorsEnabled()) return;
   input._ecTypingRoom = String(room || '').trim();
   if (input._ecRoomTypingBound) return;
   input._ecRoomTypingBound = true;
@@ -1093,11 +1113,19 @@ function ecBindRoomTypingInput(room, input) {
 
 socket.on('room_typing', (payload) => {
   if (!payload) return;
+  if (ecRoomShouldHideBlockedSender(payload.username)) {
+    ecClearRoomTyping(payload.room || UIState.currentRoom, payload.username);
+    return;
+  }
   ecSetRoomTyping(payload.room || UIState.currentRoom, payload.username, payload.typing !== false, payload.expires_in);
 });
 
 socket.on('room_stop_typing', (payload) => {
   if (!payload) return;
+  if (ecRoomShouldHideBlockedSender(payload.username)) {
+    ecClearRoomTyping(payload.room || UIState.currentRoom, payload.username);
+    return;
+  }
   ecSetRoomTyping(payload.room || UIState.currentRoom, payload.username, false, 0);
 });
 
@@ -1110,7 +1138,9 @@ function openRoomWindow(room) {
 
   // Replace the default "Send" behavior with room send_message
   win._ym.send.onclick = () => {
-    const msg = win._ym.input.value.trim();
+    const input = win._ym?.input || null;
+    const sendBtn = win._ym?.send || null;
+    const msg = input?.value?.trim() || '';
     if (!msg) return;
 
     // Slash command: /invite <username>
@@ -1119,23 +1149,38 @@ function openRoomWindow(room) {
       const raw = (rest.split(/\s+/)[0] || "").trim();
       const u = raw.replace(/^@/, "");
       if (!u) return toast("Usage: /invite <username>", "info", 6000);
+      const optimistic = (typeof ecComposerBeginOptimisticSend === 'function')
+        ? ecComposerBeginOptimisticSend(input, { text: msg, button: sendBtn })
+        : null;
       apiJson("/api/rooms/invite", { method: "POST", body: JSON.stringify({ room, invitee: u }) })
         .then(() => {
           toast(`✅ Invited ${u} to ${room}`, "ok");
-          win._ym.input.value = "";
+          ecRoomTypingStop(room, input, { force: true });
+          optimistic?.commit?.();
         })
-        .catch((e) => toast(`❌ ${e.message}`, "error"));
+        .catch((e) => {
+          optimistic?.restore?.(e?.message || 'Invite failed');
+          toast(`❌ ${e.message}`, "error");
+        });
       return;
     }
 
+    const optimistic = (typeof ecComposerBeginOptimisticSend === 'function')
+      ? ecComposerBeginOptimisticSend(input, { text: msg, button: sendBtn })
+      : null;
     sendRoomTo(room, msg).then((res) => {
       if (res?.success) {
-        ecRoomTypingStop(room, win._ym?.input, { force: true });
+        ecRoomTypingStop(room, input, { force: true });
         // Don't append locally; we wait for server broadcast so we get message_id
-        win._ym.input.value = "";
+        optimistic?.commit?.();
       } else {
+        optimistic?.restore?.(res?.error || "Send failed");
         toast(`❌ ${res?.error || "Send failed"}`, "error");
       }
+    }).catch((e) => {
+      optimistic?.restore?.(e?.message || 'Send failed');
+      console.error(e);
+      toast(`❌ Send failed: ${e?.message || e}`, "error");
     });
   };
 
@@ -1146,17 +1191,128 @@ function openRoomWindow(room) {
 }
 
 
+function ecRoomElementHasVisibleBox(el) {
+  try {
+    if (!el || !document.body?.contains(el)) return false;
+    if (el.hidden || el.classList?.contains?.('hidden')) return false;
+    if (el.getAttribute?.('aria-hidden') === 'true') return false;
+    const style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+    if (style && (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || 1) === 0)) return false;
+    const rect = typeof el.getBoundingClientRect === 'function' ? el.getBoundingClientRect() : null;
+    return !rect || (rect.width > 1 && rect.height > 1);
+  } catch {
+    return false;
+  }
+}
+
+function ecIsRoomSurfaceActuallyReadable(view) {
+  try {
+    const root = document.getElementById('appRoot');
+    const embed = document.getElementById('roomEmbed') || view?.el || view;
+    const log = view?._ym?.log || document.getElementById('roomEmbedLog');
+    if (!ecRoomElementHasVisibleBox(embed) || !ecRoomElementHasVisibleBox(log)) return false;
+
+    // On phone/narrow layout the current room exists in the DOM even when the
+    // user is looking at Rooms or Hub.  Only the Chat panel is actively readable.
+    if (root?.classList?.contains?.('is-mobile-shell')) {
+      if (root.getAttribute('data-mobile-panel') !== 'chat') return false;
+      const activeConversation = (typeof ecTopVisibleConversationWindow === 'function') ? ecTopVisibleConversationWindow() : null;
+      if (activeConversation && typeof ecIsConversationWindowActive === 'function' && ecIsConversationWindowActive(activeConversation)) return false;
+    }
+
+    // The room browser popout intentionally leaves the room pane scaled behind
+    // it.  Treat that as covered/underlay, not as a room the user has read.
+    const siteArea = document.getElementById('siteArea');
+    if (embed.classList?.contains?.('is-underlay')) return false;
+    if (siteArea?.classList?.contains?.('room-browser-overlay-open')) return false;
+    if (typeof ROOM_BROWSER !== 'undefined' && ROOM_BROWSER?.popoutOpen) return false;
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function ecRoomNormalizeUserKey(username) {
+  return String(username || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function ecRoomUserSetHasName(setLike, username) {
+  const key = ecRoomNormalizeUserKey(username);
+  if (!key || !(setLike instanceof Set)) return false;
+  if (setLike.has(username) || setLike.has(key)) return true;
+  for (const item of setLike.values()) {
+    if (ecRoomNormalizeUserKey(item) === key) return true;
+  }
+  return false;
+}
+
+function ecRoomShouldHideBlockedSender(username) {
+  const name = String(username || "").replace(/\s+/g, " ").trim();
+  const key = ecRoomNormalizeUserKey(name);
+  if (!key) return false;
+  if (key === "system") return false;
+  const selfKey = ecRoomNormalizeUserKey(currentUser || "");
+  if (selfKey && key === selfKey) return false;
+  try {
+    if (typeof ecUserSetHasName === "function") return !!ecUserSetHasName(UIState?.blockedSet, name);
+  } catch {}
+  try {
+    return ecRoomUserSetHasName(UIState?.blockedSet, name);
+  } catch {}
+  return false;
+}
+
+function ecRoomEnvelopeIncludesCurrentUser(cipherStr) {
+  const cipher = String(cipherStr || "").trim();
+  const selfKey = ecRoomNormalizeUserKey(currentUser || "");
+  if (!cipher || !selfKey || typeof ROOM_ENVELOPE_PREFIX === "undefined" || !cipher.startsWith(ROOM_ENVELOPE_PREFIX)) return true;
+  try {
+    const env = JSON.parse(atob(cipher.slice(ROOM_ENVELOPE_PREFIX.length)));
+    const keys = env && env.keys;
+    if (!keys || typeof keys !== "object") return true;
+    for (const name of Object.keys(keys)) {
+      if (ecRoomNormalizeUserKey(name) === selfKey) return true;
+    }
+    return false;
+  } catch {
+    // Bad/corrupt envelopes should continue through the normal decrypt error path
+    // instead of being silently hidden as a block-filtered message.
+    return true;
+  }
+}
+
+function ecPruneRoomMessagesFromBlockedUser(username) {
+  const key = ecRoomNormalizeUserKey(username);
+  if (!key) return 0;
+  let removed = 0;
+  try {
+    document.querySelectorAll('.ec-msgGroup--room[data-sender-key]').forEach((group) => {
+      if (ecRoomNormalizeUserKey(group?.dataset?.senderKey || '') !== key) return;
+      group.remove();
+      removed += 1;
+    });
+    document.querySelectorAll('.roomWindow, #roomEmbed').forEach((viewEl) => {
+      const log = viewEl?._ym?.log || viewEl?.querySelector?.('.chatLog, .roomLog, #roomEmbedLog');
+      const st = log?._ecChatUi;
+      if (st && ecRoomNormalizeUserKey(st.lastGroup?.senderKey || '') === key) st.lastGroup = null;
+    });
+  } catch {}
+  return removed;
+}
+
 function ecIsRoomMessageQuietlyVisible(room, view) {
   // Messages for the room the user is actively reading should render in the
   // transcript only. Toasts/browser popups are reserved for away/inactive room
   // attention so active chat does not stack duplicate alerts.
   if (!room || !view) return false;
   try {
-    const sameRoom = String(room) === String(UIState?.currentRoom || UIState?.roomEmbedRoom || "");
-    const focused = (typeof ecIsWindowActivelyFocused === "function")
+    const activeRoom = String(UIState?.currentRoom || UIState?.roomEmbedRoom || '');
+    const sameRoom = String(room) === activeRoom;
+    const focused = (typeof ecIsWindowActivelyFocused === 'function')
       ? ecIsWindowActivelyFocused()
-      : (document.visibilityState === "visible" && document.hasFocus && document.hasFocus());
-    return !!sameRoom && !!focused;
+      : (document.visibilityState === 'visible' && document.hasFocus && document.hasFocus());
+    return !!sameRoom && !!focused && ecIsRoomSurfaceActuallyReadable(view);
   } catch {
     return false;
   }
@@ -1167,6 +1323,25 @@ socket.on("chat_message", async (payload) => {
   if (!payload) return;
   const room = payload.room || UIState.currentRoom;
   if (!room) return;
+
+  const incomingUsername = payload.username || payload.sender || "";
+  if (ecRoomShouldHideBlockedSender(incomingUsername)) {
+    ecClearRoomTyping(room, incomingUsername);
+    return;
+  }
+
+  // If the server intentionally omitted this client from a room envelope
+  // (blocked pair / non-recipient), do not render a scary "Encrypted message"
+  // placeholder.  From the user's perspective, blocked-user traffic should be
+  // invisible rather than unreadable.
+  if (payload.cipher && typeof payload.cipher === "string" && payload.cipher.startsWith(ROOM_ENVELOPE_PREFIX)) {
+    const selfKey = ecRoomNormalizeUserKey(currentUser || "");
+    const senderKey = ecRoomNormalizeUserKey(incomingUsername || "");
+    if (selfKey && senderKey && selfKey !== senderKey && !ecRoomEnvelopeIncludesCurrentUser(payload.cipher)) {
+      ecClearRoomTyping(room, incomingUsername);
+      return;
+    }
+  }
 
   // If this is an encrypted room envelope, try to decrypt for display.
   let msgForUi = payload.message;
@@ -1190,13 +1365,20 @@ socket.on("chat_message", async (payload) => {
     return;
   }
 
-  try { if (room && room === UIState.currentRoom) rbClearUnread(room); } catch {}
   appendRoomMessage(view, { ...payload, room });
 
   const username = payload.username;
   if (username) ecClearRoomTyping(room, username);
   const message = payload.message;
   const quietActiveRoomMessage = ecIsRoomMessageQuietlyVisible(room, view);
+  try {
+    if (room && username && username !== currentUser) {
+      if (quietActiveRoomMessage && room === UIState.currentRoom) rbClearUnread(room);
+      else { rbBumpUnread(room); rbRenderRoomLists(); }
+    } else if (room && room === UIState.currentRoom && quietActiveRoomMessage) {
+      rbClearUnread(room);
+    }
+  } catch {}
   // If the user is already focused on this room, the transcript itself is the
   // notification. Avoid duplicate in-app toasts and OS popups for active chat.
   if (username && username !== currentUser && !quietActiveRoomMessage) {
@@ -1225,20 +1407,22 @@ socket.on("room_messages_expired", (payload) => {
 // Reaction count updates for a message
 socket.on("message_reactions", (payload) => {
   const room = payload?.room || UIState.currentRoom;
-  const messageId = payload?.message_id;
+  const messageId = payload?.message_id || payload?.messageId || payload?.id;
   const counts = payload?.counts || {};
   if (!room || !messageId) return;
 
   const view = getActiveRoomView(room);
   if (!view) return;
+  if (typeof _storeRoomReactionCounts === "function") _storeRoomReactionCounts(view, messageId, counts);
   const msgEl = _findMsgEl(view, messageId);
   if (!msgEl) return;
   const rx = msgEl.querySelector(".msgReactions");
-  _renderReactionPills(rx, counts);
+  _renderReactionPills(rx, (typeof _getRoomReactionCounts === "function") ? _getRoomReactionCounts(view, messageId) : counts);
 
   // Same signed-in user in another tab should lock to the final reaction too.
   if (payload?.reacted_by && String(payload.reacted_by) === String(currentUser || "")) {
-    const reactedEmoji = Object.keys(counts || {}).find((emoji) => Number(counts[emoji] || 0) > 0);
+    const safeCounts = (typeof _getRoomReactionCounts === "function") ? _getRoomReactionCounts(view, messageId) : counts;
+    const reactedEmoji = Object.keys(safeCounts || {}).find((emoji) => Number(safeCounts[emoji] || 0) > 0);
     _setMyReaction(view, messageId, reactedEmoji || true);
     _lockReactions(view, messageId);
   }
@@ -1246,7 +1430,7 @@ socket.on("message_reactions", (payload) => {
 
 socket.on("room_message_pinned", (payload) => {
   const room = payload?.room || UIState.currentRoom;
-  const messageId = payload?.message_id;
+  const messageId = payload?.message_id || payload?.messageId || payload?.id;
   if (!room || !messageId) return;
   const view = getActiveRoomView(room);
   if (!view) return;
@@ -1261,7 +1445,7 @@ socket.on("room_message_pinned", (payload) => {
 
 socket.on("room_message_unpinned", (payload) => {
   const room = payload?.room || UIState.currentRoom;
-  const messageId = payload?.message_id;
+  const messageId = payload?.message_id || payload?.messageId || payload?.id;
   if (!room || !messageId) return;
   const view = getActiveRoomView(room);
   if (!view) return;

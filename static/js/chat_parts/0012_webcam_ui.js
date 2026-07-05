@@ -32,10 +32,51 @@
     localTile: null,
     lastCameraError: "",
     lastCameraQuality: "",
+    actionLocks: new Set(),
+    pendingViewRequests: new Set(),
   };
 
   function safeToast(message, level = "info", ms) {
     try { if (typeof toast === "function") toast(message, level, ms); } catch {}
+  }
+
+  function mediaActionKey(name, room = localRoomName(), peer = "") {
+    return `${String(name || "media").trim().toLowerCase()}::${String(room || "").trim().toLowerCase()}::${String(peer || "").trim().toLowerCase()}`;
+  }
+
+  function echoMediaIsBusy(name, room = localRoomName(), peer = "") {
+    return !!(ECHO_MEDIA.actionLocks && ECHO_MEDIA.actionLocks.has(mediaActionKey(name, room, peer)));
+  }
+
+  function echoMediaSetBusy(name, busy, room = localRoomName(), peer = "") {
+    const key = mediaActionKey(name, room, peer);
+    if (!ECHO_MEDIA.actionLocks) ECHO_MEDIA.actionLocks = new Set();
+    if (busy) ECHO_MEDIA.actionLocks.add(key);
+    else ECHO_MEDIA.actionLocks.delete(key);
+    try { echoCamRefreshUiState(); } catch {}
+  }
+
+  async function echoMediaWithBusy(name, room, peer, fn) {
+    if (echoMediaIsBusy(name, room, peer)) return { success: false, busy: true, error: "media_action_busy" };
+    echoMediaSetBusy(name, true, room, peer);
+    try { return await fn(); }
+    finally { echoMediaSetBusy(name, false, room, peer); }
+  }
+
+  function echoSetButtonBusy(btn, busy, label) {
+    if (!btn) return;
+    if (busy) {
+      if (!btn.dataset.ecBusyOriginalText) btn.dataset.ecBusyOriginalText = btn.textContent || "";
+      if (label) btn.textContent = label;
+      btn.classList.add("isBusy");
+      btn.setAttribute("aria-busy", "true");
+      btn.disabled = true;
+    } else {
+      btn.classList.remove("isBusy");
+      btn.removeAttribute("aria-busy");
+      if (btn.dataset.ecBusyOriginalText && !label) btn.textContent = btn.dataset.ecBusyOriginalText;
+      delete btn.dataset.ecBusyOriginalText;
+    }
   }
 
   function readSavedQuality() {
@@ -125,6 +166,7 @@
 
   function updateStatus(text) {
     if (ECHO_MEDIA.status) ECHO_MEDIA.status.textContent = text || "";
+    try { echoCamRefreshDiagnostics(); } catch {}
   }
 
 
@@ -292,6 +334,8 @@
     const panel = document.createElement("div");
     panel.className = "ym-avPanel";
     panel.id = "echoWebcamPanel";
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-label", "Voice and webcam panel");
 
     const top = document.createElement("div");
     top.className = "ym-avTop";
@@ -304,6 +348,8 @@
     const status = document.createElement("div");
     status.className = "ym-avStatus";
     status.textContent = "Built-in WebRTC";
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
     meta.append(title, status);
 
     const close = document.createElement("button");
@@ -338,10 +384,16 @@
     qualityField.append(qText, select);
     deviceRow.appendChild(qualityField);
 
+    const diagnostics = document.createElement("div");
+    diagnostics.className = "ym-avDiagnostics";
+    diagnostics.setAttribute("aria-live", "polite");
+    diagnostics.textContent = "Media diagnostics will appear here.";
+
     const grid = document.createElement("div");
     grid.className = "ym-avGrid";
 
-    panel.append(top, deviceRow, grid);
+    panel.append(top, deviceRow, diagnostics, grid);
+    ECHO_MEDIA.diagnostics = diagnostics;
     document.body.appendChild(panel);
     ECHO_MEDIA.panel = panel;
     ECHO_MEDIA.grid = grid;
@@ -385,6 +437,22 @@
     info.className = "ym-avViewers";
     info.textContent = local ? "Local camera preview" : "Room webcam stream";
     controls.appendChild(info);
+    const actions = document.createElement("div");
+    actions.className = "ym-avTileActions";
+    const stopBtn = document.createElement("button");
+    stopBtn.type = "button";
+    stopBtn.className = local ? "miniBtn danger" : "miniBtn";
+    stopBtn.textContent = local ? "Stop camera" : "Stop viewing";
+    stopBtn.title = local ? "Turn off your webcam" : "Stop viewing this webcam";
+    stopBtn.addEventListener("click", () => {
+      try {
+        if (local) echoCamDisable("Webcam disabled", { keepRoom: !!ECHO_MEDIA.voiceDesired });
+        else echoCamStopViewing(username, localRoomName());
+      } catch (e) { safeToast(`📷 ${e?.message || e}`, "warn", 4200); }
+    });
+    actions.appendChild(stopBtn);
+    controls.appendChild(actions);
+    tile._echoStopBtn = stopBtn;
 
     tile.append(head, media, controls);
     tile._echoVideo = video;
@@ -416,8 +484,10 @@
       ECHO_MEDIA.remoteTiles.set(key, tile);
     }
     try { tile._echoVideo.srcObject = stream; } catch {}
+    if (tile._echoInfo) tile._echoInfo.textContent = `Receiving ${key}'s webcam`;
     updateStatus(`Receiving webcam from ${key}`);
     showPanel();
+    try { echoCamRefreshDiagnostics(); } catch {}
     return tile;
   }
 
@@ -430,6 +500,7 @@
       try { tile.remove(); } catch {}
     }
     ECHO_MEDIA.remoteTiles.delete(key);
+    try { echoCamRefreshDiagnostics(); } catch {}
   }
 
   function clearRemoteVideos() {
@@ -451,9 +522,33 @@
     return out;
   }
 
+  function makeCameraError(name, message) {
+    const err = new Error(message || name || "CameraError");
+    err.name = name || "CameraError";
+    return err;
+  }
+
+  async function browserHasVideoInput() {
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.enumerateDevices !== "function") return true;
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      if (!Array.isArray(devices) || devices.length === 0) return true;
+      return devices.some((device) => device && device.kind === "videoinput");
+    } catch {
+      // Permission and privacy failures here should not block the normal
+      // getUserMedia permission prompt. The real capture attempt below will
+      // return the authoritative browser error.
+      return true;
+    }
+  }
+
   function isFatalCameraError(err) {
     const name = String(err && err.name || "").toLowerCase();
-    return name.includes("notallowed") || name.includes("permission") || name.includes("security") || name.includes("notfound") || name.includes("notreadable");
+    return name.includes("notallowed")
+      || name.includes("permission")
+      || name.includes("security")
+      || name.includes("notfound")
+      || name.includes("notreadable");
   }
 
   function cameraOpenAttempts() {
@@ -470,10 +565,13 @@
   function describeCameraError(err) {
     const name = String(err && err.name || "CameraError");
     const detail = String(err && err.message || "Camera blocked or unavailable");
-    if (name === "NotAllowedError" || name === "PermissionDeniedError") return "Camera permission was denied. Allow camera access in the browser address-bar permissions menu.";
-    if (name === "NotFoundError" || name === "DevicesNotFoundError") return "No webcam was found by the browser.";
-    if (name === "NotReadableError" || name === "TrackStartError") return "The webcam is busy or blocked by another app.";
-    if (name === "OverconstrainedError" || name === "ConstraintNotSatisfiedError") return "The webcam does not support the requested quality; try Low data.";
+    if (name === "NotAllowedError" || name === "PermissionDeniedError") return "Camera permission was denied. Allow camera access in the browser address-bar permissions menu, then try Webcam again.";
+    if (name === "SecurityError") return "Camera access is blocked by the browser security context. Use HTTPS, localhost, or 127.0.0.1.";
+    if (name === "NotFoundError" || name === "DevicesNotFoundError") return "No webcam was found by the browser. Plug in or enable a camera, then try again.";
+    if (name === "NotReadableError" || name === "TrackStartError") return "The webcam is busy or blocked by another app. Close other camera apps/tabs, then try again.";
+    if (name === "AbortError" || String(detail).toLowerCase().includes("starting videoinput failed")) return "The browser found a webcam, but it could not start it. Close other apps/tabs using the camera, unplug/replug the webcam if needed, then try again.";
+    if (name === "OverconstrainedError" || name === "ConstraintNotSatisfiedError") return "The webcam does not support the requested quality. Try Low data, or let the browser use its default camera settings.";
+    if (name === "Error" && detail) return detail;
     return `${name}: ${detail}`;
   }
 
@@ -481,7 +579,13 @@
     if (ECHO_MEDIA.camStream) return ECHO_MEDIA.camStream;
     if (!webcamAvailable()) throw new Error(webcamUnavailableReason());
     let lastErr = null;
+    const requestedQuality = ECHO_MEDIA.quality;
     let chosenQuality = ECHO_MEDIA.quality;
+    if (!(await browserHasVideoInput())) {
+      lastErr = makeCameraError("NotFoundError", "No video input device is available.");
+      ECHO_MEDIA.lastCameraError = describeCameraError(lastErr);
+      throw new Error(ECHO_MEDIA.lastCameraError);
+    }
     for (const attempt of cameraOpenAttempts()) {
       try {
         updateStatus(attempt.quality === "browser-default" ? "Opening webcam with browser defaults…" : `Opening webcam · ${profile(attempt.quality).label || attempt.quality}…`);
@@ -497,7 +601,7 @@
         }
         ECHO_MEDIA.lastCameraError = "";
         ECHO_MEDIA.lastCameraQuality = attempt.quality === "browser-default" ? "browser-default" : String(chosenQuality || attempt.quality);
-        if (attempt.quality !== preferred && attempt.quality !== "browser-default") {
+        if (attempt.quality !== requestedQuality && attempt.quality !== "browser-default") {
           safeToast(`📷 Requested quality was not supported; using ${profile(attempt.quality).label || attempt.quality}.`, "warn", 3600);
         } else if (attempt.quality === "browser-default") {
           safeToast("📷 Requested webcam constraints failed; using browser default camera settings.", "warn", 3600);
@@ -689,6 +793,56 @@
     if (!opts.keepRoom && !ECHO_MEDIA.voiceDesired) {
       try { voiceLeaveRoom(reason, true); } catch {}
     }
+    try { echoCamRefreshUiState(); } catch {}
+  }
+
+  function echoCamStopViewing(owner, room = localRoomName()) {
+    owner = String(owner || "").trim();
+    room = String(room || localRoomName()).trim();
+    if (!owner || !room) return { success: false, error: "missing_owner_or_room" };
+    ECHO_MEDIA.requestedViewers.delete(echoCamKey(room, owner));
+    ECHO_MEDIA.pendingViewRequests && ECHO_MEDIA.pendingViewRequests.delete(echoCamKey(room, owner));
+    echoCamRemoveRemoteVideo(owner);
+    try { socket.emit("webcam_viewing", { room, owner, viewing: false }, () => {}); } catch {}
+    updateStatus(`Stopped viewing ${owner}'s webcam`);
+    return { success: true, owner, room };
+  }
+
+  function echoCamRefreshDiagnostics() {
+    if (!ECHO_MEDIA.diagnostics) return;
+    const snap = snapshot();
+    const browser = browserWebcamStatus();
+    const cfg = webcamConfigStatus();
+    const bits = [];
+    bits.push(`Room: ${snap.echoRoom || "none"}`);
+    bits.push(`Voice: ${snap.voiceDesired ? (snap.micEnabled ? "on" : "connecting") : "off"}`);
+    bits.push(`Webcam: ${snap.camDesired ? (snap.camEnabled ? "on" : "connecting") : "off"}`);
+    bits.push(`Quality: ${snap.lastCameraQuality || snap.quality || "balanced"}`);
+    bits.push(`Viewers: ${snap.viewerCount || 0}`);
+    if (!cfg.ok) bits.push(`Policy: ${cfg.reason}`);
+    else if (!browser.ok) bits.push(`Browser: ${browser.reason}`);
+    else if (snap.lastCameraError) bits.push(`Last camera error: ${snap.lastCameraError}`);
+    ECHO_MEDIA.diagnostics.textContent = bits.join(" • ");
+  }
+
+  function echoCamRefreshUiState() {
+    try { voiceUpdateRoomVoiceButton(); } catch {}
+    try { voiceUpdateRoomCamButton(); } catch {}
+    try { echoCamRefreshDiagnostics(); } catch {}
+    const room = localRoomName();
+    echoSetButtonBusy($("btnRoomEmbedVoice"), echoMediaIsBusy("voice", room), "🎤 Voice…");
+    echoSetButtonBusy($("btnRoomEmbedCam"), echoMediaIsBusy("cam", room), "📷 Webcam…");
+    if (ECHO_MEDIA.localTile && ECHO_MEDIA.localTile._echoStopBtn) {
+      ECHO_MEDIA.localTile._echoStopBtn.disabled = echoMediaIsBusy("cam", room);
+      ECHO_MEDIA.localTile._echoStopBtn.classList.toggle("isBusy", echoMediaIsBusy("cam", room));
+    }
+    ECHO_MEDIA.remoteTiles.forEach((tile, owner) => {
+      if (!tile || !tile._echoStopBtn) return;
+      const busy = echoMediaIsBusy("view", room, owner);
+      tile._echoStopBtn.disabled = busy;
+      tile._echoStopBtn.classList.toggle("isBusy", busy);
+      tile._echoStopBtn.setAttribute("aria-busy", busy ? "true" : "false");
+    });
   }
 
   async function ensureMediaRoom(room, opts = {}) {
@@ -716,6 +870,8 @@
   async function toggleVoiceForRoom(room) {
     room = String(room || localRoomName()).trim();
     if (!room) throw new Error("Join a room first");
+    if (echoMediaIsBusy("voice", room)) return { success: false, busy: true };
+    return echoMediaWithBusy("voice", room, "", async () => {
     if (ECHO_MEDIA.voiceDesired && ECHO_MEDIA.echoRoom === room) {
       ECHO_MEDIA.voiceDesired = false;
       ECHO_MEDIA.micEnabled = false;
@@ -743,11 +899,14 @@
     try { voiceUpdateRoomVoiceButton(); } catch {}
     safeToast("🎤 Voice connected", "info", 1600);
     return { success: true, voice: true, webcam: !!ECHO_MEDIA.camDesired };
+    });
   }
 
   async function toggleCamForRoom(room) {
     room = String(room || localRoomName()).trim();
     if (!room) throw new Error("Join a room first");
+    if (echoMediaIsBusy("cam", room)) return { success: false, busy: true };
+    return echoMediaWithBusy("cam", room, "", async () => {
     if (ECHO_MEDIA.camDesired && ECHO_MEDIA.echoRoom === room) {
       echoCamDisable("Webcam disabled", { keepRoom: !!ECHO_MEDIA.voiceDesired });
       safeToast("📷 Webcam disabled", "info", 1600);
@@ -761,7 +920,14 @@
       try { sessionStorage.removeItem("echochat_voice_desired"); } catch {}
       try { voiceUpdateLocalMediaStatus(room, { voice_on: false, webcam_on: !!ECHO_MEDIA.camDesired }); } catch {}
     }
-    await ensureCamera();
+    try {
+      await ensureCamera();
+    } catch (err) {
+      const reason = describeCameraError(err);
+      ECHO_MEDIA.lastCameraError = reason;
+      echoCamDisable(reason, { keepRoom: !!ECHO_MEDIA.voiceDesired });
+      throw new Error(reason);
+    }
     ECHO_MEDIA.camDesired = true;
     ECHO_MEDIA.camEnabled = true;
     ECHO_MEDIA.echoRoom = room;
@@ -772,10 +938,14 @@
     updateStatus(`Webcam on · ${profile().label || ECHO_MEDIA.quality}`);
     safeToast("📷 Webcam enabled", "info", 1600);
     return { success: true, webcam: true, voice: !!ECHO_MEDIA.voiceDesired };
+    });
   }
 
   async function toggleBothForRoom(room) {
     room = String(room || localRoomName()).trim();
+    if (!room) throw new Error("Join a room first");
+    if (echoMediaIsBusy("both", room)) return { success: false, busy: true };
+    return echoMediaWithBusy("both", room, "", async () => {
     if (ECHO_MEDIA.voiceDesired && ECHO_MEDIA.camDesired && ECHO_MEDIA.echoRoom === room) {
       await leave("Voice/webcam disabled");
       return { success: true, voice: false, webcam: false };
@@ -784,7 +954,14 @@
     ECHO_MEDIA.voiceDesired = true;
     ECHO_MEDIA.micEnabled = true;
     setMicTracksEnabled(true);
-    await ensureCamera();
+    try {
+      await ensureCamera();
+    } catch (err) {
+      const reason = describeCameraError(err);
+      ECHO_MEDIA.lastCameraError = reason;
+      echoCamDisable(reason, { keepRoom: !!ECHO_MEDIA.voiceDesired });
+      throw new Error(reason);
+    }
     ECHO_MEDIA.camDesired = true;
     ECHO_MEDIA.camEnabled = true;
     ECHO_MEDIA.comboDesired = true;
@@ -794,15 +971,20 @@
     try { voiceUpdateRoomVoiceButton(); voiceUpdateRoomCamButton(); } catch {}
     updateStatus(`Voice + webcam · ${profile().label || ECHO_MEDIA.quality}`);
     return { success: true, voice: true, webcam: true };
+    });
   }
 
   async function toggleMic() {
+    const room = localRoomName();
+    if (echoMediaIsBusy("mic", room)) return { success: false, busy: true };
+    return echoMediaWithBusy("mic", room, "", async () => {
     if (!ECHO_MEDIA.voiceDesired && !(VOICE_STATE && VOICE_STATE.micStream)) return null;
     const muted = !VOICE_STATE.micMuted;
     try { voiceSetMute(muted); } catch {}
     ECHO_MEDIA.micEnabled = !muted;
     safeToast(muted ? "🔇 Mic muted" : "🎤 Mic unmuted", "info", 1600);
     return { success: true, muted };
+    });
   }
 
   async function toggleCam() {
@@ -906,6 +1088,8 @@
   async function echoRequestRemoteCamFromRoomUser(owner, roomName) {
     owner = String(owner || "").trim();
     const room = String(roomName || localRoomName()).trim();
+    if (echoMediaIsBusy("view", room, owner)) return { success: false, busy: true };
+    return echoMediaWithBusy("view", room, owner, async () => {
     if (!owner || !room) {
       safeToast("📷 Join a room before viewing webcams.", "warn");
       return { success: false, error: "missing_room_or_owner" };
@@ -932,12 +1116,15 @@
     }
     safeToast(`📷 Requested ${owner}'s webcam. Waiting for approval.`, "info", 3600);
     return ack;
+    });
   }
 
   async function echoRespondToCamViewRequest(room, viewer, allowed) {
     room = String(room || localRoomName()).trim();
     viewer = String(viewer || "").trim();
     if (!room || !viewer || viewer === String(currentUser || "").trim()) return;
+    if (echoMediaIsBusy("respond", room, viewer)) return { success: false, busy: true };
+    return echoMediaWithBusy("respond", room, viewer, async () => {
     const ack = await echoSocketAck("webcam_view_response", { room, viewer, allowed: !!allowed });
     if (!ack || !ack.success) {
       safeToast(`❌ Webcam response failed: ${ack && ack.error ? ack.error : "not delivered"}`, "error", 4500);
@@ -959,6 +1146,7 @@
     }
     safeToast(allowed ? `📷 Allowed ${viewer} to view your webcam` : `📷 Denied ${viewer}'s webcam request`, allowed ? "ok" : "info", 2600);
     return ack;
+    });
   }
 
   function wireEchoWebcamViewEvents() {
@@ -988,8 +1176,11 @@
         const opened = await echoJoinMediaRoomForViewing(owner, room);
         if (opened && opened.success) safeToast(`📷 Viewing ${owner}'s webcam`, "ok", 2200);
       } else {
+        ECHO_MEDIA.requestedViewers.delete(echoCamKey(room, owner));
+        echoCamRemoveRemoteVideo(owner);
         safeToast(`📷 ${owner} denied the webcam request.`, "warn", 3200);
       }
+      try { echoCamRefreshUiState(); } catch {}
     });
 
     socket.on("webcam_view_kick", (payload = {}) => {
@@ -1028,7 +1219,9 @@
       if (owner && payload.camera_on === false) {
         ECHO_MEDIA.requestedViewers.delete(echoCamKey(room, owner));
         echoCamRemoveRemoteVideo(owner);
+        updateStatus(owner === String(currentUser || "").trim() ? "Your webcam is off" : `${owner}'s webcam is off`);
       }
+      try { echoCamRefreshUiState(); } catch {}
     });
   }
 
@@ -1087,6 +1280,9 @@
   window.echoCamApplyQualityToAllSenders = echoCamApplyQualityToAllSenders;
   window.echoCamApplyQualityToLocalTrack = echoCamApplyQualityToLocalTrack;
   window.echoCamDisable = echoCamDisable;
+  window.echoCamStopViewing = echoCamStopViewing;
+  window.echoCamRefreshUiState = echoCamRefreshUiState;
+  window.echoMediaIsBusy = echoMediaIsBusy;
   window.echoRequestRemoteCamFromRoomUser = echoRequestRemoteCamFromRoomUser;
 
   try {

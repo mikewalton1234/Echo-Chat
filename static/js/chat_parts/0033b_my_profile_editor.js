@@ -897,22 +897,36 @@ function renderMyProfileEditor(win, profile = null) {
 
   uploadBtn?.addEventListener('click', async () => {
     const file = avatarFileInput?.files?.[0] || null;
+    if (!file) {
+      setUploadStatus('Choose an avatar image to upload.');
+      avatarFileInput?.click();
+      return;
+    }
     await uploadSelectedFile(file);
   });
 
   uploadBannerBtn?.addEventListener('click', async () => {
     const file = bannerFileInput?.files?.[0] || null;
+    if (!file) {
+      setBannerUploadStatus('Choose a banner image to upload.');
+      bannerFileInput?.click();
+      return;
+    }
     await uploadSelectedBannerFile(file);
   });
 
-  avatarFileInput?.addEventListener('change', () => {
+  avatarFileInput?.addEventListener('change', async () => {
     const file = avatarFileInput?.files?.[0] || null;
-    if (file) setUploadStatus(`Selected file: ${file.name}`);
+    if (!file) return;
+    setUploadStatus(`Uploading ${file.name}…`);
+    await uploadSelectedFile(file);
   });
 
-  bannerFileInput?.addEventListener('change', () => {
+  bannerFileInput?.addEventListener('change', async () => {
     const file = bannerFileInput?.files?.[0] || null;
-    if (file) setBannerUploadStatus(`Selected file: ${file.name}`);
+    if (!file) return;
+    setBannerUploadStatus(`Uploading ${file.name}…`);
+    await uploadSelectedBannerFile(file);
   });
 
   dropzone?.addEventListener('click', () => avatarFileInput?.click());

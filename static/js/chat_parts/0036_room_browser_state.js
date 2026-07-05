@@ -41,6 +41,53 @@ function rbNorm(s) {
   return String(s || "").toLowerCase();
 }
 
+function rbRoomNameKey(name) {
+  // Room names are server-canonical, but browser-side metadata can arrive from
+  // API rows, Socket.IO counts, recent/favorite storage, and user clicks. Use a
+  // normalized lookup key so category/search/favorite/current state does not
+  // split when casing or surrounding whitespace drifts.
+  return rbNorm(String(name || '').trim());
+}
+
+function rbMapGetRoomValue(mapLike, roomName, fallback = undefined) {
+  if (!(mapLike instanceof Map)) return fallback;
+  const raw = String(roomName || '').trim();
+  if (mapLike.has(raw)) return mapLike.get(raw);
+  const key = rbRoomNameKey(raw);
+  if (!key) return fallback;
+  for (const [candidate, value] of mapLike.entries()) {
+    if (rbRoomNameKey(candidate) === key) return value;
+  }
+  return fallback;
+}
+
+function rbSameRoomName(a, b) {
+  return rbRoomNameKey(a) === rbRoomNameKey(b);
+}
+
+function rbSameCatalogPath(aCategory, aSubcategory, bCategory, bSubcategory) {
+  return rbRoomNameKey(aCategory) === rbRoomNameKey(bCategory)
+    && rbRoomNameKey(aSubcategory) === rbRoomNameKey(bSubcategory);
+}
+
+function rbUnreadKey(roomName) {
+  return rbRoomNameKey(roomName);
+}
+
+function rbGetUnreadCount(roomName) {
+  return Number(rbMapGetRoomValue(ROOM_BROWSER.unreadCounts, rbUnreadKey(roomName), 0) || 0) || 0;
+}
+
+function rbSetUnreadCount(roomName, count) {
+  const key = rbUnreadKey(roomName);
+  if (!key) return;
+  const n = Math.max(0, Number(count || 0) || 0);
+  for (const candidate of Array.from(ROOM_BROWSER.unreadCounts.keys())) {
+    if (rbRoomNameKey(candidate) === key) ROOM_BROWSER.unreadCounts.delete(candidate);
+  }
+  if (n > 0) ROOM_BROWSER.unreadCounts.set(key, n);
+}
+
 function rbIsCurrentUserRoomCreator(createdBy) {
   // Creator-only private-room affordances must survive harmless username casing drift.
   return rbNorm(String(createdBy || "").trim()) === rbNorm(String(currentUser || "").trim());
@@ -51,7 +98,7 @@ function rbHasUI() {
 }
 
 function rbRoomKey(name, isCustom = false) {
-  return `${isCustom ? 'custom' : 'official'}:${String(name || '')}`;
+  return `${isCustom ? 'custom' : 'official'}:${rbRoomNameKey(name)}`;
 }
 
 function rbReadStoredRoomList(key, fallback = []) {
@@ -82,6 +129,8 @@ function rbNormalizeStoredRoom(entry) {
     category: entry.category ? String(entry.category) : null,
     subcategory: entry.subcategory ? String(entry.subcategory) : null,
     created_by: entry.created_by ? String(entry.created_by) : null,
+    my_room_role: entry.my_room_role ? String(entry.my_room_role) : '',
+    can_room_moderate: !!entry.can_room_moderate,
     is_private: !!entry.is_private,
     is_18_plus: !!entry.is_18_plus,
     is_nsfw: !!entry.is_nsfw,
@@ -148,8 +197,9 @@ function rbFindCatalogRoom(roomName) {
       const rooms = Array.isArray(sub?.rooms) ? sub.rooms : [];
       for (const room of rooms) {
         const roomNameResolved = (typeof room === 'string') ? String(room || '').trim() : String(room?.name || '').trim();
-        if (roomNameResolved !== name) continue;
-        return { name, isCustom: false, category, subcategory, meta: rbNormalizeOfficialRoomMeta(typeof room === 'object' ? room : { name }) };
+        if (!rbSameRoomName(roomNameResolved, name)) continue;
+        const canonicalName = roomNameResolved || name;
+        return { name: canonicalName, isCustom: false, category, subcategory, meta: rbNormalizeOfficialRoomMeta(typeof room === 'object' ? { ...room, name: canonicalName } : { name: canonicalName }) };
       }
     }
   }
@@ -158,12 +208,16 @@ function rbFindCatalogRoom(roomName) {
 
 function rbResolveCustomMeta(roomName, fallbackMeta = null) {
   const name = String(roomName || '').trim();
-  const fromLive = (ROOM_BROWSER.customRooms || []).find((r) => String(r?.name || '').trim() === name);
+  const key = rbRoomNameKey(name);
+  const fromLive = (ROOM_BROWSER.customRooms || []).find((r) => rbRoomNameKey(r?.name) === key);
   const src = fromLive || fallbackMeta || null;
   if (!src) return null;
+  const canonicalName = String(src.name || src.room || name).trim() || name;
   return {
-    name,
+    name: canonicalName,
     created_by: src.created_by ? String(src.created_by) : null,
+    my_room_role: src.my_room_role ? String(src.my_room_role) : '',
+    can_room_moderate: !!src.can_room_moderate,
     is_private: !!src.is_private,
     is_18_plus: !!src.is_18_plus,
     is_nsfw: !!src.is_nsfw,
@@ -190,15 +244,17 @@ function rbResolveCustomMeta(roomName, fallbackMeta = null) {
 }
 
 function rbBuildRow(roomName, { isCustom = false, meta = null, category = null, subcategory = null, recentAt = null } = {}) {
-  const name = String(roomName || '').trim();
-  if (!name) return null;
-  const officialHit = !isCustom ? (rbFindCatalogRoom(name) || null) : null;
-  const resolvedMeta = isCustom ? rbResolveCustomMeta(name, meta) : (rbNormalizeOfficialRoomMeta(meta) || officialHit?.meta || null);
-  const statusMeta = (ROOM_BROWSER.roomStatusMeta instanceof Map) ? (ROOM_BROWSER.roomStatusMeta.get(name) || {}) : {};
+  const rawName = String(roomName || '').trim();
+  if (!rawName) return null;
+  const officialHit = !isCustom ? (rbFindCatalogRoom(rawName) || null) : null;
+  const resolvedMeta = isCustom ? rbResolveCustomMeta(rawName, meta) : (rbNormalizeOfficialRoomMeta(meta) || officialHit?.meta || null);
+  const name = String((isCustom ? resolvedMeta?.name : (resolvedMeta?.name || officialHit?.name)) || rawName).trim() || rawName;
+  const statusMeta = rbMapGetRoomValue(ROOM_BROWSER.roomStatusMeta, name, {}) || rbMapGetRoomValue(ROOM_BROWSER.roomStatusMeta, rawName, {}) || {};
   const mergedMeta = { ...(resolvedMeta || {}), ...(statusMeta || {}) };
   const fallbackCount = Number(mergedMeta?.member_count ?? 0) || 0;
-  const liveCount = ROOM_BROWSER.counts.has(name)
-    ? (Number(ROOM_BROWSER.counts.get(name) || 0) || 0)
+  const countValue = rbMapGetRoomValue(ROOM_BROWSER.counts, name, rbMapGetRoomValue(ROOM_BROWSER.counts, rawName, null));
+  const liveCount = countValue !== null && countValue !== undefined
+    ? (Number(countValue || 0) || 0)
     : fallbackCount;
   const capacity = Number(mergedMeta?.capacity || mergedMeta?.max_users || 0) || 0;
   const full = !!mergedMeta?.full || (capacity > 0 && liveCount >= capacity);
@@ -214,8 +270,8 @@ function rbBuildRow(roomName, { isCustom = false, meta = null, category = null, 
     slowmode_seconds: Number(mergedMeta?.slowmode_seconds || 0) || 0,
     capacity,
     full,
-    current: String(UIState.currentRoom || '') === name,
-    unread: Number(ROOM_BROWSER.unreadCounts.get(name) || 0) || 0,
+    current: rbSameRoomName(UIState.currentRoom || '', name),
+    unread: rbGetUnreadCount(name),
     favorite: rbIsFavoriteRoom(name, !!isCustom),
     recentAt: Number(recentAt || 0) || 0,
   };
@@ -235,6 +291,8 @@ function rbToggleFavoriteRoom(rowLike) {
     category: rowLike?.category || rowLike?.meta?.category || null,
     subcategory: rowLike?.subcategory || rowLike?.meta?.subcategory || null,
     created_by: rowLike?.created_by || rowLike?.meta?.created_by || null,
+    my_room_role: rowLike?.my_room_role || rowLike?.meta?.my_room_role || '',
+    can_room_moderate: !!(rowLike?.can_room_moderate ?? rowLike?.meta?.can_room_moderate),
     is_private: !!(rowLike?.is_private ?? rowLike?.meta?.is_private),
     is_18_plus: !!(rowLike?.is_18_plus ?? rowLike?.meta?.is_18_plus),
     is_nsfw: !!(rowLike?.is_nsfw ?? rowLike?.meta?.is_nsfw),
@@ -260,6 +318,8 @@ function rbToggleFavoriteRoom(rowLike) {
       category: row.category || null,
       subcategory: row.subcategory || null,
       created_by: row.created_by || row.meta?.created_by || null,
+      my_room_role: row.my_room_role || row.meta?.my_room_role || '',
+      can_room_moderate: !!(row.can_room_moderate ?? row.meta?.can_room_moderate),
       is_private: !!(row.is_private ?? row.meta?.is_private),
       is_18_plus: !!(row.is_18_plus ?? row.meta?.is_18_plus),
       is_nsfw: !!(row.is_nsfw ?? row.meta?.is_nsfw),
@@ -296,6 +356,8 @@ function rbRememberRecentRoom(rowLike) {
     category: rowLike?.category || rowLike?.meta?.category || null,
     subcategory: rowLike?.subcategory || rowLike?.meta?.subcategory || null,
     created_by: rowLike?.created_by || rowLike?.meta?.created_by || null,
+    my_room_role: rowLike?.my_room_role || rowLike?.meta?.my_room_role || '',
+    can_room_moderate: !!(rowLike?.can_room_moderate ?? rowLike?.meta?.can_room_moderate),
     is_private: !!(rowLike?.is_private ?? rowLike?.meta?.is_private),
     is_18_plus: !!(rowLike?.is_18_plus ?? rowLike?.meta?.is_18_plus),
     is_nsfw: !!(rowLike?.is_nsfw ?? rowLike?.meta?.is_nsfw),
@@ -328,7 +390,9 @@ function rbRememberRecentRoom(rowLike) {
 }
 
 function rbClearUnread(roomName) {
-  const key = String(roomName || '').trim();
+  const key = rbUnreadKey(roomName);
   if (!key) return;
-  ROOM_BROWSER.unreadCounts.delete(key);
+  for (const candidate of Array.from(ROOM_BROWSER.unreadCounts.keys())) {
+    if (rbRoomNameKey(candidate) === key) ROOM_BROWSER.unreadCounts.delete(candidate);
+  }
 }

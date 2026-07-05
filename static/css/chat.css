@@ -495,7 +495,7 @@ body {
 }
 
 .roomEmbedUsersHead {
-  display: flex;
+  display: none;
   align-items: center;
   justify-content: space-between;
   padding: 8px 10px;
@@ -753,6 +753,27 @@ body {
   display: none;
 }
 
+.dock::after {
+  content: none;
+  display: none;
+}
+
+/* beta.395: only show the edge mask while alert tabs are visible.
+   The always-on beta.393/beta.394 mask could cover a sliver of normal hub
+   content after the bubbles collapsed. */
+.dock.hasDockAlertMask::after {
+  content: none;
+  display: none;
+}
+
+/* The dock edge mask sits above the tucked part of the slide-out tabs.
+   It makes the tabs look like they emerge from underneath the hub instead of
+   sitting on top of the hub face, but only while tabs are active/peeked. */
+.dock.ecShell.hasDockAlertMask::after {
+  content: none;
+  display: none;
+}
+
 
 /* ───────────────────────────────────────────────────────────────────────────────
    Accent-aware dock skin
@@ -803,6 +824,29 @@ body {
 
   font-family: Tahoma, Verdana, "Segoe UI", sans-serif;
 }
+
+/* beta.403: physical hub edge for slide-out bubbles.
+   The old wide mask looked like a blue strip and covered the search text.
+   This narrow lip sits mostly outside the hub and gives the bubbles a real edge
+   to slide from behind without drawing over normal hub content. */
+.dock.ecShell::before {
+  content: "";
+  display: block;
+  position: absolute;
+  left: -6px;
+  top: 0;
+  width: 8px;
+  height: 100%;
+  pointer-events: none;
+  z-index: 6;
+  border-radius: 12px 0 0 12px;
+  background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 100%);
+  box-shadow:
+    -8px 0 18px rgba(36, 28, 78, 0.10),
+    inset 1px 0 0 rgba(255,255,255,0.75),
+    1px 0 0 rgba(0,0,0,0.10);
+}
+
 
 .accent-default .dock.ecShell {
   --panel: #f2f8ff;
@@ -989,7 +1033,7 @@ body {
 }
 
 .dock.ecShell .dockTitlebar {
-  padding: 8px 10px;
+  padding: 6px 10px 5px;
   background: linear-gradient(180deg, var(--dockTitleStart) 0%, var(--dockTitleMid) 55%, var(--dockTitleEnd) 100%);
   border-bottom: 1px solid rgba(0,0,0,0.12);
   box-shadow:
@@ -1026,7 +1070,7 @@ body {
 }
 
 .dock.ecShell .dockProfile {
-  padding: 12px 10px 10px;
+  padding: 8px 10px 8px;
   background: linear-gradient(180deg, var(--dockProfileTop), var(--dockProfileBottom));
 }
 
@@ -1113,18 +1157,21 @@ body {
   z-index: 2;
 }
 
+/* The edge mask uses z-index:4, so normal dock content remains readable while
+   the mask covers only the first few pixels at the hub edge. */
+
 .dockAlertRail {
   position: absolute;
-  left: 18px;
+  left: -72px;
   top: 192px;
-  width: 0;
+  width: 72px;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 12px;
   pointer-events: none;
-  /* Keep the rail visually docked while still stacking above the hub shell and below the flyout. */
-  z-index: 8;
+  /* Rail lives outside the hub; the narrow hub lip above provides the physical edge. */
+  z-index: 3;
 }
 
 .dockAlertRail > * {
@@ -1132,7 +1179,7 @@ body {
 }
 
 .dockAlertBubble {
-  --bubble-base-x: -104px;
+  --bubble-base-x: 72px;
   --bubble-float-x: 0px;
   --bubble-float-y: 0px;
   position: relative;
@@ -1157,7 +1204,7 @@ body {
   visibility: hidden;
   pointer-events: none;
   transform: translate3d(calc(var(--bubble-base-x) + var(--bubble-float-x)), var(--bubble-float-y), 0);
-  transition: transform 180ms ease, box-shadow 140ms ease, filter 140ms ease, opacity 140ms ease, visibility 0s linear 180ms;
+  transition: transform 220ms cubic-bezier(.2,.85,.2,1), box-shadow 140ms ease, filter 140ms ease, opacity 140ms ease, visibility 0s linear 180ms;
   box-shadow:
     0 12px 24px rgba(45,34,96,0.20),
     inset 1px 1px 0 rgba(255,255,255,0.95),
@@ -1209,7 +1256,7 @@ body {
 .dockAlertBubble.isPeeked,
 .dockAlertBubble:hover,
 .dockAlertBubble:focus-visible {
-  --bubble-base-x: -72px;
+  --bubble-base-x: 4px;
   filter: brightness(1.03);
   box-shadow:
     0 16px 30px rgba(58,43,128,0.24),
@@ -1219,11 +1266,11 @@ body {
 }
 
 .dockAlertBubble.isAlerting {
-  --bubble-base-x: -84px;
+  --bubble-base-x: 0px;
 }
 
 .dockAlertBubble.isActive {
-  --bubble-base-x: -88px;
+  --bubble-base-x: -2px;
 }
 
 .dockAlertBubble.hasUnread {
@@ -1236,9 +1283,29 @@ body {
     inset -1px -1px 0 rgba(84,62,173,0.14);
 }
 
+/* beta.389: hard guard for missed-PM rail visibility. The JS count path may
+   refresh during reconnect/window focus races; when unread state exists, keep
+   the bubble paintable even if the normal rail presentation class update lags. */
+.dockAlertBubble.ecForceVisible,
+.dockAlertBubble.hasUnread.ecForceVisible {
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+.dockAlertBubble.ecMissedPmAttention,
+#dockAlertFlyout.ecMissedPmAttention {
+  animation: ec-missed-pm-pulse 0.9s ease-in-out 0s 2;
+}
+
+@keyframes ec-missed-pm-pulse {
+  0%, 100% { filter: brightness(1); }
+  35% { filter: brightness(1.18); box-shadow: 0 0 0 4px rgba(var(--accent-rgb),0.22), 0 18px 38px rgba(67,51,148,0.30); }
+}
+
 .dockAlertIcon {
-  width: 24px;
-  height: 24px;
+  width: 32px;
+  height: 32px;
   border-radius: 9px;
   display: inline-flex;
   align-items: center;
@@ -1280,7 +1347,7 @@ body {
 .dockAlertFlyout {
   position: absolute;
   z-index: 30;
-  left: -360px;
+  left: -288px;
   top: -6px;
   width: 334px;
   max-height: calc(100vh - 240px);
@@ -1551,7 +1618,7 @@ body {
 }
 .meCustom::placeholder { color: var(--placeholder); }
 
-.searchRow { margin-top: 8px; }
+.searchRow { margin-top: 5px; }
 
 .searchInputWrap {
   position: relative;
@@ -1776,8 +1843,8 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: var(--ec-emoticon-picker-size, 34px);
+  height: var(--ec-emoticon-picker-size, 34px);
   border-radius: 8px;
   border: 1px solid rgba(0,0,0,0.08);
   background: rgba(255,255,255,0.72);
@@ -2241,6 +2308,16 @@ body {
   overflow-x: hidden;
   padding: 0 12px 14px;
   background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
+  scroll-behavior: auto;
+  overflow-anchor: none;
+}
+
+.ecProfileWindow .ecProfilePageCard,
+.ecProfileWindow .ecProfileCard,
+.ecProfileWindow [data-profile-feed-root],
+.ecProfileWindow [data-profile-photos-root] {
+  scroll-behavior: auto;
+  overflow-anchor: none;
 }
 
 .ecProfileWindow .ym-resize {
@@ -3089,6 +3166,10 @@ body {
 }
 .winBtn:hover { filter: brightness(1.1); }
 .winBtn.danger { border-color: rgba(255,77,79,0.5); }
+.ecProfileFullscreenBtn {
+  font-size: 14px;
+  font-weight: 800;
+}
 
 .ym-body {
   height: calc(100% - 40px);
@@ -3201,8 +3282,8 @@ body {
 }
 
 .ym-groupMembersList .liAvatar {
-  width: 24px;
-  height: 24px;
+  width: var(--ec-emoticon-picker-size, 34px);
+  height: var(--ec-emoticon-picker-size, 34px);
   min-width: 24px;
   font-size: 10px;
 }
@@ -3259,7 +3340,7 @@ body {
 }
 .ym-toolBtn:hover { filter: brightness(1.12); }
 
-/* Emoticons / emoji picker (emoji-picker-element) */
+/* Image emoticon picker */
 .ec-emojiPopover {
   position: fixed;
   width: 360px;
@@ -3288,27 +3369,6 @@ body {
 }
 
 .ec-emojiStatus.hidden { display: none; }
-
-/* Style the web component via its CSS variables */
-.ec-emojiPopover emoji-picker {
-  width: 100%;
-  height: 100%;
-
-  --background: var(--panel);
-  --border-color: transparent;
-
-  --category-font-color: var(--text);
-  --input-font-color: var(--text);
-  --input-placeholder-color: var(--placeholder);
-
-  --input-border-color: var(--borderSoft);
-  --input-border-radius: 10px;
-
-  --button-hover-background: rgba(var(--accent-rgb),0.12);
-  --button-active-background: rgba(var(--accent-rgb),0.18);
-
-  --indicator-color: var(--accent);
-}
 
 @media (max-width: 520px) {
   .ec-emojiPopover { width: 320px; height: 380px; }
@@ -3397,10 +3457,17 @@ body {
   border-radius: 10px;
   border: 1px solid var(--border);
   background: var(--listBg);
+  max-width: 100%;
+  min-width: 0;
+  flex-wrap: wrap;
 }
 
 .ym-fileName {
   font-weight: 600;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .ym-fileMeta {
@@ -3443,6 +3510,84 @@ body {
 .ym-torrentComment{color:var(--muted);font-size:11px;white-space:pre-wrap}
 .ym-torrentActions{display:flex;gap:6px;align-items:center;margin-left:auto;flex-wrap:wrap}
 .ym-torrentActions .ym-fileDl:disabled{opacity:.55;cursor:not-allowed}
+
+
+.ym-window[data-kind="dm"] .ec-msgGroupMain,
+.ym-window[data-kind="dm"] .ec-msgItems,
+.ym-window[data-kind="dm"] .ec-msgItem,
+.ym-window[data-kind="dm"] .ec-msgText{
+  min-width:0;
+  max-width:100%;
+}
+.ym-window[data-kind="dm"] .ec-msgItem--file .ym-fileCard,
+.ym-window[data-kind="dm"] .ec-msgItem--torrent .ym-torrentCard{
+  max-width:100%;
+}
+.ym-dmStatus{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  padding:6px 8px;
+  border-top:1px solid var(--borderFaint);
+  border-bottom:1px solid var(--borderFaint);
+  background:rgba(0,0,0,.08);
+  color:var(--muted);
+  font-size:11px;
+  line-height:1.25;
+  min-height:28px;
+  flex-wrap:wrap;
+}
+.ym-dmStatusText{
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+  min-width:0;
+  flex:1 1 180px;
+}
+.ym-dmStatusMain{
+  font-weight:700;
+  color:var(--text);
+}
+.ym-dmStatusMeta{
+  overflow-wrap:anywhere;
+}
+.ym-dmStatusActions{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  flex:0 0 auto;
+}
+.ym-dmStatusBtn{
+  white-space:nowrap;
+  padding:3px 8px;
+  font-size:11px;
+}
+.ym-dmStatus--ok{border-left:3px solid rgba(74,222,128,.75)}
+.ym-dmStatus--warn,.ym-dmStatus--checking{border-left:3px solid rgba(250,204,21,.8)}
+.ym-dmStatus--error{border-left:3px solid rgba(248,113,113,.85)}
+.ym-dmStatus--busy .ym-dmStatusMain::after{
+  content:"";
+  display:inline-block;
+  width:7px;
+  height:7px;
+  margin-left:6px;
+  border:1px solid currentColor;
+  border-right-color:transparent;
+  border-radius:999px;
+  animation:ecTorrentSpin .8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce){.ym-dmStatus--busy .ym-dmStatusMain::after{animation:none;border-right-color:currentColor}}
+
+@media (max-width: 520px) {
+  .ym-window[data-kind="dm"] .ym-dmStatus{
+    align-items:flex-start;
+  }
+  .ym-window[data-kind="dm"] .ym-dmStatusActions{
+    width:100%;
+    justify-content:flex-start;
+  }
+}
 
 .ym-xferCard {
   display: inline-flex;
@@ -3664,6 +3809,20 @@ body {
 
 .ec-msgGroup.is-self .ec-msgAvatar {
   background: rgba(var(--accent2-rgb),0.20);
+}
+
+.ec-msgAvatar.hasImage {
+  padding: 0;
+  overflow: hidden;
+  background: rgba(255,255,255,0.88);
+}
+
+.ec-msgAvatar.hasImage img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  border-radius: inherit;
 }
 
 .ec-msgGroupMain {
@@ -3961,10 +4120,20 @@ body {
   align-items: center;
   justify-content: flex-start;
   gap: 6px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   min-height: 0;
+  min-width: 0;
   overflow: visible;
   vertical-align: middle;
+}
+
+.msgReactions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .msgActions {
@@ -4098,6 +4267,49 @@ body {
   opacity: 1;
   transform: none;
   transition-delay: 0ms !important;
+}
+
+.ec-msgItem--room .ec-msgContent--rich {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.ec-msgItem--room .ec-msgContent--rich .msgReactionDock {
+  width: 100%;
+  margin-left: 0;
+  margin-top: 2px;
+}
+
+.ec-msgItem--room .ec-msgContent--rich .msgActions {
+  position: static;
+  left: auto;
+  top: auto;
+  transform: none;
+  border-radius: 999px;
+  margin-left: 2px;
+}
+
+.ec-msgItem--room:hover .ec-msgContent--rich .msgActions,
+.ec-msgItem--room:focus-within .ec-msgContent--rich .msgActions {
+  transform: none;
+}
+
+.ec-msgItem--room.ec-msgItem--torrent .ym-torrentCard,
+.ec-msgItem--room.ec-msgItem--gif .ym-gifWrap,
+.ec-msgItem--room.ec-msgItem--media .ecSharedMediaCard,
+.ec-msgItem--room.ec-msgItem--room-radio .ecRoomRadioWireCard {
+  max-width: min(100%, 560px);
+}
+
+.ec-msgItem--room.ec-msgItem--torrent .ym-torrentCard {
+  width: min(100%, 560px);
+}
+
+.ec-msgItem--room.ec-msgItem--torrent .ym-torrentActions {
+  margin-left: 0;
+  width: 100%;
 }
 
 .ec-msgItem--room.rxLocked .msgActions,
@@ -4366,6 +4578,44 @@ body {
 .settingsFootLeft .ghostBtn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+
+.settingsStatus {
+  flex: 1 1 220px;
+  min-width: 180px;
+  line-height: 1.35;
+}
+
+.settingsStatus.warnText {
+  color: #a86800;
+  font-weight: 700;
+}
+
+body.theme-dark .settingsStatus.warnText,
+.theme-dark .settingsStatus.warnText {
+  color: #ffd37a;
+}
+
+#settingsModal.is-dirty .settingsModalCard {
+  box-shadow: 0 18px 54px rgba(0,0,0,0.28), 0 0 0 2px color-mix(in srgb, var(--accent, #2f80ed) 36%, transparent);
+}
+
+#settingsModal button.isBusy,
+#settingsModal .primaryBtn.isBusy,
+#settingsModal .ghostBtn.isBusy,
+#settingsModal .miniBtn.isBusy {
+  cursor: progress;
+  opacity: 0.72;
+}
+
+.settingsTabBtn:focus-visible,
+#settingsModal button:focus-visible,
+#settingsModal input:focus-visible,
+#settingsModal select:focus-visible,
+#settingsModal a:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent, #2f80ed) 72%, white 18%);
+  outline-offset: 2px;
 }
 
 .selectInput {
@@ -5040,8 +5290,8 @@ body {
 }
 
 .rbIcon {
-  width: 28px;
-  height: 28px;
+  width: var(--ec-emoticon-picker-size, 34px);
+  height: var(--ec-emoticon-picker-size, 34px);
   border-radius: 9px;
   display: flex;
   align-items: center;
@@ -5585,8 +5835,9 @@ body {
 }
 
 @media (max-width: 1180px) {
-  .dock::before {
-    width: 16px;
+  .dock.ecShell::before {
+    left: -6px;
+    width: 8px;
   }
 
   .dockAlertBubble {
@@ -5596,24 +5847,25 @@ body {
   }
 
   .dockAlertRail {
-    left: 16px;
+    left: -62px;
+    width: 62px;
   }
 
   .dockAlertBubble {
-    --bubble-base-x: -90px;
+    --bubble-base-x: 62px;
   }
 
   .dockAlertBubble.isPeeked,
   .dockAlertBubble:hover {
-    --bubble-base-x: -62px;
+    --bubble-base-x: 4px;
   }
 
   .dockAlertBubble.isAlerting {
-    --bubble-base-x: -76px;
+    --bubble-base-x: 0px;
   }
 
   .dockAlertBubble.isActive {
-    --bubble-base-x: -80px;
+    --bubble-base-x: -2px;
   }
 
   .dockAlertLabel {
@@ -5621,7 +5873,7 @@ body {
   }
 
   .dockAlertFlyout {
-    left: -320px;
+    left: -258px;
     width: 296px;
   }
 }
@@ -5638,7 +5890,7 @@ body {
   display: flex;
   align-items: center;
   gap: 0;
-  padding: 3px 6px 4px;
+  padding: 1px 6px 2px;
   background: linear-gradient(180deg, var(--dockMenuTop), var(--dockMenuBottom));
   border-bottom: 1px solid rgba(0,0,0,0.10);
 }
@@ -5801,8 +6053,8 @@ body {
 }
 
 .dock.ecShell .friendItem .liAvatar {
-  width: 28px;
-  height: 28px;
+  width: var(--ec-emoticon-picker-size, 34px);
+  height: var(--ec-emoticon-picker-size, 34px);
   border-radius: 8px;
   background: linear-gradient(180deg, var(--dockCardTop), var(--dockCardBottom));
   border: 1px solid rgba(0,0,0,0.12);
@@ -5942,8 +6194,8 @@ body {
   position: absolute;
   right: 10px;
   top: 10px;
-  width: 28px;
-  height: 28px;
+  width: var(--ec-emoticon-picker-size, 34px);
+  height: var(--ec-emoticon-picker-size, 34px);
   border: none;
   border-radius: 999px;
   background: rgba(110, 83, 228, 0.12);
@@ -6695,8 +6947,8 @@ body.theme-dark .ecHelpClose,
 }
 
 .dockMiniPopupClose {
-  width: 24px;
-  height: 24px;
+  width: var(--ec-emoticon-picker-size, 34px);
+  height: var(--ec-emoticon-picker-size, 34px);
   border: 1px solid rgba(var(--accent-rgb),0.16);
   border-radius: 6px;
   background: rgba(255,255,255,0.9);
@@ -8291,8 +8543,8 @@ body.theme-dark .ecHelpClose,
   position: absolute;
   top: 8px;
   right: 8px;
-  width: 28px;
-  height: 28px;
+  width: var(--ec-emoticon-picker-size, 34px);
+  height: var(--ec-emoticon-picker-size, 34px);
   border: 1px solid rgba(255,255,255,0.14);
   border-radius: 999px;
   background: rgba(7,12,22,0.78);
@@ -9002,7 +9254,7 @@ body.theme-dark .ecHelpClose,
 
 
 .roomUsersStatus {
-  padding: 4px 8px 6px;
+  padding: 8px 8px 6px;
   min-height: 18px;
 }
 .roomUsersRefreshBtn {
@@ -10101,4 +10353,1213 @@ body.theme-dark .ec-chatLink,
   border: 1px dashed var(--borderSoft);
   border-radius: 10px;
   font-size: 11px;
+}
+
+/* Image emoticon picker + inline rendering */
+:root {
+  --ec-emoticon-inline-size: 26px;
+  --ec-emoticon-picker-size: 34px;
+  --ec-emoticon-token-size: 30px;
+}
+.ec-codeEmoticonPanel {
+  padding: 8px;
+  max-height: 390px;
+  overflow: hidden;
+}
+.ec-codeEmoticonHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.ec-codeEmoticonTitle {
+  font-weight: 700;
+  font-size: 12px;
+}
+.ec-codeEmoticonHint {
+  font-size: 11px;
+  opacity: .7;
+}
+.ec-codeEmoticonSearch {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,.16);
+  background: rgba(0,0,0,.18);
+  color: inherit;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+}
+.ec-codeEmoticonGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(calc(var(--ec-emoticon-picker-size, 34px) + 12px), 1fr));
+  gap: 6px;
+  max-height: 300px;
+  overflow: auto;
+  padding-right: 2px;
+}
+.ec-codeEmoticonBtn {
+  min-width: 0;
+  border: 1px solid rgba(90,110,140,.28);
+  border-radius: 8px;
+  background: rgba(255,255,255,.34);
+  color: inherit;
+  padding: 6px 5px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ec-codeEmoticonBtn:hover,
+.ec-codeEmoticonBtn:focus-visible {
+  background: rgba(255,255,255,.12);
+  outline: none;
+}
+.ec-codeEmoticonPreview {
+  width: var(--ec-emoticon-picker-size, 34px);
+  height: var(--ec-emoticon-picker-size, 34px);
+  object-fit: contain;
+  image-rendering: auto;
+}
+.ec-codeEmoticonBtn.is-missing-image {
+  background: repeating-linear-gradient(45deg, rgba(255,255,255,.22), rgba(255,255,255,.22) 5px, rgba(0,0,0,.08) 5px, rgba(0,0,0,.08) 10px);
+}
+.ec-codeEmoticonBtn.is-missing-image .ec-codeEmoticonPreview {
+  opacity: .25;
+}
+.ec-codeEmoticonCode {
+  display: none;
+}
+.ec-codeEmoticonEmpty {
+  grid-column: 1 / -1;
+  opacity: .75;
+  font-size: 12px;
+  padding: 8px;
+  text-align: center;
+}
+.ec-inlineEmoticon {
+  height: var(--ec-emoticon-inline-size, 26px);
+  width: auto;
+  max-width: calc(var(--ec-emoticon-inline-size, 26px) * 3);
+  object-fit: contain;
+  vertical-align: middle;
+  margin: 0 1px;
+}
+.ec-inlineEmoticon.is-frozen-emoticon,
+.ec-codeEmoticonPreview.is-frozen-emoticon {
+  opacity: .96;
+}
+
+/* Rich message composer used by the image emoticon picker.
+   The hidden input still stores/sends the typed shortcuts; this editor shows
+   inline image tokens so clicking an emoticon does not visibly insert :)) text. */
+.ec-richComposerHiddenInput {
+  position: absolute !important;
+  left: -10000px !important;
+  width: 1px !important;
+  height: 1px !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+.ec-richComposer {
+  flex: 1;
+  min-width: 0;
+  min-height: 38px;
+  max-height: 96px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  display: block;
+  line-height: 1.35;
+  cursor: text;
+}
+.ec-richComposer:empty::before {
+  content: attr(data-placeholder);
+  color: var(--muted);
+  opacity: .8;
+  pointer-events: none;
+}
+.ec-richComposer:focus {
+  border-color: rgba(var(--accent-rgb), .58);
+  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), .14);
+}
+.ec-richEmoticonToken {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--ec-emoticon-token-size, 30px);
+  height: var(--ec-emoticon-token-size, 30px);
+  vertical-align: middle;
+  margin: 0 1px;
+  user-select: all;
+}
+.ec-richEmoticonImg {
+  height: var(--ec-emoticon-inline-size, 26px);
+  width: auto;
+  max-width: calc(var(--ec-emoticon-inline-size, 26px) * 3);
+  object-fit: contain;
+  pointer-events: none;
+}
+.ec-richEmoticonImg.is-frozen-emoticon {
+  opacity: .96;
+}
+
+/* Beta.345 classic room composer toolbar.
+   Matches the old messenger-style order: font, size, B/I/U, text color,
+   emoticons, torrent/GIF, voice, webcam, message box, Send. */
+.roomEmbedCompose.ecClassicCompose {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(38px, auto);
+  align-items: stretch;
+  gap: 3px 7px;
+  padding: 5px 6px 5px 6px;
+  border-top: 1px solid rgba(var(--accent-rgb), 0.22);
+  background: linear-gradient(180deg, rgba(246, 250, 241, 0.92), rgba(239, 245, 229, 0.96));
+}
+
+.roomEmbedCompose .ecClassicComposeToolbar {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+.roomEmbedCompose .ecClassicToolField,
+.roomEmbedCompose .ecClassicColorField {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  margin: 0;
+}
+
+.roomEmbedCompose .ecClassicSelect {
+  height: 23px;
+  padding: 1px 18px 1px 5px;
+  border: 1px solid #9eb6d8;
+  border-radius: 2px;
+  background: #fff;
+  color: #111;
+  font-size: 13px;
+  line-height: 1;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.78);
+}
+
+.roomEmbedCompose .ecClassicFontSelect { width: 120px; }
+.roomEmbedCompose .ecClassicSizeSelect { width: 54px; }
+
+.roomEmbedCompose .ecClassicComposeToolbar .ym-toolBtn,
+.roomEmbedCompose .ecClassicColorInput {
+  width: 24px;
+  min-width: 24px;
+  height: 23px;
+  min-height: 23px;
+  padding: 0;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  font-size: 13px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #111;
+  box-shadow: none;
+}
+
+.roomEmbedCompose .ecClassicComposeToolbar .ym-toolBtn:hover,
+.roomEmbedCompose .ecClassicComposeToolbar .ym-toolBtn:focus-visible,
+.roomEmbedCompose .ecClassicFormatBtn[aria-pressed="true"] {
+  border-color: #9eb6d8;
+  background: linear-gradient(180deg, #ffffff, #dfeafa);
+}
+
+.roomEmbedCompose .ecClassicTextBtn {
+  width: auto !important;
+  min-width: max-content !important;
+  padding: 0 7px !important;
+  gap: 4px;
+  font-size: 12px !important;
+  font-weight: 700;
+}
+
+.roomEmbedCompose .ecClassicColorInput {
+  padding: 1px;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.roomEmbedCompose .ec-richComposer,
+.roomEmbedCompose #roomEmbedInput.ym-input {
+  grid-column: 1;
+  grid-row: 2;
+  min-height: 38px;
+  border-radius: 4px;
+  border: 1px solid #c9c9c9;
+  background: #fff;
+  color: var(--room-composer-color, #111);
+  font-family: var(--room-font-family, Arial), Arial, sans-serif;
+  font-weight: var(--room-composer-font-weight, 400);
+  font-style: var(--room-composer-font-style, normal);
+  text-decoration: var(--room-composer-text-decoration, none);
+  padding: 8px 10px;
+}
+
+.roomEmbedLog,
+.roomEmbedCompose .ec-richComposer,
+.roomEmbedCompose #roomEmbedInput.ym-input {
+  font-family: var(--room-font-family, Arial), Arial, sans-serif;
+}
+
+.roomEmbedCompose #roomEmbedSend.ym-send {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  align-self: stretch;
+  min-width: 58px;
+  border-radius: 3px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.roomEmbedCompose #roomEmbedTorrentInput,
+.roomEmbedCompose .ec-richComposerHiddenInput {
+  position: absolute !important;
+  left: -10000px !important;
+  width: 1px !important;
+  height: 1px !important;
+}
+
+.ec-msgText--styled {
+  font-family: var(--ec-msg-font-family, inherit);
+  font-size: var(--ec-msg-font-size, inherit);
+  color: var(--ec-msg-color, inherit);
+  font-weight: var(--ec-msg-font-weight, inherit);
+  font-style: var(--ec-msg-font-style, inherit);
+  text-decoration: var(--ec-msg-text-decoration, none);
+}
+
+
+/* Beta.355 UI01: responsive classic room composer sizing.
+   Keep the old-messenger ordering, but prevent the toolbar, rich composer,
+   and Send button from overlapping when the chat pane is narrow. */
+.roomEmbedCompose.ecClassicCompose,
+.roomEmbedCompose.ecClassicCompose * {
+  box-sizing: border-box;
+}
+.roomEmbedCompose.ecClassicCompose {
+  width: 100%;
+  min-width: 0;
+  contain: layout paint;
+}
+.roomEmbedCompose.ecClassicCompose .ecClassicComposeToolbar {
+  max-width: 100%;
+  padding-bottom: 1px;
+  overscroll-behavior-inline: contain;
+}
+.roomEmbedCompose.ecClassicCompose .ecClassicComposeToolbar > * {
+  flex: 0 0 auto;
+}
+.roomEmbedCompose.ecClassicCompose .ec-richComposer,
+.roomEmbedCompose.ecClassicCompose #roomEmbedInput.ym-input {
+  width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.roomEmbedCompose.ecClassicCompose #roomEmbedSend.ym-send {
+  min-height: 40px;
+  white-space: nowrap;
+}
+.roomEmbedCompose.ecClassicCompose .ecToolBtnLabel {
+  display: inline;
+}
+
+@media (max-width: 1100px) {
+  .roomEmbedCompose.ecClassicCompose {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(40px, auto);
+    gap: 4px 6px;
+  }
+  .roomEmbedCompose.ecClassicCompose .ecClassicComposeToolbar {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    flex-wrap: wrap;
+    overflow-x: hidden;
+    overflow-y: visible;
+    row-gap: 3px;
+  }
+  .roomEmbedCompose.ecClassicCompose .ec-richComposer,
+  .roomEmbedCompose.ecClassicCompose #roomEmbedInput.ym-input {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .roomEmbedCompose.ecClassicCompose #roomEmbedSend.ym-send {
+    grid-column: 2;
+    grid-row: 2;
+  }
+}
+
+@media (max-width: 760px) {
+  .roomEmbedCompose.ecClassicCompose {
+    padding: 5px;
+    gap: 4px;
+  }
+  .roomEmbedCompose.ecClassicCompose .ecClassicFontSelect {
+    width: 104px;
+  }
+  .roomEmbedCompose.ecClassicCompose .ecClassicSizeSelect {
+    width: 50px;
+  }
+  .roomEmbedCompose.ecClassicCompose .ecClassicComposeToolbar .ym-toolBtn,
+  .roomEmbedCompose.ecClassicCompose .ecClassicColorInput {
+    width: 26px;
+    min-width: 26px;
+    height: 25px;
+    min-height: 25px;
+  }
+  .roomEmbedCompose.ecClassicCompose .ecClassicTextBtn {
+    min-width: 30px !important;
+    max-width: 34px;
+    overflow: hidden;
+    padding: 0 5px !important;
+    white-space: nowrap;
+  }
+  .roomEmbedCompose.ecClassicCompose .ecClassicTextBtn .ecToolBtnLabel {
+    display: none;
+  }
+  .roomEmbedCompose.ecClassicCompose #roomEmbedSend.ym-send {
+    min-width: 52px;
+    padding-inline: 8px;
+  }
+}
+
+@media (max-width: 520px) {
+  .roomEmbedCompose.ecClassicCompose {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(42px, auto);
+  }
+  .roomEmbedCompose.ecClassicCompose .ecClassicComposeToolbar {
+    max-height: 62px;
+    overflow-y: auto;
+  }
+  .roomEmbedCompose.ecClassicCompose .ec-richComposer,
+  .roomEmbedCompose.ecClassicCompose #roomEmbedInput.ym-input {
+    min-height: 42px;
+    padding: 8px;
+  }
+}
+
+/* UI02 deep recheck: keep rich room cards bounded under long payload metadata. */
+.ym-torrentCard,
+.ecSharedMediaCard,
+.ecRoomRadioWireCard,
+.ym-gifWrap {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ym-torrentCard {
+  flex-wrap: wrap;
+  overflow: hidden;
+}
+
+.ym-torrentMain {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.ym-torrentTitle,
+.ym-torrentName,
+.ym-torrentMeta,
+.ym-torrentHash,
+.ym-torrentTrackers,
+.ym-torrentSwarmStatus,
+.ym-torrentSwarmDetails,
+.ym-torrentCreated,
+.ym-torrentComment,
+.ecSharedMediaUrl,
+.ecRoomRadioWireMeta {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.ec-msgItem--room .ec-msgContent--rich .msgReactions {
+  max-width: 100%;
+}
+
+.ec-msgItem--room .ec-msgContent--rich .reactPill {
+  max-width: 100%;
+}
+
+/* UI04 group window status/member action/read-state containment */
+.ym-window[data-kind="group"] .ym-log,
+.ym-window[data-kind="group"] .ym-chatLog,
+.ym-window[data-kind="group"] .ym-groupChatMain,
+.ym-window[data-kind="group"] .ym-groupChatLayout {
+  min-width: 0;
+}
+.ym-window[data-kind="group"] .ym-groupStatus {
+  overflow-wrap: anywhere;
+}
+.ym-groupStatus--ok { border-left: 3px solid rgba(74,222,128,.75); }
+.ym-groupStatus--warn,
+.ym-groupStatus--checking { border-left: 3px solid rgba(250,204,21,.8); }
+.ym-groupStatus--error { border-left: 3px solid rgba(248,113,113,.85); }
+.ym-groupStatus--busy .ym-groupStatusMain::after {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 6px;
+  border: 1px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 999px;
+  animation: ecTorrentSpin .8s linear infinite;
+}
+.ym-window[data-kind="group"] .ec-msgItem--file .ym-fileCard,
+.ym-window[data-kind="group"] .ec-msgItem--torrent .ym-torrentCard,
+.ym-window[data-kind="group"] .ec-msgItem--media .ym-mediaCard {
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ym-window[data-kind="group"] .ec-msgItem,
+.ym-window[data-kind="group"] .ec-msgText,
+.ym-window[data-kind="group"] .msgText {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ym-groupMembersList .ym-groupMemberMoreBtn {
+  font-weight: 900;
+  line-height: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ym-groupStatus--busy .ym-groupStatusMain::after {
+    animation: none;
+    border-right-color: currentColor;
+  }
+}
+@media (max-width: 520px) {
+  .ym-window[data-kind="group"] .ym-groupStatus {
+    align-items: flex-start;
+  }
+  .ym-window[data-kind="group"] .ym-groupStatusActions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .ym-window[data-kind="group"] .ym-groupMemberMoreBtn {
+    min-width: 30px;
+  }
+}
+
+/* UI05 room browser: custom search + access tags */
+.rbToolsCustom {
+  align-items: stretch;
+}
+
+.rbToolsCustom .searchInputWrap,
+.rbToolsCustom .rbCustomSearch {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.rbRowTag.is-role-tag {
+  border-color: rgba(94, 214, 139, 0.30);
+  background: rgba(94, 214, 139, 0.10);
+}
+
+.rbCustomRoomsList .rbToolsCustom,
+.rbCustomRooms .rbToolsCustom {
+  flex-wrap: wrap;
+}
+
+/* UI06 friends/groups drawer hardening: action buttons must stay reachable on
+   touch devices and narrow hub panels, not only on hover. */
+@media (hover: none), (pointer: coarse) {
+  .dockSection .list li .liActions,
+  .dock.ecShell #friendsList .liActions,
+  .dock.ecShell #groupList .liActions,
+  #pendingRequestsList li .liActions,
+  #blockedUsersList li .liActions,
+  #railPendingRequestsList li .liActions,
+  #railAlertsList li .liActions {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.dock.ecShell #groupList .groupDockItem.hasUnread {
+  border-color: rgba(var(--accent-rgb),0.34);
+  box-shadow:
+    0 0 0 2px rgba(var(--accent-rgb),0.08),
+    inset 0 1px 0 rgba(255,255,255,0.86);
+}
+
+.dock.ecShell #groupList .groupDockItem.hasUnread .liChip,
+.dock.ecShell #groupList .groupDockItem.hasUnread .liName {
+  font-weight: 900;
+}
+
+.dock.ecShell #friendsList .friendItem .liText,
+.dock.ecShell #groupList .groupDockItem .liText,
+#pendingRequestsList li.pendingRequestItem .liText,
+#railPendingRequestsList li.pendingRequestItem .liText,
+#blockedUsersList li .liText,
+#railAlertsList li .liText {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dock.ecShell #friendsList .friendItem .liActions,
+.dock.ecShell #groupList .groupDockItem .liActions {
+  flex: 0 0 auto;
+}
+
+/* UI07 profile/avatar/banner/post UI hardening: keep profile media and
+   touch actions stable inside draggable chat windows and narrow panes. */
+.ecProfileWindow .ecProfileHero,
+.ecProfileWindow .ecProfileBannerPreview,
+.ecProfileWindow .ecProfilePostMedia,
+.ecProfileWindow .ecProfileComposerPreviewCard,
+.ecProfileWindow .ecProfilePostLinkCard,
+.ecProfileWindow .ecProfilePostCard,
+.ecProfileWindow .ecProfileSectionCard {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.ecProfileWindow .ecProfileAvatar img,
+.ecProfileWindow .ecProfileComposerAvatar img,
+.ecProfileWindow .ecProfilePresetBtn img,
+.ecProfileWindow .ecProfilePostMedia,
+.ecProfileWindow .ecProfileComposerPreviewCard img {
+  object-fit: cover;
+  max-width: 100%;
+}
+
+.ecProfileWindow .ecProfilePostActions,
+.ecProfileWindow .ecProfileComposerActions,
+.ecProfileWindow .ecProfileCommentForm,
+.ecProfileWindow .ecProfileComposerQuickRow,
+.ecProfileWindow .ecProfileUploadRow {
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.ecProfileWindow .ecProfilePostLink,
+.ecProfileWindow .ecProfilePostLinkInline,
+.ecProfileWindow .ecProfileComposerPreviewLink,
+.ecProfileWindow .ecProfileFavoriteValue,
+.ecProfileWindow .ecProfileInfoValue {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.ecProfileWindow button.isBusy,
+.dock.ecShell button.isBusy {
+  cursor: progress;
+  opacity: 0.72;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .ecProfileWindow .ecProfilePostActions,
+  .ecProfileWindow .ecProfileHeroActions,
+  .ecProfileWindow .ecProfileOwnerEditorActions {
+    opacity: 1;
+    visibility: visible;
+  }
+}
+
+@media (max-width: 680px) {
+  .ecProfileWindow .ecProfileComposerGrid,
+  .ecProfileWindow .ecProfileTopFacebook,
+  .ecProfileWindow .ecProfileSummaryRowFacebook {
+    grid-template-columns: 1fr;
+  }
+  .ecProfileWindow .ecProfileAvatarFacebook,
+  .ecProfileWindow .ecProfileAvatarLarge {
+    width: 86px;
+    height: 86px;
+  }
+}
+
+/* UI07 deep profile recheck: make editor panes, lightbox media, and edit-post
+   surfaces stable inside draggable profile windows and narrow browser panes. */
+.ecProfileWindow .ecProfileLightboxDialog,
+.ecProfileWindow .ecProfileOwnerEditorDialog,
+.ecProfileWindow .ecProfilePostEditPane,
+.ecProfileWindow .ecProfileReportPane,
+.ecProfileWindow .ecProfileComposerPreview,
+.ecProfileWindow .ecProfileGalleryTile,
+.ecProfileWindow .ecProfilePhotoTile {
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.ecProfileWindow .ecProfileLightboxStage,
+.ecProfileWindow .ecProfileLightboxImage {
+  max-width: 100%;
+  max-height: min(72vh, 720px);
+  object-fit: contain;
+}
+
+.ecProfileWindow .ecProfileOwnerEditorBody,
+.ecProfileWindow .ecProfilePostEditPane,
+.ecProfileWindow .ecProfileReportPane {
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.ecProfileWindow .ecProfilePostEditActions,
+.ecProfileWindow .ecProfileReportActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+@media (max-width: 760px) {
+  .ecProfileWindow .ecProfileLightboxDialog {
+    width: min(96vw, 640px);
+  }
+  .ecProfileWindow .ecProfileOwnerEditorDialog,
+  .ecProfileWindow .ecProfilePostEditPane,
+  .ecProfileWindow .ecProfileReportPane {
+    width: 100%;
+  }
+}
+
+/* UI09 deep recheck: keep Settings usable while previews/save states change. */
+#settingsModal[aria-modal="true"] {
+  overscroll-behavior: contain;
+}
+
+#settingsModal .settingsModalCard:focus,
+#settingsModal:focus {
+  outline: none;
+}
+
+#settingsModal button[aria-disabled="true"],
+#settingsModal button:disabled {
+  cursor: not-allowed;
+}
+
+#settingsModal[data-settings-saving="1"] .settingsStatus {
+  font-weight: 700;
+}
+
+#settingsModal .rangeRow input[type="range"] {
+  min-width: 0;
+}
+
+#settingsModal .settingsPanel,
+#settingsModal .settingsSection,
+#settingsModal .checkRow,
+#settingsModal .fieldLabel,
+#settingsModal .modalSubTitle,
+#settingsModal .settingsStatus {
+  overflow-wrap: anywhere;
+}
+
+/* UI11 voice/webcam UI: busy states, diagnostics, and safer media controls. */
+.ym-toolBtn.isBusy,
+.miniBtn.isBusy,
+.ym-avTileActions .isBusy,
+#btnRoomEmbedVoice.isBusy,
+#btnRoomEmbedCam.isBusy {
+  cursor: wait !important;
+  opacity: .72;
+  pointer-events: none;
+}
+.ym-avDiagnostics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--borderFaint);
+  color: var(--textSoft);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  background: rgba(255,255,255,0.018);
+}
+.ym-avTileActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+.ym-avTileActions .miniBtn {
+  min-height: 28px;
+}
+.ym-voiceBar [aria-busy="true"],
+.ym-avPanel [aria-busy="true"] {
+  cursor: wait;
+}
+.ym-voiceStatus[role="status"],
+.ym-avStatus[role="status"] {
+  min-width: 0;
+}
+
+/* beta.378 PM/group typing indicators. Room typing remains disabled by default. */
+.ymTypingIndicator,
+.ecRoomTypingIndicator {
+  min-height: 18px;
+  padding: 2px 10px 6px;
+  font-size: 0.82rem;
+  line-height: 1.25;
+  color: var(--muted, #64748b);
+  font-style: italic;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.ymTypingIndicator.hidden,
+.ecRoomTypingIndicator.hidden {
+  display: none !important;
+}
+.ymTypingIndicator::before,
+.ecRoomTypingIndicator::before {
+  content: "";
+  display: inline-block;
+  width: 0.45em;
+  height: 0.45em;
+  margin-right: 0.45em;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.55;
+  vertical-align: middle;
+}
+.ym-groupChatMain > .ymTypingIndicator {
+  flex: 0 0 auto;
+}
+.ym-window[data-kind="dm"] .ymTypingIndicator,
+.ym-window[data-kind="group"] .ymTypingIndicator {
+  flex: 0 0 auto;
+}
+@media (max-width: 700px) {
+  .ymTypingIndicator,
+  .ecRoomTypingIndicator {
+    padding: 2px 12px 8px;
+    font-size: 0.85rem;
+  }
+}
+
+/* beta.379 optimistic composer send feedback: clear text immediately while the
+   Socket.IO/API ACK finishes, without making the composer feel frozen. */
+.ym-input.ecComposerSending,
+#roomEmbedInput.ecComposerSending {
+  transition: box-shadow .12s ease, border-color .12s ease, background-color .12s ease;
+}
+
+.ym-send.ecComposerSending,
+button.ecComposerSending {
+  cursor: progress;
+}
+
+.ym-send.ecComposerSending::after,
+#roomEmbedSend.ecComposerSending::after {
+  content: "…";
+  display: inline-block;
+  margin-left: 2px;
+}
+
+/* beta.380 optimistic composer deeper recheck: failed draft recovery marker. */
+.ym-input[data-ec-failed-draft="1"],
+#roomEmbedInput[data-ec-failed-draft="1"] {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+.ym-input[data-ec-failed-draft="1"]::placeholder,
+#roomEmbedInput[data-ec-failed-draft="1"]::placeholder {
+  opacity: .9;
+}
+
+/* beta.390: missed bubble regression guard. The Missed rail bubble is intentionally
+   translated outside the hub face; keep the dock/rail paint path unclipped. */
+.dock.ecShell,
+.dock {
+  overflow: visible !important;
+}
+
+.dockAlertRail {
+  overflow: visible !important;
+  z-index: 3;
+}
+
+/* beta.392: paint fallback must not re-position the tab. It only restores
+   visibility classes; geometry stays controlled by the tucked-under rail CSS. */
+#railMissedBtn.ecViewportFallback {
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+  display: flex !important;
+}
+
+body.ecMissedDebugActive #railMissedBtn.ecForceVisible {
+  outline: 3px solid rgba(var(--accent-rgb),0.55);
+  outline-offset: 3px;
+}
+
+
+/* beta.404: collapsible physical hub.
+   The hub can shrink into a real right-side rail while a small tab remains usable
+   for expanding it again. */
+:root {
+  --dockCollapsedW: 0px;
+}
+
+#siteArea,
+#ecDock,
+#ecAmbientScene,
+.toastStack {
+  transition:
+    right 220ms cubic-bezier(.2,.85,.2,1),
+    width 220ms cubic-bezier(.2,.85,.2,1),
+    inset 220ms cubic-bezier(.2,.85,.2,1);
+}
+
+.dockCollapseTab {
+  position: absolute;
+  left: -24px;
+  top: 96px;
+  transform: none;
+  z-index: 36;
+  width: 24px;
+  min-height: 58px;
+  border: 1px solid rgba(0,0,0,0.20);
+  border-right: none;
+  border-radius: 12px 0 0 12px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.97), rgba(228,238,252,0.97));
+  color: #23405d;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow:
+    -5px 8px 16px rgba(0,0,0,0.16),
+    inset 1px 1px 0 rgba(255,255,255,0.92),
+    inset -1px -1px 0 rgba(0,0,0,0.12);
+  touch-action: manipulation;
+}
+
+.dockCollapseTab:hover,
+.dockCollapseTab:focus-visible {
+  filter: brightness(1.04);
+  box-shadow:
+    -7px 10px 20px rgba(0,0,0,0.20),
+    0 0 0 3px rgba(var(--accent-rgb),0.14),
+    inset 1px 1px 0 rgba(255,255,255,0.95),
+    inset -1px -1px 0 rgba(0,0,0,0.14);
+}
+
+.dockCollapseIcon {
+  font-size: 24px;
+  line-height: 1;
+  font-weight: 800;
+  text-shadow: 0 1px 0 rgba(255,255,255,0.85);
+}
+
+.dockCollapsedLabel {
+  display: none;
+  position: absolute;
+  top: 92px;
+  left: 50%;
+  z-index: 8;
+  transform: translateX(-50%) writing-mode(vertical-rl);
+  text-orientation: mixed;
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(22,48,74,0.70);
+  pointer-events: none;
+}
+
+#appRoot.is-hub-collapsed #siteArea {
+  right: var(--dockCollapsedW);
+}
+
+#appRoot.is-hub-collapsed #ecAmbientScene {
+  inset: 0 var(--dockCollapsedW) 0 0;
+}
+
+#appRoot.is-hub-collapsed .toastStack {
+  max-width: min(460px, calc(100vw - var(--dockCollapsedW) - 32px));
+}
+
+#appRoot.is-hub-collapsed #ecDock {
+  width: var(--dockCollapsedW);
+  overflow: visible;
+  background: transparent;
+  box-shadow: none;
+}
+
+#appRoot.is-hub-collapsed #ecDock::before {
+  opacity: 0;
+  width: 0;
+  left: 0;
+  box-shadow: none;
+}
+
+#appRoot.is-hub-collapsed #ecDock > :not(.dockCollapseTab):not(.dockCollapsedLabel):not(.dockAlertRail):not(.dockAlertFlyout):not(.dockMiniPopup):not(.dockMiniPopupBackdrop) {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateX(18px);
+  transition:
+    opacity 120ms ease,
+    visibility 0s linear 140ms,
+    transform 180ms cubic-bezier(.2,.85,.2,1);
+}
+
+#appRoot:not(.is-hub-collapsed) #ecDock > :not(.dockCollapseTab):not(.dockCollapsedLabel) {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(0);
+  transition:
+    opacity 160ms ease 80ms,
+    transform 220ms cubic-bezier(.2,.85,.2,1);
+}
+
+#appRoot.is-hub-collapsed .dockAlertRail {
+  display: flex !important;
+  z-index: 35;
+}
+
+#appRoot.is-hub-collapsed .dockCollapseTab {
+  left: -24px;
+  top: 96px;
+  min-height: 58px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.98), rgba(219,233,250,0.98));
+}
+
+#appRoot.is-hub-collapsed .dockCollapseIcon {
+  transform: rotate(180deg);
+}
+
+#appRoot.is-hub-collapsed .dockCollapsedLabel {
+  display: none;
+}
+
+/* Do not use the desktop collapse rail inside the mobile shell. */
+#appRoot.is-mobile-shell .dockCollapseTab,
+#appRoot.is-mobile-shell .dockCollapsedLabel {
+  display: none !important;
+}
+
+
+
+/* beta.406: tighten the top-right hub stack so the title/menu/profile area sits higher
+   and wastes less empty vertical space. */
+#ecDock {
+  top: 0;
+}
+
+.dock.ecShell .dockTabs {
+  margin-top: 0;
+}
+
+
+/* beta.407: pull the desktop hub up into the unused top-right dead space.
+   This keeps the hub as the physical right-side item while removing the blank band
+   above the title/profile area on desktop layouts. */
+:root {
+  --hubDesktopTopLift: 52px;
+}
+
+#appRoot:not(.is-mobile-shell) #ecDock {
+  top: calc(-1 * var(--hubDesktopTopLift)) !important;
+  height: calc(100% + var(--hubDesktopTopLift)) !important;
+}
+
+#appRoot:not(.is-mobile-shell) #ecDock .dockCollapseTab {
+  top: calc(96px + var(--hubDesktopTopLift));
+}
+
+#appRoot:not(.is-mobile-shell) #ecDock .dockAlertRail {
+  top: calc(192px + var(--hubDesktopTopLift));
+}
+
+
+/* beta.408: fully hide the physical hub body when collapsed, but keep the collapse tab
+   and alert bubbles available on the right edge. */
+#appRoot.is-hub-collapsed #ecDock .dockAlertRail {
+  right: auto;
+}
+
+
+/* beta.413: profile window opens at the top and can use a true app-fullscreen mode. */
+.ecProfileWindow.is-profile-fullscreen {
+  position: absolute;
+  border-radius: 8px;
+  z-index: 999990 !important;
+}
+
+.ecProfileWindow.is-profile-fullscreen .ym-titlebar {
+  cursor: default;
+}
+
+.ecProfileWindow.is-profile-fullscreen .ym-log {
+  padding: 12px;
+}
+
+.ecProfileWindow.is-profile-fullscreen .ym-resize {
+  display: none;
+}
+
+
+/* beta.416: profile windows need a roomy default size so the public profile
+   header/layout does not squeeze or cut off the username. */
+.ecProfileWindow {
+  min-width: min(960px, calc(100vw - 36px));
+  min-height: min(560px, calc(100vh - 36px));
+}
+
+.ecProfileWindow .ecProfileTop,
+.ecProfileWindow .ecProfileTopPremium,
+.ecProfileWindow .ecProfileTopFacebook {
+  min-width: 0;
+}
+
+.ecProfileWindow .ecProfileTopText,
+.ecProfileWindow .ecProfileTopTextFacebook {
+  min-width: 0;
+  overflow: visible;
+}
+
+.ecProfileWindow .ecProfileTitle,
+.ecProfileWindow .ecProfileTitleLarge {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+
+/* beta.418: profile expanded mode fills the app workspace area, like the room
+   selector/chat workspace, instead of covering the hub or opening as a smaller card. */
+.ecProfileWindow.is-profile-fullscreen {
+  max-width: none !important;
+  max-height: none !important;
+}
+
+
+/* beta.419: hide the profile scroller until the open sequence has rendered and
+   hard-reset the profile scroll position to the top, preventing bottom-start flashes. */
+.ecProfileWindow.is-profile-toplock .ym-log {
+  visibility: hidden;
+}
+
+
+/* beta.420: profile header must reflow by profile-window width, not only viewport width.
+   This prevents the avatar from overlapping/cutting off the username when the profile
+   window is manually resized smaller. */
+.ecProfilePageCard.is-compact-profile .ecProfileHeroFacebook {
+  min-height: 172px;
+}
+
+.ecProfilePageCard.is-compact-profile .ecProfileTopFacebook {
+  grid-template-columns: 100px minmax(0, 1fr);
+  gap: 12px;
+  min-height: 148px;
+  align-items: end;
+}
+
+.ecProfilePageCard.is-compact-profile .ecProfileAvatarFacebook {
+  width: 92px;
+  height: 92px;
+  margin-top: 0;
+  border-radius: 20px;
+  align-self: end;
+}
+
+.ecProfilePageCard.is-compact-profile .ecProfileTopTextFacebook {
+  min-width: 0;
+  max-width: 100%;
+  padding-bottom: 6px;
+}
+
+.ecProfilePageCard.is-compact-profile .ecProfileTitle,
+.ecProfilePageCard.is-compact-profile .ecProfileTitleLarge {
+  max-width: 100%;
+  min-width: 0;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.12;
+}
+
+.ecProfilePageCard.is-compact-profile .ecProfileMeta {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.ecProfilePageCard.is-narrow-profile .ecProfileHeroFacebook {
+  min-height: 0;
+}
+
+.ecProfilePageCard.is-narrow-profile .ecProfileTopFacebook {
+  grid-template-columns: 1fr;
+  align-items: start;
+  min-height: 0;
+  gap: 10px;
+}
+
+.ecProfilePageCard.is-narrow-profile .ecProfileAvatarFacebook {
+  width: 86px;
+  height: 86px;
+  justify-self: start;
+}
+
+.ecProfilePageCard.is-narrow-profile .ecProfileHeroActions {
+  grid-column: 1 / -1;
+  justify-content: flex-start;
+  padding-bottom: 0;
+}
+
+/* Beta.428: use the bundled classic happy-face emoticon as a still toolbar icon.
+   The icon is a PNG snapshot, not the animated GIF, so it never loops in the toolbar. */
+.ecToolbarEmoticonBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  overflow: hidden;
+}
+.ecToolbarEmoticonIcon {
+  display: block;
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  image-rendering: auto;
+  pointer-events: none;
+  user-select: none;
+}
+.roomEmbedCompose .ecClassicComposeToolbar .ecToolbarEmoticonBtn {
+  width: 28px;
+  min-width: 28px;
+  height: 25px;
+  min-height: 25px;
+}
+.roomEmbedCompose .ecClassicComposeToolbar .ecToolbarEmoticonIcon {
+  width: 22px;
+  height: 22px;
 }

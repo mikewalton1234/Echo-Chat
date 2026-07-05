@@ -1,3 +1,60 @@
+
+function ecNormalizeUsernameKey(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function ecCanonicalUsernameList(list, opts = {}) {
+  const excludeSelf = !!opts.excludeSelf;
+  const excludeBlocked = !!opts.excludeBlocked;
+  const excludeFriends = !!opts.excludeFriends;
+  const selfKey = ecNormalizeUsernameKey(currentUser || '');
+  const seen = new Set();
+  const out = [];
+  (Array.isArray(list) ? list : []).forEach((value) => {
+    const name = String(value || '').replace(/\s+/g, ' ').trim();
+    const key = ecNormalizeUsernameKey(name);
+    if (!name || !key || seen.has(key)) return;
+    if (excludeSelf && selfKey && key === selfKey) return;
+    if (excludeBlocked && ecUserSetHasName(UIState.blockedSet, name)) return;
+    if (excludeFriends && ecUserSetHasName(UIState.friendSet, name)) return;
+    seen.add(key);
+    out.push(name);
+  });
+  return out;
+}
+
+function ecUserSetHasName(set, username) {
+  const key = ecNormalizeUsernameKey(username);
+  if (!key || !(set instanceof Set)) return false;
+  if (set.has(username) || set.has(key)) return true;
+  for (const item of set.values()) {
+    if (ecNormalizeUsernameKey(item) === key) return true;
+  }
+  return false;
+}
+
+function ecSetPresenceForUsername(username, payload = {}) {
+  const name = String(username || '').replace(/\s+/g, ' ').trim();
+  const key = ecNormalizeUsernameKey(name);
+  if (!name || !key) return;
+  const data = {
+    online: !!payload.online,
+    presence: String(payload.presence || (payload.online ? 'online' : 'offline')),
+    custom_status: String(payload.custom_status || payload.customStatus || ''),
+    last_seen: payload.last_seen || payload.lastSeen || null,
+    avatar_url: String(payload.avatar_url || payload.avatarUrl || ''),
+  };
+  UIState.presence.set(name, data);
+  UIState.presence.set(key, data);
+  try { window.ecRefreshMessageAvatarsForUsername?.(name); } catch {}
+}
+
+function ecGetPresenceForUsername(username) {
+  const name = String(username || '').replace(/\s+/g, ' ').trim();
+  const key = ecNormalizeUsernameKey(name);
+  return UIState.presence.get(name) || UIState.presence.get(key) || null;
+}
+
 function setActiveDockQuickStat(targetId = null, tab = null) {
   const btns = [...document.querySelectorAll('#dockQuickStats .dockStat')];
   if (!btns.length) return;
@@ -146,15 +203,13 @@ function setStatusFromHub(nextStatus) {
 
 function sendFriendRequestTo(targetUsername, opts = {}) {
   const friend = String(targetUsername || '').trim();
-  const friendKey = friend.toLowerCase();
-  const currentKey = String(currentUser || '').trim().toLowerCase();
+  const friendKey = ecNormalizeUsernameKey(friend);
+  const currentKey = ecNormalizeUsernameKey(currentUser || '');
   if (!friend) return toast('⚠️ Enter a username', 'warn');
   if (friendKey && currentKey && friendKey === currentKey) return toast('⚠️ You cannot add yourself', 'warn');
 
-  const friendSetLower = new Set(Array.from(UIState.friendSet || []).map((name) => String(name || '').toLowerCase()));
-  const blockedSetLower = new Set(Array.from(UIState.blockedSet || []).map((name) => String(name || '').toLowerCase()));
-  if (friendSetLower.has(friendKey)) return toast(`ℹ️ ${friend} is already on your friends list`, 'info');
-  if (blockedSetLower.has(friendKey)) return toast(`⚠️ ${friend} is blocked. Unblock them first.`, 'warn');
+  if (ecUserSetHasName(UIState.friendSet, friend)) return toast(`ℹ️ ${friend} is already on your friends list`, 'info');
+  if (ecUserSetHasName(UIState.blockedSet, friend)) return toast(`⚠️ ${friend} is blocked. Unblock them first.`, 'warn');
 
   const send = (typeof ecEmitAck === 'function')
     ? ecEmitAck('send_friend_request', { to_username: friend }, 8000, { connectBannerText: '🔌 Reconnecting before sending friend request…' })
@@ -179,8 +234,8 @@ function getDockPmSuggestions() {
   const pushName = (value) => {
     const name = String(value || '').trim();
     if (!name) return;
-    if (currentUser && name === currentUser) return;
-    const key = name.toLowerCase();
+    if (currentUser && ecNormalizeUsernameKey(name) === ecNormalizeUsernameKey(currentUser)) return;
+    const key = ecNormalizeUsernameKey(name);
     if (seen.has(key)) return;
     seen.add(key);
     names.push(name);

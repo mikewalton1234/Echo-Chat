@@ -41,7 +41,13 @@ const SETTINGS_PREF_DEFAULTS = Object.freeze({
   popupNotif: false,
   soundNotif: ECHOCHAT_CFG.sound_notifications_default === undefined ? true : !!ECHOCHAT_CFG.sound_notifications_default,
   soundTheme: String(ECHOCHAT_CFG.sound_theme_default || ECHOCHAT_CFG.default_sound_theme || 'soft_chime'),
-  roomFontSize: 12,
+  roomFontSize: 13,
+  roomFontFamily: "Arial",
+  roomComposerBold: false,
+  roomComposerItalic: false,
+  roomComposerUnderline: false,
+  roomComposerColor: "#111111",
+  emoticonSize: 26,
   gifTileSize: 140,
   gifResultsPerLoad: 12,
   gifOpenMode: 'recents',
@@ -55,11 +61,270 @@ const SETTINGS_PREF_DEFAULTS = Object.freeze({
 });
 
 const SETTINGS_SECTION_KEYS = Object.freeze({
-  chat: ['roomFontSize', 'gifTileSize', 'gifResultsPerLoad', 'gifOpenMode', 'gifShowTitles', 'gifKeepOpen'],
+  chat: ['roomFontSize', 'roomFontFamily', 'roomComposerBold', 'roomComposerItalic', 'roomComposerUnderline', 'roomComposerColor', 'emoticonSize', 'gifTileSize', 'gifResultsPerLoad', 'gifOpenMode', 'gifShowTitles', 'gifKeepOpen'],
   theme: ['darkMode', 'highContrast', 'accentTheme'],
   alerts: ['popupNotif', 'soundNotif', 'soundTheme', 'missedToast'],
   friends: ['friendStatusInline', 'friendStatusTooltip', 'helpHints']
 });
+
+
+const SETTINGS_ALL_PREF_KEYS = Object.freeze(Object.keys(SETTINGS_PREF_DEFAULTS));
+const SETTINGS_COMPOSER_KEYS = Object.freeze(['roomFontFamily', 'roomComposerBold', 'roomComposerItalic', 'roomComposerUnderline', 'roomComposerColor']);
+
+let EC_SETTINGS_LAST_FOCUS = null;
+let EC_SETTINGS_OPEN_SEQ = 0;
+let EC_SETTINGS_SAVE_SEQ = 0;
+const EC_SETTINGS_BUSY_CONTROL_IDS = Object.freeze(['btnSaveSettings', 'btnCloseSettings', 'btnResetSettingsSection', 'btnResetSettingsAll']);
+
+function ecSettingsCleanValue(key, value) {
+  switch (key) {
+    case 'darkMode':
+    case 'highContrast':
+    case 'popupNotif':
+    case 'soundNotif':
+    case 'missedToast':
+    case 'savePmLocal':
+    case 'friendStatusInline':
+    case 'friendStatusTooltip':
+    case 'helpHints':
+    case 'gifShowTitles':
+    case 'gifKeepOpen':
+    case 'roomComposerBold':
+    case 'roomComposerItalic':
+    case 'roomComposerUnderline':
+      return !!value;
+    case 'roomFontSize':
+      return clampInt(value, 10, 22, 13);
+    case 'emoticonSize':
+      return (typeof ecClampEmoticonSize === 'function') ? ecClampEmoticonSize(value) : clampInt(value, 22, 56, 26);
+    case 'gifTileSize':
+      return clampInt(value, 96, 220, 140);
+    case 'gifResultsPerLoad': {
+      const n = clampInt(value, 12, 48, 12);
+      return [12, 24, 36, 48].includes(n) ? n : 12;
+    }
+    case 'gifOpenMode': {
+      const raw = String(value || 'recents');
+      return ['recents', 'trending', 'last_search'].includes(raw) ? raw : 'recents';
+    }
+    case 'accentTheme':
+      return (typeof ecNormalizeThemeAccent === 'function') ? ecNormalizeThemeAccent(value || 'default') : String(value || 'default');
+    case 'soundTheme':
+      return (typeof ecNormalizeSoundTheme === 'function') ? ecNormalizeSoundTheme(value || SETTINGS_PREF_DEFAULTS.soundTheme) : String(value || SETTINGS_PREF_DEFAULTS.soundTheme);
+    case 'roomFontFamily':
+      return (typeof ecNormalizeRoomFontFamily === 'function') ? ecNormalizeRoomFontFamily(value || 'Arial') : String(value || 'Arial');
+    case 'roomComposerColor':
+      return (typeof ecNormalizeRoomTextColor === 'function') ? ecNormalizeRoomTextColor(value || '#111111') : String(value || '#111111');
+    default:
+      return value;
+  }
+}
+
+function ecSettingsSnapshotPrefs() {
+  const snapshot = {};
+  SETTINGS_ALL_PREF_KEYS.forEach((key) => {
+    const fallback = getSettingsDefaultValue(key);
+    const current = (UIState?.prefs && Object.prototype.hasOwnProperty.call(UIState.prefs, key)) ? UIState.prefs[key] : fallback;
+    snapshot[key] = ecSettingsCleanValue(key, current == null ? fallback : current);
+  });
+  return snapshot;
+}
+
+function ecSettingsReadSnapshot(modal) {
+  try {
+    const raw = modal?.dataset?.settingsSnapshot || '';
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === 'object' ? parsed : ecSettingsSnapshotPrefs();
+  } catch {
+    return ecSettingsSnapshotPrefs();
+  }
+}
+
+function ecSettingsWriteSnapshot(modal, snapshot = null) {
+  if (!modal) return;
+  try { modal.dataset.settingsSnapshot = JSON.stringify(snapshot || ecSettingsSnapshotPrefs()); } catch {}
+}
+
+function ecApplySettingsPrefsObject(prefs = {}, opts = {}) {
+  if (!UIState.prefs) UIState.prefs = {};
+  SETTINGS_ALL_PREF_KEYS.forEach((key) => {
+    if (!Object.prototype.hasOwnProperty.call(prefs, key)) return;
+    UIState.prefs[key] = ecSettingsCleanValue(key, prefs[key]);
+  });
+  if (typeof ecApplyRoomComposerPrefs === 'function') ecApplyRoomComposerPrefs();
+  else applyRoomFontSize(UIState.prefs.roomFontSize || 13);
+  if (typeof ecApplyEmoticonSizePrefs === 'function') ecApplyEmoticonSizePrefs(UIState.prefs.emoticonSize || 26);
+  applyGifPickerPrefs();
+  setThemeFromPrefs();
+  if (Object.prototype.hasOwnProperty.call(prefs, 'helpHints')) {
+    try { setHelpHintsEnabled(!!UIState.prefs.helpHints, { persist: false, syncUi: true }); } catch {}
+  }
+  if (opts.syncControls !== false) applySettingsDraftToControls(UIState.prefs);
+}
+
+function ecSettingsDraftFromControls() {
+  const draft = ecSettingsSnapshotPrefs();
+  const set = (key, raw) => { draft[key] = ecSettingsCleanValue(key, raw); };
+  set('darkMode', !!$('setDarkMode')?.checked);
+  set('highContrast', !!$('setHighContrast')?.checked);
+  set('accentTheme', $('setAccentTheme')?.value || 'default');
+  set('popupNotif', !!$('setPopupNotif')?.checked);
+  set('soundNotif', $('setSoundNotif') ? !!$('setSoundNotif').checked : SETTINGS_PREF_DEFAULTS.soundNotif);
+  set('soundTheme', $('setSoundTheme')?.value || SETTINGS_PREF_DEFAULTS.soundTheme);
+  set('missedToast', $('setMissedToast') ? !!$('setMissedToast').checked : true);
+  set('savePmLocal', false);
+  set('friendStatusInline', $('setFriendStatusInline') ? !!$('setFriendStatusInline').checked : true);
+  set('friendStatusTooltip', $('setFriendStatusTooltip') ? !!$('setFriendStatusTooltip').checked : true);
+  set('helpHints', $('setHelpHints') ? !!$('setHelpHints').checked : true);
+  set('roomFontSize', $('setRoomFontSize')?.value || 13);
+  set('emoticonSize', $('setEmoticonSize')?.value || 26);
+  set('gifTileSize', $('setGifTileSize')?.value || 140);
+  set('gifResultsPerLoad', $('setGifResultsPerLoad')?.value || 12);
+  set('gifOpenMode', $('setGifOpenMode')?.value || 'recents');
+  set('gifShowTitles', $('setGifShowTitles') ? !!$('setGifShowTitles').checked : true);
+  set('gifKeepOpen', $('setGifKeepOpen') ? !!$('setGifKeepOpen').checked : false);
+  // Classic composer toolbar values live outside the Settings modal but are part
+  // of the Chat reset section. Keep the draft aligned with the active toolbar.
+  SETTINGS_COMPOSER_KEYS.forEach((key) => {
+    if (UIState?.prefs && Object.prototype.hasOwnProperty.call(UIState.prefs, key)) {
+      draft[key] = ecSettingsCleanValue(key, UIState.prefs[key]);
+    }
+  });
+  return draft;
+}
+
+function ecSettingsObjectsEqual(a = {}, b = {}) {
+  return SETTINGS_ALL_PREF_KEYS.every((key) => JSON.stringify(ecSettingsCleanValue(key, a[key])) === JSON.stringify(ecSettingsCleanValue(key, b[key])));
+}
+
+function updateSettingsDirtyState() {
+  const modal = $('settingsModal');
+  if (!modal || modal.classList.contains('hidden')) return;
+  const snapshot = ecSettingsReadSnapshot(modal);
+  const draft = ecSettingsDraftFromControls();
+  const dirty = !ecSettingsObjectsEqual(snapshot, draft);
+  modal.classList.toggle('is-dirty', dirty);
+  modal.dataset.settingsDirty = dirty ? '1' : '0';
+  const status = $('settingsStatus');
+  if (status) {
+    status.textContent = dirty ? 'Unsaved changes — Save keeps them, Close reverts previews.' : 'No unsaved changes.';
+    status.classList.toggle('warnText', dirty);
+  }
+  const save = $('btnSaveSettings');
+  if (save) save.title = dirty ? 'Save these settings in this browser' : 'Save settings';
+}
+
+function setSettingsBusy(isBusy) {
+  const modal = $('settingsModal');
+  if (modal) modal.dataset.settingsSaving = isBusy ? '1' : '0';
+  EC_SETTINGS_BUSY_CONTROL_IDS.forEach((id) => ecSetSettingsControlDisabled(id, !!isBusy));
+  const save = $('btnSaveSettings');
+  if (!save) return;
+  if (isBusy) {
+    if (!save.dataset.prevHtml) save.dataset.prevHtml = save.innerHTML || 'Save';
+    save.classList.add('isBusy');
+    save.setAttribute('aria-busy', 'true');
+    save.innerHTML = 'Saving…';
+    const status = $('settingsStatus');
+    if (status) status.textContent = 'Saving settings…';
+  } else {
+    save.classList.remove('isBusy');
+    save.setAttribute('aria-busy', 'false');
+    if (save.dataset.prevHtml) save.innerHTML = save.dataset.prevHtml;
+    delete save.dataset.prevHtml;
+  }
+}
+
+
+function ecSettingsFocusableElements(modal) {
+  if (!modal) return [];
+  const nodes = Array.from(modal.querySelectorAll([
+    'button:not([disabled])',
+    'a[href]',
+    'input:not([disabled])',
+    'select:not([disabled])',
+    'textarea:not([disabled])',
+    '[tabindex]:not([tabindex="-1"])'
+  ].join(',')));
+  return nodes.filter((el) => {
+    if (!(el instanceof HTMLElement)) return false;
+    if (el.hidden || el.getAttribute('aria-hidden') === 'true') return false;
+    const panel = el.closest('.settingsPanel[hidden], [hidden]');
+    if (panel) return false;
+    const style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+    if (style && (style.display === 'none' || style.visibility === 'hidden')) return false;
+    return true;
+  });
+}
+
+function ecTrapSettingsFocus(ev, modal) {
+  if (!modal || modal.classList.contains('hidden') || ev.key !== 'Tab') return false;
+  const focusable = ecSettingsFocusableElements(modal);
+  if (!focusable.length) {
+    ev.preventDefault();
+    try { modal.focus({ preventScroll: true }); } catch {}
+    return true;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  const current = document.activeElement;
+  if (ev.shiftKey && (!current || current === first || !modal.contains(current))) {
+    ev.preventDefault();
+    try { last.focus({ preventScroll: true }); } catch {}
+    return true;
+  }
+  if (!ev.shiftKey && current === last) {
+    ev.preventDefault();
+    try { first.focus({ preventScroll: true }); } catch {}
+    return true;
+  }
+  return false;
+}
+
+function ecSetSettingsControlDisabled(id, disabled) {
+  const el = $(id);
+  if (!el) return;
+  if (disabled) {
+    if (!el.dataset.settingsPrevDisabled) el.dataset.settingsPrevDisabled = el.disabled ? '1' : '0';
+    el.disabled = true;
+    el.setAttribute('aria-disabled', 'true');
+  } else {
+    const wasDisabled = el.dataset.settingsPrevDisabled === '1';
+    delete el.dataset.settingsPrevDisabled;
+    el.disabled = wasDisabled;
+    el.setAttribute('aria-disabled', wasDisabled ? 'true' : 'false');
+  }
+}
+
+function ecUpdateSettingsLivePreviewFromControls() {
+  const modal = $('settingsModal');
+  if (!modal || modal.classList.contains('hidden')) return;
+  const draft = ecSettingsDraftFromControls();
+  ecApplySettingsPrefsObject(draft, { syncControls: false });
+  updateSettingsDirtyState();
+}
+
+function bindSettingsModalKeys() {
+  const modal = $('settingsModal');
+  if (!modal || modal.dataset.ecSettingsKeysBound === '1') return;
+  modal.dataset.ecSettingsKeysBound = '1';
+  modal.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Tab' && ecTrapSettingsFocus(ev, modal)) return;
+    if (ev.key === 'Escape') {
+      ev.preventDefault();
+      if (modal.dataset.settingsSaving === '1') {
+        toast('ℹ️ Settings are saving. Please wait…', 'info');
+        return;
+      }
+      closeSettings();
+      return;
+    }
+    if ((ev.ctrlKey || ev.metaKey) && String(ev.key || '').toLowerCase() === 's') {
+      ev.preventDefault();
+      saveSettings();
+    }
+  });
+}
 
 function getSettingsDefaultValue(key) {
   return Object.prototype.hasOwnProperty.call(SETTINGS_PREF_DEFAULTS, key)
@@ -108,9 +373,15 @@ function applySettingsDraftToControls(draft = {}) {
   if (helpHints) helpHints.checked = boolVal('helpHints', true);
 
   const roomSlider = $("setRoomFontSize");
-  const roomSize = numVal('roomFontSize', 10, 22, 12);
+  const roomSize = numVal('roomFontSize', 10, 22, 13);
   if (roomSlider) roomSlider.value = String(roomSize);
   applyRoomFontSize(roomSize);
+
+  const emoticonSize = $("setEmoticonSize");
+  const emoSize = (typeof ecClampEmoticonSize === 'function') ? ecClampEmoticonSize(getSettingsDraftValue(draft, 'emoticonSize', 26)) : numVal('emoticonSize', 22, 56, 26);
+  if (emoticonSize) emoticonSize.value = String(emoSize);
+  UIState.prefs.emoticonSize = emoSize;
+  if (typeof ecApplyEmoticonSizePrefs === 'function') ecApplyEmoticonSizePrefs(emoSize);
 
   const gifSize = $("setGifTileSize");
   const gifTile = numVal('gifTileSize', 96, 220, 140);
@@ -134,8 +405,15 @@ function applySettingsDraftToControls(draft = {}) {
   const gifKeep = $("setGifKeepOpen");
   if (gifKeep) gifKeep.checked = boolVal('gifKeepOpen', false);
 
+  SETTINGS_COMPOSER_KEYS.forEach((key) => {
+    if (draft && Object.prototype.hasOwnProperty.call(draft, key)) {
+      UIState.prefs[key] = ecSettingsCleanValue(key, draft[key]);
+    }
+  });
+  if (typeof ecApplyRoomComposerPrefs === 'function') ecApplyRoomComposerPrefs();
   applyGifPickerPrefs();
   updateSettingsResetButtons();
+  updateSettingsDirtyState();
 }
 
 function updateSettingsResetButtons() {
@@ -145,10 +423,18 @@ function updateSettingsResetButtons() {
   const keys = SETTINGS_SECTION_KEYS[tab] || [];
   const enabled = keys.length > 0;
   btn.disabled = !enabled;
+  btn.setAttribute('aria-disabled', enabled ? 'false' : 'true');
   btn.title = enabled ? 'Reset the current settings tab to its defaults' : 'This section does not have resettable saved settings';
+  const all = $('btnResetSettingsAll');
+  if (all) all.title = `Reset all ${SERVER_NAME} settings in this browser back to defaults`;
 }
 
 function resetCurrentSettingsSectionDraft() {
+  const modal = $('settingsModal');
+  if (modal?.dataset?.settingsSaving === '1') {
+    toast('ℹ️ Settings are saving. Please wait…', 'info');
+    return;
+  }
   const tab = String(UIState?.prefs?.settingsTab || 'chat');
   const keys = SETTINGS_SECTION_KEYS[tab] || [];
   if (!keys.length) {
@@ -161,10 +447,16 @@ function resetCurrentSettingsSectionDraft() {
     draft[key] = getSettingsDefaultValue(key);
   });
   applySettingsDraftToControls(draft);
+  updateSettingsDirtyState();
   toast('↺ Current settings section reset. Click Save to keep it.', 'info');
 }
 
 async function resetAllSettingsDraft() {
+  const modal = $('settingsModal');
+  if (modal?.dataset?.settingsSaving === '1') {
+    toast('ℹ️ Settings are saving. Please wait…', 'info');
+    return;
+  }
   const ok = await ecConfirm(`Reset all ${SERVER_NAME} settings in this browser back to defaults? Click Save after reviewing to keep the reset.`, {
     title: 'Reset all settings',
     confirmLabel: 'Reset all',
@@ -173,6 +465,7 @@ async function resetAllSettingsDraft() {
   });
   if (!ok) return;
   applySettingsDraftToControls(SETTINGS_PREF_DEFAULTS);
+  updateSettingsDirtyState();
   toast('↺ All settings reset to defaults. Click Save to keep them.', 'info');
 }
 
@@ -189,12 +482,14 @@ function setSettingsTab(tabName, opts = {}) {
     const active = btn.dataset.settingsTab === name;
     btn.classList.toggle('is-active', active);
     btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    btn.setAttribute('tabindex', active ? '0' : '-1');
     if (active) activeTabButton = btn;
   });
   panels.forEach((panel) => {
     const active = panel.dataset.settingsPanel === name;
     panel.classList.toggle('is-active', active);
     panel.hidden = !active;
+    panel.setAttribute('aria-hidden', active ? 'false' : 'true');
   });
 
   UIState.prefs.settingsTab = name;
@@ -210,6 +505,24 @@ function bindSettingsTabs() {
   if (document.body) document.body.dataset.ecSettingsTabsBound = '1';
   document.querySelectorAll('.settingsTabBtn[data-settings-tab]').forEach((btn) => {
     btn.addEventListener('click', () => setSettingsTab(btn.dataset.settingsTab || 'chat'));
+    btn.addEventListener('keydown', (ev) => {
+      const keys = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
+      if (!keys.includes(ev.key)) return;
+      const tabs = Array.from(document.querySelectorAll('.settingsTabBtn[data-settings-tab]'));
+      const idx = tabs.indexOf(btn);
+      if (idx < 0 || !tabs.length) return;
+      ev.preventDefault();
+      let nextIdx = idx;
+      if (ev.key === 'Home') nextIdx = 0;
+      else if (ev.key === 'End') nextIdx = tabs.length - 1;
+      else if (ev.key === 'ArrowLeft' || ev.key === 'ArrowUp') nextIdx = (idx - 1 + tabs.length) % tabs.length;
+      else if (ev.key === 'ArrowRight' || ev.key === 'ArrowDown') nextIdx = (idx + 1) % tabs.length;
+      const next = tabs[nextIdx];
+      if (next) {
+        setSettingsTab(next.dataset.settingsTab || 'chat');
+        try { next.focus(); } catch {}
+      }
+    });
   });
 }
 
@@ -231,8 +544,19 @@ function bindSettingsLivePreview() {
   ['setDarkMode', 'setHighContrast', 'setAccentTheme'].forEach((id) => {
     const el = $(id);
     if (!el) return;
-    el.addEventListener('input', previewThemeSettingsFromControls);
-    el.addEventListener('change', previewThemeSettingsFromControls);
+    el.addEventListener('input', () => { previewThemeSettingsFromControls(); updateSettingsDirtyState(); });
+    el.addEventListener('change', () => { previewThemeSettingsFromControls(); updateSettingsDirtyState(); });
+  });
+  [
+    'setPopupNotif', 'setSoundNotif', 'setSoundTheme', 'setMissedToast',
+    'setFriendStatusInline', 'setFriendStatusTooltip', 'setHelpHints',
+    'setRoomFontSize', 'setEmoticonSize', 'setGifTileSize', 'setGifResultsPerLoad',
+    'setGifOpenMode', 'setGifShowTitles', 'setGifKeepOpen'
+  ].forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    el.addEventListener('input', ecUpdateSettingsLivePreviewFromControls);
+    el.addEventListener('change', ecUpdateSettingsLivePreviewFromControls);
   });
 }
 
@@ -241,42 +565,54 @@ function openSettings() {
   const modal = $("settingsModal");
   if (!modal) return;
 
+  EC_SETTINGS_LAST_FOCUS = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  EC_SETTINGS_OPEN_SEQ += 1;
+  modal.dataset.settingsOpenSeq = String(EC_SETTINGS_OPEN_SEQ);
+  setSettingsBusy(false);
+  ecSettingsWriteSnapshot(modal, ecSettingsSnapshotPrefs());
   applySettingsDraftToControls(UIState.prefs);
   syncHelpHintsSettingUi();
   bindSettingsLivePreview();
+  bindSettingsModalKeys();
 
-  modal.dataset.prevRoomFontSize = String(UIState.prefs.roomFontSize ?? 12);
+  modal.dataset.prevRoomFontSize = String(UIState.prefs.roomFontSize ?? 13);
+  modal.dataset.prevEmoticonSize = String((typeof ecClampEmoticonSize === 'function') ? ecClampEmoticonSize(UIState.prefs.emoticonSize ?? 26) : clampInt(UIState.prefs.emoticonSize, 22, 56, 26));
   modal.dataset.prevGifTileSize = String(clampInt(UIState.prefs.gifTileSize, 96, 220, 140));
   modal.dataset.prevGifShowTitles = UIState.prefs.gifShowTitles === false ? '0' : '1';
   modal.dataset.prevDarkMode = UIState.prefs.darkMode ? '1' : '0';
   modal.dataset.prevHighContrast = UIState.prefs.highContrast ? '1' : '0';
   modal.dataset.prevAccentTheme = String(UIState.prefs.accentTheme || 'default');
   modal.dataset.settingsPreviewActive = '1';
-  setSettingsTab(UIState.prefs.settingsTab || 'chat', { persist: false });
+  setSettingsTab(UIState.prefs.settingsTab || 'chat', { persist: false, scrollIntoView: false });
 
   modal.classList.remove("hidden");
+  updateSettingsDirtyState();
+  setTimeout(() => {
+    const active = document.querySelector('.settingsTabBtn.is-active');
+    try { (active || $('btnSaveSettings') || modal).focus({ preventScroll: true }); } catch {}
+  }, 0);
 }
 
 function closeSettings(opts = {}) {
   const shouldRevertPreview = opts.revertPreview !== false;
-  // If user closes without saving, revert any live preview.
   const modal = $("settingsModal");
-  if (shouldRevertPreview && modal?.dataset?.settingsPreviewActive === '1') {
-    const prev = modal.dataset.prevRoomFontSize;
-    if (prev) applyRoomFontSize(prev);
-    if (modal.dataset.prevGifTileSize !== undefined) {
-      UIState.prefs.gifTileSize = clampInt(modal.dataset.prevGifTileSize, 96, 220, UIState.prefs.gifTileSize || 140);
-    }
-    if (modal.dataset.prevGifShowTitles !== undefined) UIState.prefs.gifShowTitles = modal.dataset.prevGifShowTitles !== '0';
-    if (modal.dataset.prevDarkMode !== undefined) UIState.prefs.darkMode = modal.dataset.prevDarkMode === '1';
-    if (modal.dataset.prevHighContrast !== undefined) UIState.prefs.highContrast = modal.dataset.prevHighContrast === '1';
-    if (modal.dataset.prevAccentTheme !== undefined) UIState.prefs.accentTheme = String(modal.dataset.prevAccentTheme || 'default');
-    applyGifPickerPrefs();
-    setThemeFromPrefs();
+  if (modal?.dataset?.settingsSaving === '1' && opts.force !== true) {
+    toast('ℹ️ Settings are saving. Please wait…', 'info');
+    return;
   }
-  if (modal) modal.dataset.settingsPreviewActive = '0';
-  $("settingsModal")?.classList.add("hidden");
+  if (shouldRevertPreview && modal?.dataset?.settingsPreviewActive === '1') {
+    ecApplySettingsPrefsObject(ecSettingsReadSnapshot(modal), { syncControls: false });
+  }
+  if (modal) {
+    modal.dataset.settingsPreviewActive = '0';
+    modal.dataset.settingsDirty = '0';
+    modal.classList.remove('is-dirty');
+    modal.classList.add("hidden");
+  }
   clearSearchesForModalTransition();
+  if (EC_SETTINGS_LAST_FOCUS && document.contains(EC_SETTINGS_LAST_FOCUS)) {
+    setTimeout(() => { try { EC_SETTINGS_LAST_FOCUS.focus({ preventScroll: true }); } catch {} }, 0);
+  }
 }
 
 async function requestNotifPermissionIfNeeded() {
@@ -286,7 +622,13 @@ async function requestNotifPermissionIfNeeded() {
   }
 }
 
-function saveSettings() {
+async function saveSettings() {
+  const modal = $("settingsModal");
+  if (modal?.dataset?.settingsSaving === '1') return;
+  const saveSeq = ++EC_SETTINGS_SAVE_SEQ;
+  const openSeq = String(modal?.dataset?.settingsOpenSeq || '');
+  setSettingsBusy(true);
+  try {
   const dm = $("setDarkMode");
   UIState.prefs.darkMode = dm ? !!dm.checked : false;
   const hc = $("setHighContrast");
@@ -313,14 +655,23 @@ function saveSettings() {
   const hhc = $("setHelpHints");
   UIState.prefs.helpHints = hhc ? !!hhc.checked : true;
 
+
   const slider = $("setRoomFontSize");
   if (slider) {
-    UIState.prefs.roomFontSize = clampInt(slider.value, 10, 22, 12);
+    UIState.prefs.roomFontSize = clampInt(slider.value, 10, 22, 13);
     Settings.set("roomFontSize", UIState.prefs.roomFontSize);
     applyRoomFontSize(UIState.prefs.roomFontSize);
     const modal = $("settingsModal");
     if (modal) modal.dataset.prevRoomFontSize = String(UIState.prefs.roomFontSize);
   }
+
+  const emoticonSize = $("setEmoticonSize");
+  UIState.prefs.emoticonSize = emoticonSize
+    ? ((typeof ecClampEmoticonSize === 'function') ? ecClampEmoticonSize(emoticonSize.value) : clampInt(emoticonSize.value, 22, 56, 26))
+    : ((typeof ecClampEmoticonSize === 'function') ? ecClampEmoticonSize(UIState.prefs.emoticonSize) : 26);
+  Settings.set("emoticonSize", UIState.prefs.emoticonSize);
+  if (typeof ecApplyEmoticonSizePrefs === 'function') ecApplyEmoticonSizePrefs(UIState.prefs.emoticonSize);
+  if (modal) modal.dataset.prevEmoticonSize = String(UIState.prefs.emoticonSize);
 
   const gifSize = $("setGifTileSize");
   UIState.prefs.gifTileSize = gifSize ? clampInt(gifSize.value, 96, 220, 140) : 140;
@@ -334,12 +685,16 @@ function saveSettings() {
   const gifKeepOpen = $("setGifKeepOpen");
   UIState.prefs.gifShowTitles = gifTitles ? !!gifTitles.checked : true;
   UIState.prefs.gifKeepOpen = gifKeepOpen ? !!gifKeepOpen.checked : false;
-  const modal = $("settingsModal");
   if (modal) {
     modal.dataset.prevGifTileSize = String(UIState.prefs.gifTileSize);
     modal.dataset.prevGifShowTitles = UIState.prefs.gifShowTitles ? '1' : '0';
   }
   applyGifPickerPrefs();
+
+  SETTINGS_COMPOSER_KEYS.forEach((key) => {
+    UIState.prefs[key] = ecSettingsCleanValue(key, UIState.prefs[key] ?? getSettingsDefaultValue(key));
+    Settings.set(key, UIState.prefs[key]);
+  });
 
   Settings.set("darkMode", UIState.prefs.darkMode);
   Settings.set("highContrast", UIState.prefs.highContrast);
@@ -364,8 +719,18 @@ function saveSettings() {
   // Re-render friends list to apply display preferences immediately.
   try { getFriends(); } catch (_) {}
 
-  if (UIState.prefs.popupNotif) requestNotifPermissionIfNeeded();
+  if (UIState.prefs.popupNotif) await requestNotifPermissionIfNeeded();
 
+  if (modal && String(modal.dataset.settingsOpenSeq || '') !== openSeq) {
+    toast('⚠️ Settings changed while saving. Reopen Settings and review.', 'warn');
+    return;
+  }
+  if (saveSeq !== EC_SETTINGS_SAVE_SEQ) return;
+  ecSettingsWriteSnapshot(modal, ecSettingsSnapshotPrefs());
+  updateSettingsDirtyState();
   toast("✅ Settings saved", "ok");
-  closeSettings({ revertPreview: false });
+  closeSettings({ revertPreview: false, force: true });
+  } finally {
+    setSettingsBusy(false);
+  }
 }

@@ -81,7 +81,16 @@ async function decryptGroupEnvelope(privKey, cipherStr) {
   if (!env || env.v !== 1 || env.alg !== "RSA-OAEP+AES-GCM" || !env.keys) {
     throw new Error("Unknown group envelope format");
   }
-  const myEk = env.keys[currentUser];
+  const wantedUser = String(currentUser || "").trim().toLowerCase();
+  let myEk = env.keys[currentUser];
+  if (!myEk && wantedUser) {
+    for (const [name, wrapped] of Object.entries(env.keys || {})) {
+      if (String(name || "").trim().toLowerCase() === wantedUser) {
+        myEk = wrapped;
+        break;
+      }
+    }
+  }
   if (!myEk) throw new Error("No recipient key for me");
 
   const wrappedKeyBuf = bytesFromB64(String(myEk)).buffer;
@@ -103,7 +112,16 @@ async function decryptRoomEnvelope(privKey, cipherStr) {
   if (!env || env.v !== 1 || env.alg !== "RSA-OAEP+AES-GCM" || !env.keys) {
     throw new Error("Unknown room envelope format");
   }
-  const myEk = env.keys[currentUser];
+  const wantedUser = String(currentUser || "").trim().toLowerCase();
+  let myEk = env.keys[currentUser];
+  if (!myEk && wantedUser) {
+    for (const [name, wrapped] of Object.entries(env.keys || {})) {
+      if (String(name || "").trim().toLowerCase() === wantedUser) {
+        myEk = wrapped;
+        break;
+      }
+    }
+  }
   if (!myEk) throw new Error("No recipient key for me");
 
   const wrappedKeyBuf = bytesFromB64(String(myEk)).buffer;
@@ -117,30 +135,88 @@ async function decryptRoomEnvelope(privKey, cipherStr) {
   return new TextDecoder().decode(decryptedBuffer);
 }
 
-// Encrypt a room message to all *current* room members that have public keys.
-// If any member lacks a key, we abort (ciphertext-only guarantee).
-async function buildRoomCipher(room, plaintext) {
-  if (!HAS_WEBCRYPTO) throw new Error("Room encryption requires HTTPS or http://localhost.");
+function ecE2eeUserKey(username) {
+  return String(username || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
 
-  // Get the freshest roster we can.
-  const users = await requestRoomUsers(room, 1500).catch(() => (UIState.roomUsers.get(room) || []));
-  const uniq = Array.from(new Set((users || []).map(String).filter(Boolean)));
-  if (!uniq.includes(currentUser)) uniq.push(currentUser);
+function ecE2eeSameUser(a, b) {
+  const ak = ecE2eeUserKey(a);
+  const bk = ecE2eeUserKey(b);
+  return !!ak && !!bk && ak === bk;
+}
 
-  // Prefetch keys (so we can provide a clear error list)
+function ecE2eeBlockedByMe(username) {
+  const targetKey = ecE2eeUserKey(username);
+  if (!targetKey) return false;
+  try {
+    const set = UIState?.blockedSet;
+    if (!(set instanceof Set)) return false;
+    if (set.has(username) || set.has(targetKey)) return true;
+    for (const blocked of set.values()) {
+      if (ecE2eeUserKey(blocked) === targetKey) return true;
+    }
+  } catch {}
+  return false;
+}
+
+function ecE2eeUniqueRecipients(users, { excludeBlocked = true } = {}) {
+  const out = [];
+  const seen = new Set();
+  const self = String(currentUser || "").replace(/\s+/g, " ").trim();
+  const push = (raw) => {
+    const name = String(raw || "").replace(/\s+/g, " ").trim();
+    if (!name) return;
+    const key = ecE2eeUserKey(name);
+    if (!key || seen.has(key)) return;
+    if (excludeBlocked && !ecE2eeSameUser(name, self) && ecE2eeBlockedByMe(name)) return;
+    seen.add(key);
+    out.push(name);
+  };
+  (Array.isArray(users) ? users : []).forEach(push);
+  push(self);
+  return out;
+}
+
+function ecE2eeKeyLookupCode(err) {
+  return String(err?.message || err?.code || err || "").trim().toLowerCase();
+}
+
+async function ecE2eeValidateRecipients(recipients, opts = {}) {
+  const usable = [];
   const missing = [];
-  for (const u of uniq) {
+  const scope = String(opts.scope || opts.context || "").trim().toLowerCase();
+  const uniqueRecipients = ecE2eeUniqueRecipients(recipients, { excludeBlocked: opts.excludeBlocked !== false });
+  for (const u of uniqueRecipients) {
     try {
-      await getUserRsaPublicKey(u);
-    } catch {
+      await getUserRsaPublicKey(u, { scope });
+      usable.push(u);
+    } catch (err) {
+      // In room scope, a server-side "blocked" denial means the target has
+      // blocked the sender and should not receive this room packet.  Skip that
+      // recipient.  In direct/group contexts the existing pairwise block model
+      // is preserved and blocked recipients are also omitted from the envelope.
+      if (!ecE2eeSameUser(u, currentUser) && ecE2eeKeyLookupCode(err) === "blocked") continue;
       missing.push(u);
     }
   }
   if (missing.length) {
     throw new Error(`Users missing public keys: ${missing.slice(0, 6).join(", ")}${missing.length > 6 ? "…" : ""}`);
   }
+  return usable;
+}
 
-  return await encryptRoomEnvelopeForUsers(uniq, plaintext);
+// Encrypt a room message to live room members allowed to receive from me.
+// Blocking is viewer-side for rooms: users I blocked stay in the recipient set
+// unless they blocked me too. Users who blocked me are skipped by room-scope key
+// lookup, so they do not receive/decrypt my room packet.
+async function buildRoomCipher(room, plaintext) {
+  if (!HAS_WEBCRYPTO) throw new Error("Room encryption requires HTTPS or http://localhost.");
+
+  // Get the freshest roster we can.
+  const users = await requestRoomUsers(room, 1500).catch(() => (UIState.roomUsers.get(room) || []));
+  const recipients = await ecE2eeValidateRecipients(users || [], { scope: "room", excludeBlocked: false });
+
+  return await encryptRoomEnvelopeForUsers(recipients, plaintext);
 }
 
 function inferRoomMessageKindFromPlaintext(plaintext) {
@@ -151,6 +227,7 @@ function inferRoomMessageKindFromPlaintext(plaintext) {
     const obj = JSON.parse(raw);
     const ec = String(obj?._ec || obj?.kind || obj?.type || "").trim().toLowerCase();
     if (ec === "gif") return "gif";
+    if (ec === "styled_text") return "text";
     if (ec === "torrent" || ec === "magnet") return "torrent";
     if (ec === "file" || ec === "upload") return "file";
     if (obj && (obj.magnet || obj.infohash || obj.infohash_hex)) return "torrent";
@@ -198,6 +275,30 @@ async function buildDuplicateMessageHints(plaintext, messageKind = "text") {
   };
 }
 
+function ecRoomAckNeedsRosterRetry(res) {
+  if (!res || res.success) return false;
+  const code = String(res.code || '').trim().toLowerCase();
+  const err = String(res.error || '').trim().toLowerCase();
+  return !!(res.refresh_room_users || code === 'room_roster_stale' || code === 'room_e2ee_recipient_stale' || /roster.*refresh|recipient.*stale|send again/.test(err));
+}
+
+async function ecRefreshRoomRosterBeforeRetry(room, reason = 'room_roster_stale') {
+  const cleanRoom = String(room || '').replace(/\s+/g, ' ').trim();
+  if (!cleanRoom) return;
+  try { if (typeof getBlockedUsers === 'function') getBlockedUsers(); } catch {}
+  try { if (typeof getUsersInRoom === 'function') getUsersInRoom(cleanRoom); } catch {}
+  try {
+    if (typeof joinRoom === 'function') {
+      await Promise.race([
+        Promise.resolve(joinRoom(cleanRoom, { silent: true, restore: true, rosterHeal: true })),
+        new Promise((resolve) => setTimeout(() => resolve({ success: false, timeout: true }), 2200)),
+      ]);
+    }
+  } catch {}
+  try { await requestRoomUsers(cleanRoom, 2600); } catch {}
+  try { if (typeof ecScheduleRoomRosterSelfHeal === 'function') ecScheduleRoomRosterSelfHeal(cleanRoom, reason); } catch {}
+}
+
 async function sendRoomTo(room, plaintext) {
   // Slash command: /invite <username>
   // This must never be broadcast into chat history; it triggers an invite notification only.
@@ -224,15 +325,30 @@ async function sendRoomTo(room, plaintext) {
   const serverRequiresRoomE2EE = !!(ECHOCHAT_CFG.require_room_e2ee || ECHOCHAT_CFG.require_private_room_e2ee);
   const useE2EE = serverRequiresRoomE2EE ? true : Settings.get("roomE2EE", true);
 
-  const messageKind = inferRoomMessageKindFromPlaintext(plaintext);
+  let filteredPlaintext = String(plaintext ?? "");
+  if (typeof ecLimitOutgoingChatEmoticons === "function") {
+    const limited = await ecLimitOutgoingChatEmoticons(filteredPlaintext, { surface: "room" });
+    filteredPlaintext = String(limited?.text ?? filteredPlaintext);
+  }
+  if (!filteredPlaintext.trim()) return { success: false, error: "Message empty after emoticon filter" };
+
+  const outgoingPlaintext = (typeof ecBuildStyledRoomMessagePayload === "function")
+    ? ecBuildStyledRoomMessagePayload(filteredPlaintext)
+    : filteredPlaintext;
+  const messageKind = inferRoomMessageKindFromPlaintext(outgoingPlaintext);
 
   if (useE2EE && HAS_WEBCRYPTO) {
-    const dupHints = await buildDuplicateMessageHints(plaintext, messageKind);
-    const cipher = await buildRoomCipher(room, plaintext);
-    return await ecSendRoomMessageAck({ room, cipher, message_kind: messageKind, ...dupHints });
+    const dupHints = await buildDuplicateMessageHints(outgoingPlaintext, messageKind);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const cipher = await buildRoomCipher(room, outgoingPlaintext);
+      const ack = await ecSendRoomMessageAck({ room, cipher, message_kind: messageKind, ...dupHints });
+      if (!ecRoomAckNeedsRosterRetry(ack) || attempt > 0) return ack;
+      try { toast('🔄 Room users refreshed. Retrying encrypted send…', 'warn', 2400); } catch {}
+      await ecRefreshRoomRosterBeforeRetry(room, 'send_retry');
+    }
   }
 
-  return await ecSendRoomMessageAck({ room, message: String(plaintext ?? ""), message_kind: messageKind, dup_sig_raw: null, dup_sig_norm: null, dup_plain_len: String(plaintext ?? "").length });
+  return await ecSendRoomMessageAck({ room, message: String(outgoingPlaintext ?? ""), message_kind: messageKind, dup_sig_raw: null, dup_sig_norm: null, dup_plain_len: String(outgoingPlaintext ?? "").length });
 }
 
 async function requestGroupMembers(groupId, timeoutMs = 1500) {
@@ -241,12 +357,20 @@ async function requestGroupMembers(groupId, timeoutMs = 1500) {
   const res = (typeof ecEmitAck === "function")
     ? await ecEmitAck("get_group_members", { group_id: gid }, Math.max(1200, Number(timeoutMs || 1500) + 700), { connectBannerText: "🔌 Reconnecting before refreshing group members…", bannerDelayMs: 1200 })
     : await new Promise((resolve) => socket.emit("get_group_members", { group_id: gid }, (r) => resolve(r || { success: false })));
-  if (res?.success) return Array.isArray(res.members) ? res.members : [];
+  if (res?.success) {
+    try {
+      if (typeof rememberGroupMembersFromResponse === "function") rememberGroupMembersFromResponse(gid, res);
+    } catch {}
+    if (Array.isArray(res.member_details) && res.member_details.length) {
+      return res.member_details.map((m) => String(m?.username || m?.name || m?.user || "").trim()).filter(Boolean);
+    }
+    return Array.isArray(res.members) ? res.members : [];
+  }
   throw new Error(res?.error || "group_members failed");
 }
 
-// Encrypt a group message to all group members that have public keys.
-// If any member lacks a key, we abort (ciphertext-only guarantee).
+// Encrypt a group message to all group members except users blocked by me.
+// Non-blocked members still need public keys to preserve the ciphertext-only guarantee.
 async function buildGroupCipher(groupId, plaintext) {
   if (!HAS_WEBCRYPTO) throw new Error("Group encryption requires HTTPS or http://localhost.");
 
@@ -254,18 +378,9 @@ async function buildGroupCipher(groupId, plaintext) {
   // Prefer cached members, but refresh from server when possible.
   const cached = UIState.groupMembers.get(gid) || [];
   const members = await requestGroupMembers(gid, 1500).catch(() => cached);
-  const uniq = Array.from(new Set((members || []).map(String).filter(Boolean)));
-  if (!uniq.includes(currentUser)) uniq.push(currentUser);
+  const recipients = await ecE2eeValidateRecipients(members || []);
 
-  const missing = [];
-  for (const u of uniq) {
-    try { await getUserRsaPublicKey(u); } catch { missing.push(u); }
-  }
-  if (missing.length) {
-    throw new Error(`Users missing public keys: ${missing.slice(0, 6).join(", ")}${missing.length > 6 ? "…" : ""}`);
-  }
-
-  return await encryptGroupEnvelopeForUsers(uniq, plaintext);
+  return await encryptGroupEnvelopeForUsers(recipients, plaintext);
 }
 
 function inferGroupMessageKindFromPlaintext(plaintext) {
@@ -304,22 +419,35 @@ async function sendGroupTo(groupId, plaintext, ctx = {}) {
   const serverRequiresGroupE2EE = (ECHOCHAT_CFG.require_group_e2ee === undefined) ? true : !!ECHOCHAT_CFG.require_group_e2ee;
   const useE2EE = serverRequiresGroupE2EE ? true : Settings.get("groupE2EE", true);
 
-  const messageKind = inferGroupMessageKindFromPlaintext(plaintext);
+  let filteredPlaintext = String(plaintext ?? "");
+  if (typeof ecLimitOutgoingChatEmoticons === "function") {
+    const limited = await ecLimitOutgoingChatEmoticons(filteredPlaintext, { surface: "group" });
+    filteredPlaintext = String(limited?.text ?? filteredPlaintext);
+  }
+  if (!filteredPlaintext.trim()) return { success: false, error: "Message empty after emoticon filter" };
+
+  const messageKind = inferGroupMessageKindFromPlaintext(filteredPlaintext);
 
   if (useE2EE && HAS_WEBCRYPTO) {
-    const cipher = await buildGroupCipher(gid, plaintext);
-    const dupHints = await buildDuplicateMessageHints(plaintext, messageKind);
+    const cipher = await buildGroupCipher(gid, filteredPlaintext);
+    const dupHints = await buildDuplicateMessageHints(filteredPlaintext, messageKind);
     return await ecSendGroupMessageAck({ group_id: gid, cipher, message_kind: messageKind, ...dupHints });
   }
 
-  return await ecSendGroupMessageAck({ group_id: gid, message: String(plaintext ?? ""), message_kind: messageKind, dup_sig_raw: null, dup_sig_norm: null, dup_plain_len: String(plaintext ?? "").length });
+  return await ecSendGroupMessageAck({ group_id: gid, message: filteredPlaintext, message_kind: messageKind, dup_sig_raw: null, dup_sig_norm: null, dup_plain_len: filteredPlaintext.length });
 }
 
 async function sendGroupCipher(groupId, plaintext) {
   const gid = Number(groupId);
-  const messageKind = inferGroupMessageKindFromPlaintext(plaintext);
-  const cipher = await buildGroupCipher(gid, plaintext);
-  const dupHints = await buildDuplicateMessageHints(plaintext, messageKind);
+  let filteredPlaintext = String(plaintext ?? "");
+  if (typeof ecLimitOutgoingChatEmoticons === "function") {
+    const limited = await ecLimitOutgoingChatEmoticons(filteredPlaintext, { surface: "group" });
+    filteredPlaintext = String(limited?.text ?? filteredPlaintext);
+  }
+  if (!filteredPlaintext.trim()) return { success: false, error: "Message empty after emoticon filter" };
+  const messageKind = inferGroupMessageKindFromPlaintext(filteredPlaintext);
+  const cipher = await buildGroupCipher(gid, filteredPlaintext);
+  const dupHints = await buildDuplicateMessageHints(filteredPlaintext, messageKind);
   return await ecSendGroupMessageAck({ group_id: gid, cipher, message_kind: messageKind, ...dupHints });
 }
 
@@ -354,22 +482,13 @@ async function sendGroupFileTo(groupId, file, ctx = {}) {
     const sha256 = await sha256HexFromArrayBuffer(arrayBuffer);
     meta.sha256 = sha256;
 
-    // Get group member list (includes current user).
+    // Get group member list (includes current user) and omit blocked users from
+    // my outbound encrypted file envelope.
     const cached = UIState.groupMembers.get(gid) || [];
     const members = await requestGroupMembers(gid, 1500).catch(() => cached);
-    const uniq = Array.from(new Set((members || []).map(String).filter(Boolean)));
-    if (!uniq.includes(currentUser)) uniq.push(currentUser);
+    const recipients = await ecE2eeValidateRecipients(members || []);
 
-    // Ensure all pubkeys exist
-    const missing = [];
-    for (const u of uniq) {
-      try { await getUserRsaPublicKey(u); } catch { missing.push(u); }
-    }
-    if (missing.length) {
-      throw new Error(`Users missing public keys: ${missing.slice(0, 6).join(", ")}${missing.length > 6 ? "…" : ""}`);
-    }
-
-    // Encrypt file bytes under random AES key, wrap AES key for each member.
+    // Encrypt file bytes under random AES key, wrap AES key for each recipient.
     const aesKey = await window.crypto.subtle.generateKey(
       { name: "AES-GCM", length: 256 },
       true,
@@ -380,7 +499,7 @@ async function sendGroupFileTo(groupId, file, ctx = {}) {
     const rawAesKey = await window.crypto.subtle.exportKey("raw", aesKey);
 
     const ek_map = {};
-    for (const u of uniq) {
+    for (const u of recipients) {
       const pub = await getUserRsaPublicKey(u);
       const ek = await window.crypto.subtle.encrypt({ name: "RSA-OAEP" }, pub, rawAesKey);
       ek_map[u] = bytesToB64(new Uint8Array(ek));
@@ -446,7 +565,9 @@ async function getUserRsaPublicKey(username, opts = {}) {
     if (age >= 0 && age < RSA_PUBKEY_CACHE_TTL_MS) return cached.key;
   }
 
-  const resp = await fetchWithAuth(`/get_public_key?username=${encodeURIComponent(uname)}`, {
+  const scope = String(opts.scope || opts.context || "").trim().toLowerCase();
+  const scopeParam = scope ? `&scope=${encodeURIComponent(scope)}` : "";
+  const resp = await fetchWithAuth(`/get_public_key?username=${encodeURIComponent(uname)}${scopeParam}`, {
     method: "GET",
     credentials: "same-origin"
   });

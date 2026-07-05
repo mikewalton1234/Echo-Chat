@@ -15,11 +15,17 @@ function parseGifMarker(text) {
 function _gifFallbackUrl(url) {
   try {
     const u = new URL(url);
+    const host = String(u.hostname || '').toLowerCase();
+    if (!host.endsWith('giphy.com')) return null;
     const parts = (u.pathname || "").split("/").filter(Boolean);
     const mi = parts.indexOf("media");
     if (mi !== -1 && parts.length > (mi + 1)) {
-      const id = parts[mi + 1];
-      if (id) return `https://i.giphy.com/media/${id}/giphy.gif`;
+      const id = String(parts[mi + 1] || '').trim();
+      // GIPHY ids are case-sensitive. Never treat the newer opaque v1.* media
+      // path segment as a GIF id, and do not lower/upper-case the value.
+      if (/^[A-Za-z0-9_-]{4,128}$/.test(id) && !id.startsWith('v1.')) {
+        return `https://media.giphy.com/media/${id}/giphy.gif`;
+      }
     }
   } catch {}
   return null;
@@ -79,14 +85,19 @@ function refreshGifInlineImage(img, reason = "manual") {
     return false;
   }
 
-  const rawBase = img.dataset.gifBase || img.dataset.gifOrig || img.src || "";
-  const base = (typeof ecNormalizeSafeUrl === 'function')
-    ? ecNormalizeSafeUrl(rawBase, { allowRelative: false, allowExternal: true })
-    : (/^https?:\/\//i.test(rawBase) ? rawBase : '');
-  if (!base) return false;
-  const canonical = _gifFallbackUrl(base) || base;
+  const rawOriginal = img.dataset.gifOrig || img.dataset.gifBase || img.src || "";
+  const original = (typeof ecNormalizeSafeUrl === 'function')
+    ? ecNormalizeSafeUrl(rawOriginal, { allowRelative: false, allowExternal: true })
+    : (/^https?:\/\//i.test(rawOriginal) ? rawOriginal : '');
+  const rawFallback = img.dataset.gifFallback || _gifFallbackUrl(original) || "";
+  const fallback = (typeof ecNormalizeSafeUrl === 'function')
+    ? ecNormalizeSafeUrl(rawFallback, { allowRelative: false, allowExternal: true })
+    : (/^https?:\/\//i.test(rawFallback) ? rawFallback : '');
+  const canonical = (tries === 0 || !fallback) ? original : fallback;
+  if (!canonical) return false;
 
   img.dataset.gifBase = canonical;
+  if (fallback) img.dataset.gifFallback = fallback;
   img.dataset.gifTry = String(tries + 1);
   img.dataset.gifLoaded = "0";
   img.dataset.gifFailed = "0";
@@ -171,12 +182,14 @@ function configureGifInlineImage(img, gifUrl, ui = null) {
   img.dataset.gifOrig = safeGifUrl;
   img._ecGifUi = ui || null;
 
-  const base = _gifFallbackUrl(safeGifUrl) || safeGifUrl;
+  const base = safeGifUrl;
+  const fallback = _gifFallbackUrl(safeGifUrl);
   if (!base) {
     setGifInlineUiState(img, 'broken');
     return;
   }
   img.dataset.gifBase = base;
+  if (fallback) img.dataset.gifFallback = fallback;
   img.dataset.gifTry = "0";
   img.dataset.gifLoaded = "0";
   img.dataset.gifFailed = "0";

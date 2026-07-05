@@ -130,6 +130,11 @@ function renderMyHubIdentity(profile = null) {
   } else {
     av.textContent = dockInitials(username);
   }
+
+  // The room transcript may render before the profile cache finishes loading.
+  // Once the hub identity has the real avatar, refresh already-rendered message
+  // avatars for this user so they do not stay as letter bubbles.
+  try { window.ecRefreshMessageAvatarsForUsername?.(username); } catch {}
 }
 
 function fetchMyProfile() {
