@@ -309,6 +309,7 @@ Mobile features include:
 * Small-screen Admin Panel improvements
 
 ## Setup and Server Tools
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/fe86a461-9e65-4ada-83e9-5bd3793f9de5" />
 
 Echo-Chat includes tools to help server owners set up, check, and release the project.
 
