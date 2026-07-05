@@ -30,7 +30,7 @@ LOG_FATAL_PATTERNS: tuple[str, ...] = (
 
 LOG_SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"postgres(?:ql)?://[^\s:@]+:[^\s@]+@", re.I),
-    re.compile(r"\b(?:SECRET_KEY|JWT_SECRET|JWT_SECRET_KEY|DATABASE_URL|DB_CONNECTION_STRING)\s*=\s*[^\s]+", re.I),
+    re.compile(r"\b(?:SECRET_KEY|ECHOCHAT_SECRET_KEY|JWT_SECRET|JWT_SECRET_KEY|ECHOCHAT_JWT_SECRET|ECHOCHAT_PROFILE_FIELD_KEY|ECHOCHAT_EMAIL_FIELD_KEY|ECHOCHAT_EMAIL_HASH_KEY|ECHOCHAT_SECURITY_BACKUP_KEY|ECHOCHAT_PRIVACY_HASH_KEY|DATABASE_URL|DB_CONNECTION_STRING)\s*=\s*[^\s]+", re.I),
     re.compile(r"\b(?:smtp_password|twilio_auth_token|turn_credential|giphy_api_key)\b\s*[:=]\s*[^\s,}]+", re.I),
 )
 
@@ -46,7 +46,7 @@ class LogCheck:
 def redact_log_snippet(line: str) -> str:
     redacted = str(line or "")
     redacted = re.sub(r"(postgres(?:ql)?://[^\s:@]+:)[^\s@]+(@)", r"\1***\2", redacted, flags=re.I)
-    redacted = re.sub(r"((?:SECRET_KEY|JWT_SECRET|JWT_SECRET_KEY|DATABASE_URL|DB_CONNECTION_STRING)\s*=\s*)[^\s]+", r"\1***", redacted, flags=re.I)
+    redacted = re.sub(r"((?:SECRET_KEY|ECHOCHAT_SECRET_KEY|JWT_SECRET|JWT_SECRET_KEY|ECHOCHAT_JWT_SECRET|ECHOCHAT_PROFILE_FIELD_KEY|ECHOCHAT_EMAIL_FIELD_KEY|ECHOCHAT_EMAIL_HASH_KEY|ECHOCHAT_SECURITY_BACKUP_KEY|ECHOCHAT_PRIVACY_HASH_KEY|DATABASE_URL|DB_CONNECTION_STRING)\s*=\s*)[^\s]+", r"\1***", redacted, flags=re.I)
     redacted = re.sub(r"((?:smtp_password|twilio_auth_token|turn_credential|giphy_api_key)\b\s*[:=]\s*)[^\s,}]+", r"\1***", redacted, flags=re.I)
     return redacted[:500]
 

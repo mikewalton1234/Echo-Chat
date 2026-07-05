@@ -25,10 +25,29 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def _safe_int(value, default: int, minimum: int = 1, maximum: int = 100) -> int:
+    try:
+        out = int(value)
+    except Exception:
+        out = int(default)
+    return max(minimum, min(maximum, out))
+
+
 def _init_db(settings: dict) -> None:
+    instances = _safe_int(settings.get("production_instance_count", 1), 1, minimum=1, maximum=10)
+    cfg_min = _safe_int(settings.get("db_pool_min", 1), 1, minimum=1, maximum=25)
+    raw_max = settings.get("db_pool_max")
+    if raw_max is None or str(raw_max).strip() == "":
+        cfg_max = 50 if instances <= 1 else (25 if instances <= 2 else 15 if instances <= 5 else 10)
+    else:
+        cfg_max = _safe_int(raw_max, 50 if instances <= 1 else 10, minimum=1, maximum=100)
+    if instances <= 1 and cfg_max < 50:
+        cfg_max = 50
+    if cfg_min > cfg_max:
+        cfg_min = cfg_max
     init_db_pool(
-        minconn=int(settings.get("db_pool_min", 1)),
-        maxconn=max(50, int(settings.get("db_pool_max", 50))),
+        minconn=cfg_min,
+        maxconn=cfg_max,
         dsn=str(settings.get("database_url")) if settings.get("database_url") else None,
     )
 

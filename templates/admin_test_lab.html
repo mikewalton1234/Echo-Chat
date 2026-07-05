@@ -206,8 +206,16 @@
         wrap.appendChild(btn);
       });
     }
+    function recomputeResultSummary(data){
+      const base = data || {};
+      const rows = Array.isArray(base.results) ? base.results : [];
+      const passed = rows.filter(r => r && r.ok).length;
+      const failed = rows.filter(r => r && !r.ok).length;
+      const skipped = Number((base.summary && base.summary.skipped) || 0);
+      return { ...base, ok: failed === 0, summary: { passed, failed, skipped } };
+    }
     function renderAll(data){
-      lastData=data||{};
+      lastData=recomputeResultSummary(data||{});
       updateCategoryFilter(lastData);
       renderSummary(lastData);
       renderCategorySummary(lastData);
@@ -375,43 +383,22 @@
     }
     function mergeBrowserRows(data, browserRows) {
       const rows = Array.isArray(browserRows) ? browserRows : [];
-      if (!rows.length) return data;
-      const merged = data || {};
-      merged.results = rows.concat(Array.isArray(merged.results) ? merged.results : []);
-      const addPassed = rows.filter(r => r && r.ok).length;
-      const addFailed = rows.filter(r => r && !r.ok).length;
-      const summary = merged.summary || {};
-      summary.passed = Number(summary.passed || 0) + addPassed;
-      summary.failed = Number(summary.failed || 0) + addFailed;
-      summary.skipped = Number(summary.skipped || 0);
-      merged.summary = summary;
-      merged.ok = !!merged.ok && addFailed === 0;
+      if (!rows.length) return recomputeResultSummary(data || {});
+      const existing = Array.isArray(data&&data.results) ? data.results : [];
+      const merged = { ...(data || {}), results: rows.concat(existing) };
       const coverage = Array.isArray(merged.coverage) ? merged.coverage.slice() : [];
       if (!coverage.includes('p2p-browser')) coverage.unshift('p2p-browser');
       merged.coverage = coverage;
-      return merged;
+      return recomputeResultSummary(merged);
     }
     function mergeReleaseGateRows(data) {
       const rows = collectBrowserReleaseGateRows();
       const withoutOld = Array.isArray(data&&data.results) ? data.results.filter(r => String((r&&r.category)||'') !== 'browser-release-gate') : [];
-      const merged = {...(data || {}), results: withoutOld};
-      const addPassed = rows.filter(r => r && r.ok).length;
-      const addFailed = rows.filter(r => r && !r.ok).length;
-      const baseSummary = merged.summary || {};
-      const oldGate = Array.isArray(data&&data.results) ? data.results.filter(r => String((r&&r.category)||'') === 'browser-release-gate') : [];
-      const oldPassed = oldGate.filter(r => r && r.ok).length;
-      const oldFailed = oldGate.filter(r => r && !r.ok).length;
-      merged.results = rows.concat(withoutOld);
-      merged.summary = {
-        passed: Math.max(0, Number(baseSummary.passed || 0) - oldPassed) + addPassed,
-        failed: Math.max(0, Number(baseSummary.failed || 0) - oldFailed) + addFailed,
-        skipped: Number(baseSummary.skipped || 0)
-      };
-      merged.ok = !!merged.ok && addFailed === 0;
+      const merged = { ...(data || {}), results: rows.concat(withoutOld) };
       const coverage = Array.isArray(merged.coverage) ? merged.coverage.slice() : [];
       if (!coverage.includes('browser-release-gate')) coverage.unshift('browser-release-gate');
       merged.coverage = coverage;
-      return merged;
+      return recomputeResultSummary(merged);
     }
     async function runP2POnly(){
       const btn=document.getElementById('runP2PBtn');
@@ -420,9 +407,9 @@
       status.textContent='Running browser WebRTC/DataChannel diagnostics…';
       try{
         const rows = await runBrowserP2PDiagnostics();
-        const data = summarizeRows(rows, 'browser');
+        const data = mergeReleaseGateRows(summarizeRows(rows, 'browser'));
         renderAll(data);
-        status.textContent = data.ok ? 'Browser P2P diagnostics passed.' : 'Browser P2P diagnostics found a problem.';
+        status.textContent = rows.every(r => r && r.ok) ? 'Browser P2P diagnostics passed.' : 'Browser P2P diagnostics found a problem.';
       }catch(err){
         status.textContent='Browser P2P diagnostics failed before completion.';
         document.getElementById('rawOut').textContent=String(err && err.stack || err);
@@ -453,7 +440,7 @@
       try{
         const basePath=window.location.pathname.replace(/\/+$/, '');
         const {resp, rawText, data}=await postJson(basePath + '/readiness', {});
-        if(data) renderAll(data); else document.getElementById('rawOut').textContent=rawText||`HTTP ${resp.status} with empty body`;
+        if(data) renderAll(mergeReleaseGateRows(data)); else document.getElementById('rawOut').textContent=rawText||`HTTP ${resp.status} with empty body`;
         status.textContent=resp.ok?'Readiness check finished.':`Readiness check finished with HTTP ${resp.status}.`;
       }catch(err){
         status.textContent='Readiness check failed before completion.';
@@ -518,7 +505,7 @@
         const {resp, rawText, data}=await postJson(runUrl, {
           current_password:(document.getElementById('currentPassword').value || '').trim()
         });
-        if(data) renderAll(data); else document.getElementById('rawOut').textContent=rawText||`HTTP ${resp.status} with empty body`;
+        if(data) renderAll(mergeReleaseGateRows(data)); else document.getElementById('rawOut').textContent=rawText||`HTTP ${resp.status} with empty body`;
         if(resp.status === 428){
           const msg=(data && (data.message || data.error || data.code)) || 'Recent admin password confirmation is required.';
           status.textContent=`Live user flow needs admin confirmation: ${msg}`;

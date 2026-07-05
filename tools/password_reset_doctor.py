@@ -130,7 +130,7 @@ def main() -> int:
                     """
                     SELECT username, email, recovery_pin_hash IS NOT NULL AS has_pin
                       FROM users
-                     WHERE username = %s;
+                     WHERE LOWER(username) = LOWER(%s);
                     """,
                     (username_hint,),
                 )
@@ -172,7 +172,7 @@ def main() -> int:
                     """
                     SELECT COUNT(*)
                       FROM password_reset_tokens
-                     WHERE username = %s
+                     WHERE LOWER(username) = LOWER(%s)
                        AND created_at > (CURRENT_TIMESTAMP - INTERVAL '15 minutes')
                        AND used_at IS NULL;
                     """,
@@ -190,7 +190,7 @@ def main() -> int:
                     cur.execute(
                         """
                         DELETE FROM password_reset_tokens
-                         WHERE username = %s
+                         WHERE LOWER(username) = LOWER(%s)
                            AND used_at IS NULL;
                         """,
                         (username,),

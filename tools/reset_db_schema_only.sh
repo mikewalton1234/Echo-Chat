@@ -45,7 +45,7 @@ if [[ -z "${DSN}" ]]; then
 fi
 
 eval "$(python - "${DSN}" <<'PY2'
-import sys, urllib.parse as up
+import sys, urllib.parse as up, shlex
 
 dsn = sys.argv[1]
 u = up.urlparse(dsn)
@@ -58,17 +58,31 @@ password = up.unquote(u.password or "")
 host = u.hostname or "localhost"
 port = str(u.port or 5432)
 
-print(f"DBNAME={dbname}")
-print(f"DBUSER={user}")
-print(f"DBPASS={password}")
-print(f"DBHOST={host}")
-print(f"DBPORT={port}")
+print("DBNAME=" + shlex.quote(dbname))
+print("DBUSER=" + shlex.quote(user))
+print("DBPASS=" + shlex.quote(password))
+print("DBHOST=" + shlex.quote(host))
+print("DBPORT=" + shlex.quote(port))
 PY2
 )"
 
 if [[ -z "${DBUSER}" || ! "${DBUSER}" =~ ^[A-Za-z0-9_]+$ ]]; then
   echo "❌ Unsafe DBUSER '${DBUSER}'. Use a simple Postgres role name." >&2
   exit 1
+fi
+
+if [[ "${DBNAME,,}" == "postgres" || "${DBNAME,,}" == "template0" || "${DBNAME,,}" == "template1" ]]; then
+  echo "❌ Refusing to wipe protected PostgreSQL database '${DBNAME}'. Choose a dedicated Echo-Chat database." >&2
+  exit 1
+fi
+
+if [[ "${ECHOCHAT_RESET_CONFIRM:-}" != "1" ]]; then
+  echo "⚠️  This will DROP and recreate the public schema in database '${DBNAME}' for ${SERVER_NAME}." >&2
+  read -r -p "Type RESET ${DBNAME} to continue: " CONFIRM
+  if [[ "${CONFIRM}" != "RESET ${DBNAME}" ]]; then
+    echo "Cancelled." >&2
+    exit 1
+  fi
 fi
 
 PSQL_BASE=(psql -h "${DBHOST}" -p "${DBPORT}" -U "${DBUSER}" -v ON_ERROR_STOP=1)

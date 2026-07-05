@@ -26,11 +26,11 @@ This script:
 
 Usage
 -----
-  # dry run (prints what it would do)
-  python tools/dedupe_duplicate_emails.py --dry-run
+  # dry run (default; prints what it would do)
+  python tools/dedupe_duplicate_emails.py
 
   # perform changes
-  python tools/dedupe_duplicate_emails.py
+  python tools/dedupe_duplicate_emails.py --apply
 
   # explicit DSN
   python tools/dedupe_duplicate_emails.py --dsn "postgresql://user:pass@localhost:5432/echo_db"
@@ -198,7 +198,8 @@ def main() -> int:
         default=None,
         help="Override Postgres DSN (otherwise uses server_config.json / env / constants.py fallback)",
     )
-    ap.add_argument("--dry-run", action="store_true", help="Print changes but do not write")
+    ap.add_argument("--dry-run", action="store_true", help="Print changes but do not write (default)")
+    ap.add_argument("--apply", action="store_true", help="Actually write changes. Without this, the tool is read-only.")
     ap.add_argument(
         "--keep",
         choices=["oldest", "newest", "lowest_id", "highest_id"],
@@ -216,8 +217,13 @@ def main() -> int:
         print(f"Details: {e}")
         return 2
 
-    dry_run = bool(args.dry_run)
+    if args.dry_run and args.apply:
+        print("❌ Choose either --dry-run or --apply, not both.")
+        return 3
+    dry_run = not bool(args.apply)
     keep = args.keep
+    if dry_run:
+        print("ℹ️  Dry-run mode: no database changes will be written. Use --apply to modify data.")
 
     try:
         with conn.cursor() as cur:
