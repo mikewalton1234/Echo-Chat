@@ -141,6 +141,8 @@ Social features include:
 * Block cleanup across messages, invites, files, and alerts
 
 ## Profiles
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/38b72525-80bd-4c9f-a320-868643d67a34" />
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/f41f853d-6314-41a5-9731-33e969907e44" />
 
 Users can build a profile inside the chat app.
 
@@ -240,6 +242,7 @@ Voice and webcam features include:
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/fd41b4d3-a1df-4b7e-97d6-ef51f52449c7" />
 
 Echo-Chat includes a full Admin Panel for server owners and moderators.
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/e8e24a75-f2cb-4d48-92b6-0b19f06a8a6d" />
 
 Admin features include:
 
@@ -268,6 +271,7 @@ Admin features include:
 * Torrent setting controls
 
 ## Admin Test Lab
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/1d8c6b3c-2b62-428c-be6b-ab593d53e010" />
 
 Echo-Chat includes an Admin Test Lab to help check the server before release or public use.
 
