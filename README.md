@@ -56,6 +56,7 @@ Group file sharing uses encryption controls so shared files are protected and on
 Public chat rooms are protected with login security, CSRF protection, rate limits, moderation tools, safe links, XSS guards, room locks, slowmode, and admin controls. Public room messages should only be described as end-to-end encrypted if that mode is later confirmed or added.
 
 ## Chat Rooms
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/16f910b7-319b-456f-93a8-ef0d9f084159" />
 
 Echo-Chat supports different kinds of rooms so a server can have both public and private spaces.
 
@@ -81,6 +82,7 @@ Room features include:
 * Automatic overflow handling for busy rooms
 
 ## Private Messages
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/2b0b2b0c-2641-4ca6-a5a4-0c6ba2c2a9e0" />
 
 Users can message each other directly.
 
