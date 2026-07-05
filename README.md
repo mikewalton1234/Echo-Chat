@@ -237,6 +237,7 @@ Voice and webcam features include:
 * STUN/TURN setup support for better connections
 
 ## Admin Control Panel
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/fd41b4d3-a1df-4b7e-97d6-ef51f52449c7" />
 
 Echo-Chat includes a full Admin Panel for server owners and moderators.
 
