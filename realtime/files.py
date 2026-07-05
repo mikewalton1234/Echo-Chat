@@ -74,6 +74,26 @@ def register(socketio, settings, ctx):
         win = _p2p_int_setting("p2p_file_signal_rate_window_sec", int(win or 60), min_value=1, max_value=3600)
         return lim, win
 
+
+    def _p2p_upload_sanction_denial(username: str, *, role: str = "participant") -> str | None:
+        """Return an error when a P2P file participant is upload-sanctioned.
+
+        P2P uses browser-to-browser data channels, so the server cannot inspect
+        the final payload after signaling succeeds. Treat an upload sanction as a
+        full P2P-file participation ban, not just an offer/sender ban.
+        """
+        if is_user_sanctioned(username, "upload"):
+            return "Uploads are disabled for this account" if role == "sender" else "File transfer is disabled for this account"
+        return None
+
+    def _p2p_participants_upload_allowed(a: str, b: str) -> tuple[bool, str | None]:
+        """Require both P2P participants to be free of upload sanctions."""
+        if _p2p_upload_sanction_denial(a):
+            return False, "File transfer is disabled for this account"
+        if _p2p_upload_sanction_denial(b):
+            return False, "The other user cannot use file transfer"
+        return True, None
+
     def _drop_p2p_file_session_for_pair(transfer_id, a, b) -> bool:
         """Remove an active P2P file session for this exact user pair."""
         if not _valid_id(transfer_id):
@@ -134,9 +154,16 @@ def register(socketio, settings, ctx):
         ok, err = _require_not_sanctioned(sender, action="dm")
         if not ok:
             return {"success": False, "error": err}
+        denied = _p2p_upload_sanction_denial(sender, role="sender")
+        if denied:
+            return {"success": False, "error": denied}
 
         if to == sender:
             return {"success": False, "error": "Cannot signal yourself"}
+
+        denied = _p2p_upload_sanction_denial(to, role="receiver")
+        if denied:
+            return {"success": False, "error": "The other user cannot use file transfer"}
 
         if _either_blocked(sender, to):
             return {"success": False, "error": "Direct message blocked"}
@@ -246,6 +273,11 @@ def register(socketio, settings, ctx):
         if not ok:
             return {"success": False, "error": err}
 
+        ok, err = _p2p_participants_upload_allowed(sender, to)
+        if not ok:
+            _drop_p2p_file_session_for_pair(transfer_id, sender, to)
+            return {"success": False, "error": err}
+
         if to == sender:
             return {"success": False, "error": "Cannot signal yourself"}
 
@@ -306,6 +338,11 @@ def register(socketio, settings, ctx):
 
         ok, err = _require_not_sanctioned(sender, action="dm")
         if not ok:
+            return {"success": False, "error": err}
+
+        ok, err = _p2p_participants_upload_allowed(sender, to)
+        if not ok:
+            _drop_p2p_file_session_for_pair(transfer_id, sender, to)
             return {"success": False, "error": err}
 
         if to == sender:

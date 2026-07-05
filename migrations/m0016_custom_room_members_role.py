@@ -69,4 +69,3 @@ def upgrade(conn) -> None:
                 ON custom_room_members(room_name);
             """
         )
-    conn.commit()

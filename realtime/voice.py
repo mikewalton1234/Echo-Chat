@@ -376,10 +376,25 @@ def register(socketio, settings, ctx):
         return sorted(set(changed))
 
     def _webcam_room_member(room: str, username: str) -> bool:
+        """Fail-closed live-room target check for Echo webcam controls."""
+        room = str(room or "").strip()
+        username = str(username or "").strip()
+        if not room or not username:
+            return False
         try:
-            return str(username or "") in set(room_users(room))
+            live = {str(u or "").strip().lower() for u in room_users(room)}
+            return username.lower() in live
         except Exception:
-            return True
+            # Webcam permissions are privacy-sensitive.  If shared presence state
+            # is unavailable, do not relay owner/viewer approval/kick/viewing
+            # events to a guessed target.
+            return False
+
+    def _webcam_require_target_in_room(room: str, username: str, label: str) -> tuple[bool, dict | None]:
+        """Return a consistent error when a webcam target is not live in room."""
+        if _webcam_room_member(room, username):
+            return True, None
+        return False, {"success": False, "error": f"{label} not in room", "error_code": "webcam_target_not_in_room"}
 
     # Echo webcam webcam view request controls. These events are deliberately
     # server-relayed through the existing EchoChat room membership layer so a
@@ -480,8 +495,9 @@ def register(socketio, settings, ctx):
             return {"success": False, "error": "Not in that room"}
         if not owner or owner == viewer:
             return {"success": False, "error": "Invalid owner"}
-        if not _webcam_room_member(room, owner):
-            return {"success": False, "error": "Owner not in room"}
+        ok_target, target_error = _webcam_require_target_in_room(room, owner, "Owner")
+        if not ok_target:
+            return target_error
         policy = _webcam_policy()
         mode = str(policy.get("webcam_approval_mode") or "owner_approval")
         if mode == "disabled":
@@ -529,9 +545,16 @@ def register(socketio, settings, ctx):
             return {"success": False, "error": "Not in that room"}
         if not viewer or viewer == owner:
             return {"success": False, "error": "Invalid viewer"}
+        ok_target, target_error = _webcam_require_target_in_room(room, viewer, "Viewer")
+        if not ok_target:
+            return target_error
         policy = _webcam_policy()
         if policy.get("webcam_approval_mode") == "disabled":
             allowed = False
+        if allowed:
+            snap = _webcam_snapshot(room, owner)
+            if not bool(snap.get("camera_on")):
+                return {"success": False, "error": "Owner camera is off", "policy": policy}
         if allowed and _webcam_viewer_limit_reached(room, owner, viewer, policy):
             return {"success": False, "error": "Webcam viewer limit reached", "policy": policy}
         with WEBCAM_PERMISSIONS_LOCK:
@@ -563,6 +586,9 @@ def register(socketio, settings, ctx):
             return {"success": False, "error": "Not in that room"}
         if not viewer or viewer == owner:
             return {"success": False, "error": "Invalid viewer"}
+        ok_target, target_error = _webcam_require_target_in_room(room, viewer, "Viewer")
+        if not ok_target:
+            return target_error
         policy = _webcam_policy()
         with WEBCAM_PERMISSIONS_LOCK:
             st = _webcam_owner_state(room, owner)
@@ -591,6 +617,9 @@ def register(socketio, settings, ctx):
             return {"success": False, "error": "Not in that room"}
         if not owner or owner == viewer:
             return {"success": False, "error": "Invalid owner"}
+        ok_target, target_error = _webcam_require_target_in_room(room, owner, "Owner")
+        if not ok_target:
+            return target_error
         policy = _webcam_policy()
         with WEBCAM_PERMISSIONS_LOCK:
             st = _webcam_owner_state(room, owner)
@@ -725,7 +754,8 @@ def register(socketio, settings, ctx):
         if not _voice_feature_enabled():
             return _voice_disabled_payload()
         sid = request.sid
-        to = (data or {}).get("to")
+        raw_to = (data or {}).get("to")
+        to = _resolve_canonical_username(raw_to)
         call_id = (data or {}).get("call_id")
 
         if not to or not call_id:
@@ -738,7 +768,7 @@ def register(socketio, settings, ctx):
         if not ok:
             return {"success": False, "error": err}
 
-        if to == sender:
+        if str(to or "").strip().lower() == str(sender or "").strip().lower():
             return {"success": False, "error": "Cannot call yourself"}
 
         if _either_blocked(sender, to):
@@ -807,7 +837,8 @@ def register(socketio, settings, ctx):
             return guard
         if not _voice_feature_enabled():
             return _voice_disabled_payload()
-        to = (data or {}).get("to")
+        raw_to = (data or {}).get("to")
+        to = _resolve_canonical_username(raw_to)
         call_id = (data or {}).get("call_id")
 
         if not to or not call_id:
@@ -859,7 +890,8 @@ def register(socketio, settings, ctx):
         guard = _socket_event_guard(sender, "voice_dm_decline", data, default_max_bytes=131072, default_limit=180, default_window=60)
         if guard is not None:
             return guard
-        to = (data or {}).get("to")
+        raw_to = (data or {}).get("to")
+        to = _resolve_canonical_username(raw_to)
         call_id = (data or {}).get("call_id")
         reason = (data or {}).get("reason") or "Declined"
 
@@ -904,7 +936,8 @@ def register(socketio, settings, ctx):
         guard = _socket_event_guard(sender, "voice_dm_end", data, default_max_bytes=131072, default_limit=180, default_window=60)
         if guard is not None:
             return guard
-        to = (data or {}).get("to")
+        raw_to = (data or {}).get("to")
+        to = _resolve_canonical_username(raw_to)
         call_id = (data or {}).get("call_id")
         reason = (data or {}).get("reason") or "Ended"
 
@@ -957,7 +990,8 @@ def register(socketio, settings, ctx):
         rl_resp = _voice_signal_guard(sender, "dm_offer")
         if rl_resp is not None:
             return rl_resp
-        to = (data or {}).get("to")
+        raw_to = (data or {}).get("to")
+        to = _resolve_canonical_username(raw_to)
         call_id = (data or {}).get("call_id")
         offer = (data or {}).get("offer")
         ice_restart = _event_bool((data or {}).get("ice_restart"), False)
@@ -998,7 +1032,8 @@ def register(socketio, settings, ctx):
         rl_resp = _voice_signal_guard(sender, "dm_answer")
         if rl_resp is not None:
             return rl_resp
-        to = (data or {}).get("to")
+        raw_to = (data or {}).get("to")
+        to = _resolve_canonical_username(raw_to)
         call_id = (data or {}).get("call_id")
         answer = (data or {}).get("answer")
 
@@ -1038,7 +1073,8 @@ def register(socketio, settings, ctx):
         rl_resp = _voice_signal_guard(sender, "dm_ice")
         if rl_resp is not None:
             return rl_resp
-        to = (data or {}).get("to")
+        raw_to = (data or {}).get("to")
+        to = _resolve_canonical_username(raw_to)
         call_id = (data or {}).get("call_id")
         candidate = (data or {}).get("candidate")
 

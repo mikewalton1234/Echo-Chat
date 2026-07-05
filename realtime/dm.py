@@ -144,6 +144,26 @@ def register(socketio, settings, ctx):
             return False
         return True
 
+    def _offline_pm_wire_item(mid, sender, stored_message, ts, *, require_e2ee: bool, allow_plain: bool) -> tuple[dict | None, bool]:
+        """Return a safe wire item and whether the DB row should be quarantined.
+
+        Old builds could leave plaintext rows in offline_messages.message.  In
+        strict DM E2EE mode, do not deliver those rows as if they were ciphertext;
+        mark them consumed/quarantined so they do not keep creating missed-PM
+        alerts.
+        """
+        try:
+            msg_id = int(mid)
+        except Exception:
+            return None, True
+        text = str(stored_message or "").strip()
+        if _looks_like_dm_cipher_envelope(text):
+            return {"id": msg_id, "sender": sender, "cipher": text, "ts": float(ts) if ts is not None else None, "encrypted": True}, False
+        if require_e2ee or not allow_plain:
+            return None, True
+        # Explicit legacy compatibility only.  Do not label plaintext as cipher.
+        return {"id": msg_id, "sender": sender, "message": text, "ts": float(ts) if ts is not None else None, "encrypted": False, "legacy_plaintext": True}, False
+
     @socketio.on("get_missed_pm_summary")
     @jwt_required()
     def handle_get_missed_pm_summary(data=None):
@@ -229,16 +249,39 @@ def register(socketio, settings, ctx):
                     )
                 rows = cur.fetchall() or []
 
+                require_e2ee = bool(settings.get("require_dm_e2ee", True))
+                allow_plain = bool(settings.get("allow_plaintext_dm_fallback", False))
                 msg_ids = [int(r[0]) for r in rows]
-                messages = [
-                    {"id": int(mid), "sender": sender, "cipher": cipher, "ts": float(ts) if ts is not None else None}
-                    for (mid, sender, cipher, ts) in rows
-                ]
+                messages = []
+                quarantine_ids = []
+                for mid, sender, stored_message, ts in rows:
+                    item, quarantine = _offline_pm_wire_item(
+                        mid,
+                        sender,
+                        stored_message,
+                        ts,
+                        require_e2ee=require_e2ee,
+                        allow_plain=allow_plain,
+                    )
+                    if item is not None:
+                        messages.append(item)
+                    if quarantine:
+                        try:
+                            quarantine_ids.append(int(mid))
+                        except Exception:
+                            pass
+
+                if quarantine_ids:
+                    # Consume old non-envelope rows in strict E2EE mode so they
+                    # cannot be repeatedly surfaced as missed messages.
+                    _mark_offline_delivered(cur, username, quarantine_ids)
+                    _dbg(f"[offline_pms] quarantined receiver={username} from={from_user or '*'} ids={len(quarantine_ids)}")
 
                 if msg_ids and not peek:
-                    # Mark consumed for this receiver (robust IN-list update)
-                    upd = _mark_offline_delivered(cur, username, msg_ids)
-                    _dbg(f"[offline_pms] consume receiver={username} from={from_user or '*'} ids={len(msg_ids)} updated={upd}")
+                    # Mark safe returned rows consumed for this receiver (robust IN-list update).
+                    safe_ids = [int(m.get("id")) for m in messages if m.get("id") is not None]
+                    upd = _mark_offline_delivered(cur, username, safe_ids) if safe_ids else 0
+                    _dbg(f"[offline_pms] consume receiver={username} from={from_user or '*'} ids={len(safe_ids)} updated={upd}")
             conn.commit()
 
             if not peek:
@@ -258,7 +301,7 @@ def register(socketio, settings, ctx):
                 len(messages),
             )
 
-            return {"success": True, "messages": messages, "peek": peek}
+            return {"success": True, "messages": messages, "peek": peek, "quarantined_legacy": len(quarantine_ids)}
         except Exception as e:
             print(f"[DB ERROR] fetch_offline_pms: {e}")
             try:
@@ -340,6 +383,109 @@ def register(socketio, settings, ctx):
 
         return {"success": True, "updated": updated, "requested": requested}
 
+
+    def _feature_bool(key: str, default: bool = False) -> bool:
+        val = settings.get(key, default)
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, (int, float)):
+            return bool(val)
+        text = str(val or "").strip().lower()
+        if text in {"1", "true", "yes", "y", "on", "enabled"}:
+            return True
+        if text in {"0", "false", "no", "n", "off", "disabled", "none"}:
+            return False
+        return bool(default)
+
+    def _dm_typing_payload(sender: str, to: str, *, typing: bool) -> dict:
+        return {
+            "from": str(sender or "").strip(),
+            "to": str(to or "").strip(),
+            "username": str(sender or "").strip(),
+            "typing": bool(typing),
+            "expires_in": int(TYPING_EXPIRY_SECONDS),
+            "ts": time.time(),
+        }
+
+    def _direct_typing_rate_ok(sender: str) -> tuple[bool, int | None, bool]:
+        return _socket_action_rate_ok(
+            sender,
+            "dm_typing",
+            "dm_typing_rate_limit",
+            "dm_typing_rate_window_sec",
+            default_limit=30,
+            default_window=10,
+            strike_reason="dm_typing_rate",
+        )
+
+    @socketio.on("direct_typing")
+    @jwt_required()
+    def handle_direct_typing(data):
+        data = data if isinstance(data, dict) else {}
+        sender = get_jwt_identity()
+        rejection = _reject_if_stale_socket_session(touch_activity=True)
+        if rejection is not None:
+            return rejection
+        guard = _socket_event_guard(sender, "direct_typing", data, default_max_bytes=4096, default_limit=60, default_window=10)
+        if guard is not None:
+            return guard
+        to = _resolve_canonical_username(data.get("to"))
+        if not _feature_bool("enable_dm_typing_indicators", True):
+            return {"success": True, "typing": False, "disabled": True}
+        if not to:
+            return {"success": False, "error": "User not found"}
+        if to == sender:
+            return {"success": False, "error": "self_dm_disabled"}
+        ok, err = _require_not_sanctioned(sender, action="dm")
+        if not ok:
+            return {"success": False, "error": err or "dm_denied"}
+        if _either_blocked(sender, to):
+            return {"success": False, "error": "Direct message blocked"}
+        okrl, retry, auto_muted = _direct_typing_rate_ok(sender)
+        if not okrl:
+            return {"success": False, "error": "rate_limited", "retry_after": retry, "auto_muted": auto_muted}
+        shadowbanned_sender = False
+        try:
+            shadowbanned_sender = bool(_is_effectively_shadowbanned(sender))
+        except Exception:
+            shadowbanned_sender = False
+        delivered = False
+        if not shadowbanned_sender:
+            delivered = bool(_emit_to_user(to, "direct_typing", _dm_typing_payload(sender, to, typing=True)))
+        return {"success": True, "to": to, "typing": True, "expires_in": int(TYPING_EXPIRY_SECONDS), "delivered": delivered}
+
+    @socketio.on("direct_stop_typing")
+    @jwt_required()
+    def handle_direct_stop_typing(data):
+        data = data if isinstance(data, dict) else {}
+        sender = get_jwt_identity()
+        rejection = _reject_if_stale_socket_session(touch_activity=True)
+        if rejection is not None:
+            return rejection
+        guard = _socket_event_guard(sender, "direct_stop_typing", data, default_max_bytes=4096, default_limit=90, default_window=10)
+        if guard is not None:
+            return guard
+        to = _resolve_canonical_username(data.get("to"))
+        if not _feature_bool("enable_dm_typing_indicators", True):
+            return {"success": True, "typing": False, "disabled": True}
+        if not to:
+            return {"success": False, "error": "User not found"}
+        if to == sender:
+            return {"success": False, "error": "self_dm_disabled"}
+        if _either_blocked(sender, to):
+            return {"success": False, "error": "Direct message blocked"}
+        okrl, retry, auto_muted = _direct_typing_rate_ok(sender)
+        if not okrl:
+            return {"success": False, "error": "rate_limited", "retry_after": retry, "auto_muted": auto_muted}
+        shadowbanned_sender = False
+        try:
+            shadowbanned_sender = bool(_is_effectively_shadowbanned(sender))
+        except Exception:
+            shadowbanned_sender = False
+        delivered = False
+        if not shadowbanned_sender:
+            delivered = bool(_emit_to_user(to, "direct_stop_typing", _dm_typing_payload(sender, to, typing=False)))
+        return {"success": True, "to": to, "typing": False, "delivered": delivered}
 
     @socketio.on("send_direct_message")
     @jwt_required()
@@ -454,21 +600,61 @@ def register(socketio, settings, ctx):
             if _abuse_strike(sender, "dm_rate"):
                 return {"success": False, "error": "Auto-muted for spamming. Try again later."}
             return {"success": False, "error": f"Rate limited (wait {retry:.1f}s)"}
+        # Store first, then relay live.  The row is an encrypted unread/PM
+        # delivery record, not plaintext.  The receiver ACKs it only after the
+        # PM is actually rendered/read.  This prevents "online but missed" PMs
+        # from disappearing when a browser tab is backgrounded, sleeping, or not
+        # focused on that private conversation.
+        unread_id = _store_offline_pm(sender, to, cipher)
         live_payload = {"sender": sender, "cipher": cipher, "ts": time.time()}
+        if unread_id:
+            live_payload["id"] = int(unread_id)
+            live_payload["message_id"] = int(unread_id)
         delivered = _emit_to_user(to, "private_message", live_payload)
-        queued_offline = False
-        if not delivered:
-            _store_offline_pm(sender, to, cipher)
-            queued_offline = True
+
+        # Do not label a PM as "offline queued" just because Socket.IO could not
+        # confirm a live emit. In dev/multi-worker setups a recipient can still
+        # be visibly online through the DB/session presence layer while this
+        # worker has no local SID for them. Only report queued_offline when the
+        # recipient is truly offline or intentionally invisible/appear-offline.
+        recipient_presence = None
+        recipient_effectively_offline = not bool(delivered)
+        try:
+            recipient_presence = _get_user_presence_row(to)
+            recipient_effectively_offline = (
+                not bool(recipient_presence.get("online"))
+                or str(recipient_presence.get("presence_status") or "").lower() == "invisible"
+            )
+        except Exception:
+            recipient_effectively_offline = not bool(delivered)
+        queued_offline = bool(unread_id and recipient_effectively_offline)
+        server_unread = bool(unread_id)
+        if server_unread:
             try:
                 _emit_missed_pm_summary_to_user(to)
             except Exception:
                 pass
         try:
-            current_app.logger.info("DM accepted: sender=%s to=%s delivered=%s queued_offline=%s", sender, to, delivered, queued_offline)
+            current_app.logger.info(
+                "DM accepted: sender=%s to=%s delivered=%s queued_offline=%s server_unread=%s unread_id=%s",
+                sender,
+                to,
+                delivered,
+                queued_offline,
+                server_unread,
+                unread_id,
+            )
         except Exception:
             pass
-        return {"success": True, "delivered": bool(delivered), "queued_offline": bool(queued_offline), "recipient": to}
+        return {
+            "success": True,
+            "delivered": bool(delivered),
+            "queued_offline": bool(queued_offline),
+            "server_unread": bool(server_unread),
+            "recipient_offline": bool(recipient_effectively_offline),
+            "message_id": int(unread_id) if unread_id else None,
+            "recipient": to,
+        }
 
     # ------------------------------------------------------------------
     # WebRTC P2P file transfer signaling (offer/answer/ICE)

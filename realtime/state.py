@@ -220,13 +220,13 @@ def configure_shared_state(settings: dict | None = None) -> bool:
     except Exception:
         ttl = 300
 
+    # Shared realtime state intentionally requires its own explicit Redis URL.
+    # Do not silently reuse the Socket.IO pub/sub DB or generic REDIS_URL; Echo-Chat
+    # keeps Redis DB 0/1/2 separated for rate limits, Socket.IO, and shared state.
     url = (
         os.environ.get("ECHOCHAT_SHARED_STATE_REDIS_URL")
+        or os.environ.get("SHARED_STATE_REDIS_URL")
         or settings.get("shared_state_redis_url")
-        or os.environ.get("ECHOCHAT_SOCKETIO_MESSAGE_QUEUE")
-        or os.environ.get("SOCKETIO_MESSAGE_QUEUE")
-        or settings.get("socketio_message_queue")
-        or os.environ.get("REDIS_URL")
         or ""
     ).strip()
 

@@ -8,6 +8,8 @@ def _antiabuse_duplicate_checks(*args, **kwargs):
 Auto-split from the legacy monolithic socket_handlers.py.
 """
 
+import base64
+import json
 import re
 import time
 import uuid
@@ -339,6 +341,19 @@ def register(socketio, settings, ctx):
     globals().update(ctx.__dict__)
     _antiabuse_exempt_staff = bool(settings.get("antiabuse_exempt_staff", True))
 
+    def _feature_bool(key: str, default: bool = False) -> bool:
+        val = settings.get(key, default)
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, (int, float)):
+            return bool(val)
+        text = str(val or "").strip().lower()
+        if text in {"1", "true", "yes", "y", "on", "enabled"}:
+            return True
+        if text in {"0", "false", "no", "n", "off", "disabled", "none"}:
+            return False
+        return bool(default)
+
     def _can_override_room_lock(username: str) -> bool:
         return bool(check_user_permission(username, "admin:basic") or check_user_permission(username, "room:lock"))
 
@@ -514,9 +529,135 @@ def register(socketio, settings, ctx):
             return int(maximum)
         return int(parsed)
 
+    def _b64u_decode_room(raw: str) -> bytes:
+        raw = str(raw or "").strip()
+        raw += "=" * (-len(raw) % 4)
+        return base64.urlsafe_b64decode(raw.encode("ascii"))
+
+    def _room_cipher_envelope_obj(value):
+        """Return parsed ECR1 room envelope object or None.
+
+        Room E2EE is client-side, but the server may still safely inspect the
+        recipient key names.  That lets it reject stale self-only envelopes after
+        unblock instead of delivering a message the other live user cannot read.
+        """
+        if not isinstance(value, str) or not value.startswith("ECR1:"):
+            return None
+        payload = value[len("ECR1:"):].strip()
+        if not payload or len(payload) > 250000:
+            return None
+        try:
+            decoded = _b64u_decode_room(payload)
+            if len(decoded) > 200000:
+                return None
+            obj = json.loads(decoded.decode("utf-8"))
+        except Exception:
+            return None
+        return obj if isinstance(obj, dict) else None
+
     def _looks_like_room_cipher_envelope(value) -> bool:
-        """Accept only the room envelope shape this client can decrypt."""
-        return isinstance(value, str) and value.startswith("ECR1:") and len(value) > len("ECR1:")
+        """Accept only a structured room E2EE envelope, not just any ECR1 string."""
+        obj = _room_cipher_envelope_obj(value)
+        if not isinstance(obj, dict):
+            return False
+        version = obj.get("v", obj.get("version"))
+        if str(version) not in {"1", "room-v1"}:
+            return False
+        alg = str(obj.get("alg") or obj.get("cipher") or "").upper()
+        if alg and "AES" not in alg:
+            return False
+        iv = obj.get("iv") or obj.get("nonce")
+        ct = obj.get("ct") or obj.get("ciphertext")
+        keys = obj.get("keys") or obj.get("wrapped_keys") or obj.get("recipients")
+        if not isinstance(iv, str) or not isinstance(ct, str):
+            return False
+        try:
+            if len(_b64u_decode_room(iv)) not in {12, 16, 24}:
+                return False
+            if len(_b64u_decode_room(ct)) < 16:
+                return False
+        except Exception:
+            return False
+        if not isinstance(keys, dict) or not keys or len(keys) > 500:
+            return False
+        for k, wrapped in list(keys.items())[:10]:
+            if not str(k or "").strip() or not isinstance(wrapped, str) or len(wrapped) < 16:
+                return False
+        return True
+
+    def _room_cipher_recipient_keys(value) -> set[str]:
+        obj = _room_cipher_envelope_obj(value)
+        if not isinstance(obj, dict):
+            return set()
+        keys = obj.get("keys") or obj.get("wrapped_keys") or obj.get("recipients")
+        if not isinstance(keys, dict):
+            return set()
+        out: set[str] = set()
+        for raw in keys.keys():
+            key = str(raw or "").replace("\u00a0", " ").strip().lower()
+            key = re.sub(r"\s+", " ", key)
+            if key:
+                out.add(key)
+        return out
+
+    def _room_live_allowed_recipient_names(room: str, sender: str) -> list[str]:
+        """Live users who should receive sender's room message.
+
+        This mirrors the room fan-out model: blocking is viewer-side for room
+        chat.  A user receives a sender's room packet unless that viewer has
+        blocked the sender.  Sender-blocks-viewer does not remove the viewer
+        from room membership or from the sender's room recipient list.
+        """
+        clean_room = _canonical_room_name(str(room or "").strip())
+        clean_sender = str(sender or "").strip()
+        if not clean_room or not clean_sender:
+            return []
+        targets: list[tuple[str, str]] = []
+        try:
+            if callable(globals().get("_socketio_room_targets")):
+                targets.extend(list(_socketio_room_targets(clean_room)))
+        except Exception:
+            pass
+        try:
+            targets.extend(list(connected_room_targets(clean_room)))
+        except Exception:
+            pass
+        if not targets:
+            targets = [(str(getattr(request, "sid", "") or ""), clean_sender)]
+
+        names: dict[str, str] = {}
+        sender_key = re.sub(r"\s+", " ", clean_sender).strip().lower()
+        if sender_key:
+            names[sender_key] = clean_sender
+        block_cache: dict[str, bool] = {}
+        for _sid, raw_name in targets:
+            name = str(raw_name or "").replace("\u00a0", " ").strip()
+            key = re.sub(r"\s+", " ", name).strip().lower()
+            if not key or key in names:
+                continue
+            if sender_key and key != sender_key:
+                cache_key = key
+                if cache_key not in block_cache:
+                    try:
+                        block_cache[cache_key] = bool(_is_blocked(name, clean_sender))
+                    except Exception:
+                        block_cache[cache_key] = True
+                if block_cache[cache_key]:
+                    continue
+            names[key] = name
+        return [names[k] for k in sorted(names.keys())]
+
+    def _room_e2ee_recipient_mismatch(room: str, sender: str, cipher: str) -> list[str]:
+        """Return live allowed recipients missing from the envelope key map."""
+        present = _room_cipher_recipient_keys(cipher)
+        if not present:
+            return []
+        missing = []
+        for name in _room_live_allowed_recipient_names(room, sender):
+            key = re.sub(r"\s+", " ", str(name or "").replace("\u00a0", " ").strip()).lower()
+            if key and key not in present:
+                missing.append(name)
+        return missing
 
     def _room_typing_key(room: str, username: str) -> str:
         return f"{_canonical_room_name(str(room or '').strip())}\x1f{str(username or '').strip()}"
@@ -529,6 +670,146 @@ def register(socketio, settings, ctx):
             "expires_in": int(TYPING_EXPIRY_SECONDS),
             "ts": time.time(),
         }
+
+    def _same_realtime_user(a: str, b: str) -> bool:
+        return str(a or "").strip().lower() == str(b or "").strip().lower()
+
+    def _emit_room_chat_message_filtered(room: str, sender: str, payload: dict, *, shadowbanned_sender: bool = False) -> int:
+        """Emit a room chat message only to room sockets allowed to see sender.
+
+        Room chat is live-only, but blocking is a per-viewer privacy filter.  The
+        sender still sees their own echo.  A recipient is skipped only when that
+        recipient has blocked the sender.  Sender-blocks-recipient does not hide
+        the sender's room message from the recipient, because block does not
+        change room membership or global room visibility.  The sender echo is
+        sent directly before registry fan-out so a stale room roster can never
+        make a successful send look like it disappeared.
+        """
+        clean_room = _canonical_room_name(str(room or "").strip())
+        clean_sender = str(sender or "").strip()
+        if not clean_room or not clean_sender:
+            return 0
+
+        delivered = 0
+        delivered_sids: set[str] = set()
+
+        def _emit_once(target_sid: str | None) -> bool:
+            nonlocal delivered
+            sid = str(target_sid or "").strip()
+            if not sid or sid in delivered_sids:
+                return False
+            try:
+                emit("chat_message", payload, to=sid)
+                delivered_sids.add(sid)
+                delivered += 1
+                return True
+            except Exception:
+                return False
+
+        # Always echo to the sending socket first.  This also covers unblock
+        # races where shared presence/room state has not caught up yet.
+        try:
+            _emit_once(request.sid)
+        except Exception:
+            pass
+
+        if shadowbanned_sender:
+            return delivered
+
+        block_cache: dict[str, bool] = {}
+        targets: list[tuple[str, str]] = []
+        try:
+            # Prefer the actual Flask-SocketIO room participants.  The shared
+            # roster can lag during block -> unblock / reconnect races, while
+            # the transport room is the membership used by normal room emits.
+            if callable(globals().get("_socketio_room_targets")):
+                targets.extend(list(_socketio_room_targets(clean_room)))
+        except Exception:
+            pass
+        try:
+            targets.extend(list(connected_room_targets(clean_room)))
+        except Exception:
+            pass
+        if not targets:
+            targets = [(request.sid, clean_sender)]
+
+        seen_target_sids: set[str] = set()
+        for target_sid, target_user in targets:
+            target_sid = str(target_sid or "").strip()
+            if not target_sid or target_sid in seen_target_sids:
+                continue
+            seen_target_sids.add(target_sid)
+            target_name = str(target_user or "").strip()
+            if not target_sid or not target_name:
+                continue
+            allowed = True
+            if not _same_realtime_user(clean_sender, target_name):
+                cache_key = target_name.lower()
+                if cache_key not in block_cache:
+                    try:
+                        block_cache[cache_key] = bool(_is_blocked(target_name, clean_sender))
+                    except Exception:
+                        # If block status cannot be confirmed, fail closed for
+                        # non-sender recipients instead of leaking a blocked message.
+                        block_cache[cache_key] = True
+                allowed = not block_cache[cache_key]
+            if not allowed:
+                continue
+            _emit_once(target_sid)
+        return delivered
+
+    def _emit_room_signal_filtered(room: str, sender: str, event_name: str, payload: dict, *, skip_sid: str | None = None) -> int:
+        """Emit a lightweight room signal only to users allowed to see sender.
+
+        Typing/stop-typing follows the same viewer-side privacy boundary as
+        room messages: skip a recipient only when that recipient has blocked
+        the sender.  The browser still has a client-side guard, but the server
+        should not deliver side-channel packets to a viewer who blocked the
+        sender in the first place.
+        """
+        clean_room = _canonical_room_name(str(room or "").strip())
+        clean_sender = str(sender or "").strip()
+        clean_event = str(event_name or "").strip()
+        if not clean_room or not clean_sender or clean_event not in {"room_typing", "room_stop_typing"}:
+            return 0
+
+        skip = str(skip_sid or "").strip()
+        delivered = 0
+        delivered_sids: set[str] = set()
+        targets: list[tuple[str, str]] = []
+        try:
+            if callable(globals().get("_socketio_room_targets")):
+                targets.extend(list(_socketio_room_targets(clean_room)))
+        except Exception:
+            pass
+        try:
+            targets.extend(list(connected_room_targets(clean_room)))
+        except Exception:
+            pass
+
+        block_cache: dict[str, bool] = {}
+        for target_sid, target_user in targets:
+            sid = str(target_sid or "").strip()
+            target_name = str(target_user or "").strip()
+            if not sid or sid in delivered_sids or (skip and sid == skip) or not target_name:
+                continue
+            if _same_realtime_user(clean_sender, target_name):
+                continue
+            cache_key = target_name.lower()
+            if cache_key not in block_cache:
+                try:
+                    block_cache[cache_key] = bool(_is_blocked(target_name, clean_sender))
+                except Exception:
+                    block_cache[cache_key] = True
+            if block_cache[cache_key]:
+                continue
+            try:
+                emit(clean_event, payload, to=sid)
+                delivered_sids.add(sid)
+                delivered += 1
+            except Exception:
+                continue
+        return delivered
 
     def _clear_room_typing(room: str, username: str, *, broadcast: bool = False, skip_sid: str | None = None) -> None:
         clean_room = _canonical_room_name(str(room or "").strip())
@@ -543,7 +824,7 @@ def register(socketio, settings, ctx):
             TYPING_STATUS.pop(clean_user, None)
         if broadcast:
             try:
-                emit("room_stop_typing", _room_typing_payload(clean_room, clean_user, typing=False), to=clean_room, skip_sid=skip_sid)
+                _emit_room_signal_filtered(clean_room, clean_user, "room_stop_typing", _room_typing_payload(clean_room, clean_user, typing=False), skip_sid=skip_sid)
             except Exception:
                 pass
 
@@ -1070,6 +1351,9 @@ def register(socketio, settings, ctx):
             return {"success": False, "error": "invite_required", "reason": private_reason}
         if not _room_media_enabled(room):
             return {"success": False, "error": "room_media_disabled"}
+        ok, err = _require_not_sanctioned(username, action="send")
+        if not ok:
+            return {"success": False, "error": err or "send_denied"}
         stations = _room_media_stations(room)
         if not stations:
             return {"success": False, "error": "No radio sources configured"}
@@ -1123,6 +1407,9 @@ def register(socketio, settings, ctx):
             return {"success": False, "error": "invite_required", "reason": private_reason}
         if not _room_media_enabled(room):
             return {"success": False, "error": "room_media_disabled"}
+        ok, err = _require_not_sanctioned(username, action="send")
+        if not ok:
+            return {"success": False, "error": err or "send_denied"}
         okrl, retry, auto_muted = _socket_action_rate_ok(
             username,
             "room_media_action",
@@ -1804,6 +2091,14 @@ def register(socketio, settings, ctx):
         sid = request.sid
         current_room = get_connected_room(sid)
         if current_room != room:
+            try:
+                for target_sid, target_user in list(_socketio_room_targets(room)) if callable(globals().get("_socketio_room_targets")) else []:
+                    if str(target_sid or "") == str(sid or "") and str(target_user or "").strip().lower() == str(username or "").strip().lower():
+                        current_room = room
+                        break
+            except Exception:
+                pass
+        if current_room != room:
             return {"success": False, "error": "Not in that room"}
         if not _room_exists(room):
             return {"success": False, "error": "Room not found"}
@@ -1945,10 +2240,10 @@ def register(socketio, settings, ctx):
                                 return {"success": False, "error": "Room not found"}
 
                         if is_private:
-                            # F094: private custom-room invites are pending lifecycle state only;
-                            # the inviter needs accepted entry access, and accepted members are not re-invited.
-                            if not can_user_join_custom_room(canonical_room, username):
-                                return {"success": False, "error": "No access to invite for this room"}
+                            # F094/S13: private custom-room invites are pending lifecycle state only;
+                            # only the room owner or room-scoped moderators may expand private membership.
+                            if not can_user_moderate_custom_room(canonical_room, username):
+                                return {"success": False, "error": "Only the room owner or a room moderator can invite users to this private room"}
                             if created_by.strip().lower() == invitee.lower():
                                 return {"success": False, "error": "User already has access to this private room"}
                             cur.execute(
@@ -2013,6 +2308,25 @@ def register(socketio, settings, ctx):
             if len(cipher) > max_cipher_len:
                 return {"success": False, "error": f"Ciphertext too large (max {max_cipher_len})"}
 
+            missing_recipients = _room_e2ee_recipient_mismatch(room, username, cipher)
+            if missing_recipients:
+                # Do not deliver a ciphertext that omits live unblocked room users.
+                # The most common trigger is block -> unblock where the client had
+                # a stale one-person roster and encrypted only to itself. Ask the
+                # browser to refresh room membership and rebuild the E2EE envelope.
+                try:
+                    _emit_room_users_snapshot(room)
+                    _emit_room_counts_snapshot()
+                except Exception:
+                    pass
+                return {
+                    "success": False,
+                    "error": "Room roster refreshed; please send again.",
+                    "code": "room_roster_stale",
+                    "refresh_room_users": True,
+                    "missing_recipients": missing_recipients[:10],
+                }
+
             if keys is not None and not isinstance(keys, dict):
                 return {"success": False, "error": "bad_keys"}
             if isinstance(keys, dict):
@@ -2034,6 +2348,10 @@ def register(socketio, settings, ctx):
                 maximum=50000,
             )
             message = sanitize_user_visible_text(message, max_len=max_len, keep_newlines=True)
+            try:
+                message, _ec_removed_emoticons = _filter_excess_emoticons(message)
+            except Exception:
+                _ec_removed_emoticons = 0
             if not message:
                 return {"success": False, "error": "Missing message"}
             if len(message) > max_len:
@@ -2134,7 +2452,6 @@ def register(socketio, settings, ctx):
             shadowbanned_sender = bool(_is_effectively_shadowbanned(username))
         except Exception:
             shadowbanned_sender = False
-        emit_target = request.sid if shadowbanned_sender else room
         ttl_seconds = _room_live_message_ttl_seconds(room)
         expires_at = time.time() + ttl_seconds
         live_meta = _register_live_room_message(
@@ -2152,40 +2469,33 @@ def register(socketio, settings, ctx):
         _clear_room_typing(room, username, broadcast=not shadowbanned_sender, skip_sid=request.sid)
 
         if cipher:
-            emit(
-                "chat_message",
-                {
-                    "room": room,
-                    "message_id": message_id,
-                    "username": username,
-                    # Compatibility text for older clients (does not reveal plaintext).
-                    "message": "🔒 Encrypted message",
-                    "encrypted": True,
-                    "cipher": cipher,
-                    "keys": keys,
-                    "ts": time.time(),
-                    "message_kind": message_kind,
-                    "ttl_seconds": ttl_seconds,
-                    "expires_at": expires_at,
-                },
-                to=emit_target,
-            )
+            chat_payload = {
+                "room": room,
+                "message_id": message_id,
+                "username": username,
+                # Compatibility text for older clients (does not reveal plaintext).
+                "message": "🔒 Encrypted message",
+                "encrypted": True,
+                "cipher": cipher,
+                "keys": keys,
+                "ts": time.time(),
+                "message_kind": message_kind,
+                "ttl_seconds": ttl_seconds,
+                "expires_at": expires_at,
+            }
         else:
-            emit(
-                "chat_message",
-                {
-                    "room": room,
-                    "message_id": message_id,
-                    "username": username,
-                    "message": message,
-                    "encrypted": False,
-                    "ts": time.time(),
-                    "message_kind": message_kind,
-                    "ttl_seconds": ttl_seconds,
-                    "expires_at": expires_at,
-                },
-                to=emit_target,
-            )
+            chat_payload = {
+                "room": room,
+                "message_id": message_id,
+                "username": username,
+                "message": message,
+                "encrypted": False,
+                "ts": time.time(),
+                "message_kind": message_kind,
+                "ttl_seconds": ttl_seconds,
+                "expires_at": expires_at,
+            }
+        _emit_room_chat_message_filtered(room, username, chat_payload, shadowbanned_sender=shadowbanned_sender)
         return {
             "success": True,
             "room": room,
@@ -2240,6 +2550,8 @@ def register(socketio, settings, ctx):
 
         if not room:
             return {"success": False, "error": "Missing room"}
+        if not _feature_bool("enable_room_typing_indicators", False):
+            return {"success": True, "room": room, "typing": False, "disabled": True}
 
         # Only broadcast typing if this socket is actually in the room.
         current_room = get_connected_room(sid)
@@ -2250,6 +2562,9 @@ def register(socketio, settings, ctx):
         access_ok, private_reason = _enforce_private_room_access(room, user, sid=sid)
         if not access_ok:
             return {"success": False, "error": "invite_required", "reason": private_reason}
+        ok, err = _require_not_sanctioned(user, action="send")
+        if not ok:
+            return {"success": False, "error": err or "send_denied"}
 
         okrl, retry, auto_muted = _socket_action_rate_ok(
             user,
@@ -2271,7 +2586,7 @@ def register(socketio, settings, ctx):
         except Exception:
             shadowbanned_sender = False
         if not shadowbanned_sender:
-            emit("room_typing", _room_typing_payload(room, user, typing=True), to=room, skip_sid=sid)
+            _emit_room_signal_filtered(room, user, "room_typing", _room_typing_payload(room, user, typing=True), skip_sid=sid)
 
         return {"success": True, "room": room, "typing": True, "expires_in": int(TYPING_EXPIRY_SECONDS)}
 
@@ -2292,6 +2607,8 @@ def register(socketio, settings, ctx):
 
         if not room:
             return {"success": False, "error": "Missing room"}
+        if not _feature_bool("enable_room_typing_indicators", False):
+            return {"success": True, "room": room, "typing": False, "disabled": True}
 
         current_room = get_connected_room(sid)
         if current_room != room:
@@ -2352,6 +2669,9 @@ def register(socketio, settings, ctx):
         access_ok, private_reason = _enforce_private_room_access(room, user, sid=sid)
         if not access_ok:
             return {"success": False, "error": "invite_required", "reason": private_reason}
+        ok, err = _require_not_sanctioned(user, action="send")
+        if not ok:
+            return {"success": False, "error": err or "send_denied"}
 
         if emoji not in ALLOWED_REACTION_EMOJIS:
             return {"success": False, "error": "Unsupported reaction"}
@@ -2432,6 +2752,14 @@ def register(socketio, settings, ctx):
 
         sid = request.sid
         current_room = get_connected_room(sid)
+        if current_room != room:
+            try:
+                for target_sid, target_user in list(_socketio_room_targets(room)) if callable(globals().get("_socketio_room_targets")) else []:
+                    if str(target_sid or "") == str(sid or "") and str(target_user or "").strip().lower() == str(user or "").strip().lower():
+                        current_room = room
+                        break
+            except Exception:
+                pass
         if current_room != room:
             return False, {"success": False, "error": "Not in that room"}
 

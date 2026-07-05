@@ -8,4 +8,4 @@ KIND = "python"
 def upgrade(conn) -> None:
     from database import ensure_profile_post_engagement_schema
 
-    ensure_profile_post_engagement_schema()
+    ensure_profile_post_engagement_schema(conn, commit=False)

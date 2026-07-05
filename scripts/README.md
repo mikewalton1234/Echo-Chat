@@ -32,3 +32,34 @@ sudo -u postgres psql -d YOUR_DB -f scripts/pg_dedupe_emails_set_null.sql
 ## Caution
 
 Run these only against the intended database. Some of them are destructive by design.
+
+
+# Production/deployment helper scripts
+
+- `install_production_deps.sh` installs the default Gunicorn gthread + simple-websocket runtime into the active virtualenv.
+- `run_production.sh` starts the saved production runner through `python main.py --production`.
+- `generate_reverse_proxy_config.py` writes reviewable Caddy/Nginx templates.
+
+Before installing generated systemd files, run:
+
+```bash
+python tools/deployment_ops_doctor.py
+python main.py --redis-socketio-check --redis-live-check
+```
+
+## Release package builder
+
+- `build_release_package.py` creates a sanitized release zip, `.sha256` checksum file, and release manifest while excluding local config, secrets, runtime uploads, logs, databases, caches, and old release archives. It also excludes symlinks, validates archive member paths, normalizes zip metadata, and omits absolute local source paths from the manifest.
+
+Typical release build:
+
+```bash
+python scripts/build_release_package.py --output-dir dist --label s20-deep-release-package-recheck
+```
+
+Verify the generated package with:
+
+```bash
+python tools/release_packaging_doctor.py
+python tools/release_packaging_deep_doctor.py
+```

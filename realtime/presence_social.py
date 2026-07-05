@@ -16,6 +16,7 @@ from collections import deque
 from flask import request
 from socket_auth import jwt_required, get_jwt, get_jwt_identity
 from flask_socketio import join_room, leave_room, emit, disconnect
+from werkzeug.utils import secure_filename
 
 from database import (
     get_all_rooms,
@@ -124,16 +125,26 @@ def register(socketio, settings, ctx):
         # Track this session first (shared state mirrors this into Redis when configured)
         upsert_connected_session(sid, username, None, auth_session_id=auth_session_id)
 
-        # Mark online only if this is the first active session
+        # Mark online on every successful realtime connect. The previous
+        # first-session-only update could leave users visually offline when stale
+        # session refs made first_session false or when another worker did not share
+        # in-memory presence state.
         first_session = (len(_user_sids(username)) == 1)
-        if first_session:
-            try:
-                conn = get_db()
-                with conn.cursor() as cur:
-                    cur.execute("UPDATE users SET online = TRUE WHERE username = %s;", (username,))
-                conn.commit()
-            except Exception:
-                pass
+        try:
+            conn = get_db()
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE users
+                       SET online = TRUE,
+                           last_seen = NULL
+                     WHERE LOWER(username) = LOWER(%s);
+                    """,
+                    (username,),
+                )
+            conn.commit()
+        except Exception:
+            pass
 
         # Push user's own presence to their UI
         try:
@@ -161,9 +172,10 @@ def register(socketio, settings, ctx):
         except Exception:
             pass
 
-        # Viewer-safe presence push to friends (best-effort)
-        if first_session:
-            _broadcast_presence_to_friends(username)
+        # Viewer-safe presence push to friends (best-effort). Do this on every
+        # connect/reconnect so friend docks heal after refreshes, stale DB flags,
+        # or multi-worker routing.
+        _broadcast_presence_to_friends(username)
 
         log_audit_event(username, "connected")
         
@@ -375,6 +387,138 @@ def register(socketio, settings, ctx):
             pass
 
 
+    def _social_action_denial(username: str, *, action: str = "social"):
+        """Return a callback-safe denial for social/presence writes."""
+        if is_user_sanctioned(username, "ban"):
+            return {"success": False, "error": "Social actions are disabled for this account"}
+        # Muted users should not create new visible social/presence activity, but
+        # privacy cleanup actions like block/unblock/reject/remove remain allowed.
+        if action in {"friend_request", "accept_friend", "presence"} and is_user_sanctioned(username, "mute"):
+            return {"success": False, "error": "Social actions are disabled while muted"}
+        return None
+
+
+    def _pair_live_rooms(username_a: str, username_b: str) -> set[str]:
+        rooms: set[str] = set()
+        for user in (str(username_a or "").strip(), str(username_b or "").strip()):
+            if not user:
+                continue
+            try:
+                sids = list(_user_sids(user))
+            except Exception:
+                sids = []
+            for sid in sids:
+                try:
+                    sess = get_connected_session(sid)
+                except Exception:
+                    sess = None
+                room = str((sess or {}).get("room") or "").strip()
+                if room:
+                    rooms.add(room)
+        return rooms
+
+    def _emit_pair_room_visibility_refresh(username_a: str, username_b: str, *, reason: str = "privacy") -> None:
+        """Refresh room rosters/counts after block or unblock.
+
+        A block changes who is allowed to see whom. An unblock changes that back.
+        Both transitions need personalized room_users snapshots; doing it only on
+        the client can leave stale one-person rosters that break room E2EE.
+        """
+        def _send_once() -> set[str]:
+            # Re-read live rooms on every pass. During block/unblock, one tab may
+            # reassert/rejoin milliseconds after the ACK, so a fixed precomputed
+            # room set can miss the room that actually needs the roster refresh.
+            live_rooms = _pair_live_rooms(username_a, username_b)
+            for room in sorted(live_rooms):
+                try:
+                    _emit_room_users_snapshot(room)
+                except Exception:
+                    pass
+            try:
+                _emit_room_counts_snapshot()
+            except Exception:
+                pass
+            return live_rooms
+
+        rooms = _send_once()
+        # A short delayed pass covers browser/server ordering races where the
+        # unblock ACK reaches the client before the room reassert/join completes.
+        if rooms:
+            for delay in (0.35, 1.10, 2.25):
+                try:
+                    timer = threading.Timer(delay, _send_once)
+                    timer.daemon = True
+                    timer.start()
+                except Exception:
+                    pass
+
+    def _emit_unblock_realtime_refresh(blocker: str, blocked: str) -> None:
+        """Refresh both browsers after an unblock so room roster/E2EE state unsticks."""
+        a = str(blocker or "").strip()
+        b = str(blocked or "").strip()
+        if not a or not b:
+            return
+        try:
+            _emit_to_user(a, "social_alert_cleanup", {"reason": "unblock", "peer": b})
+            _emit_to_user(b, "social_alert_cleanup", {"reason": "peer_unblocked", "peer": a})
+        except Exception:
+            pass
+        _emit_pair_room_visibility_refresh(a, b, reason="unblock")
+
+    def _cleanup_social_pair_realtime_sessions(username_a: str, username_b: str) -> dict:
+        """Drop live P2P file/voice sessions between a newly blocked pair."""
+        a = str(username_a or "").strip()
+        b = str(username_b or "").strip()
+        if not a or not b:
+            return {"p2p_file_sessions": 0, "voice_dm_sessions": 0}
+        pair = {a.lower(), b.lower()}
+        dropped_p2p = 0
+        dropped_voice = 0
+
+        try:
+            with P2P_FILE_SESSIONS_LOCK:
+                for transfer_id, sess in list(P2P_FILE_SESSIONS.items()):
+                    sess_pair = {str(sess.get("a") or "").strip().lower(), str(sess.get("b") or "").strip().lower()}
+                    if sess_pair == pair:
+                        try:
+                            del P2P_FILE_SESSIONS[transfer_id]
+                            dropped_p2p += 1
+                            try:
+                                _mark_p2p_transfer_id_closed(transfer_id)
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+        try:
+            with VOICE_DM_SESSIONS_LOCK:
+                for call_id, sess in list(VOICE_DM_SESSIONS.items()):
+                    sess_pair = {str(sess.get("caller") or "").strip().lower(), str(sess.get("callee") or "").strip().lower()}
+                    if sess_pair == pair:
+                        try:
+                            del VOICE_DM_SESSIONS[call_id]
+                            dropped_voice += 1
+                        except Exception:
+                            pass
+                        try:
+                            _emit_to_user(a, "voice_dm_end", {"sender": b, "call_id": call_id, "reason": "blocked"})
+                            _emit_to_user(b, "voice_dm_end", {"sender": a, "call_id": call_id, "reason": "blocked"})
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+        if dropped_p2p:
+            try:
+                _emit_to_user(a, "p2p_file_cancelled", {"peer": b, "reason": "blocked"})
+                _emit_to_user(b, "p2p_file_cancelled", {"peer": a, "reason": "blocked"})
+            except Exception:
+                pass
+        return {"p2p_file_sessions": int(dropped_p2p), "voice_dm_sessions": int(dropped_voice)}
+
+
     @socketio.on("remove_friend")
     @jwt_required()
     def handle_remove_friend(data):
@@ -385,6 +529,9 @@ def register(socketio, settings, ctx):
         guard = _socket_event_guard(username, "remove_friend", data, default_max_bytes=4096, default_limit=60, default_window=60)
         if guard:
             return guard
+        denied = _social_action_denial(username, action="remove_friend")
+        if denied is not None:
+            return denied
 
         lim, win = _parse_rate_limit(settings.get("social_action_rate_limit"), default_limit=60, default_window=60)
         try:
@@ -538,6 +685,69 @@ def register(socketio, settings, ctx):
 
     def _sanitize_profile_url(raw):
         return _sanitize_profile_media_url(raw, allow_local=False)
+
+
+    def _profile_local_media_owner_ok(url: str | None, username: str | None, *, kind: str) -> bool:
+        """Only allow local avatar/banner media that was generated for this account.
+
+        Uploaded profile avatar/banner filenames are prefixed with secure_filename(username).
+        This prevents a user from pointing their profile at another user's local
+        media and later causing that file to be deleted by their own upload flow.
+        """
+        value = str(url or "").strip()
+        if not value:
+            return True
+        try:
+            parsed = urllib.parse.urlparse(value)
+        except Exception:
+            return False
+        if parsed.scheme in {"http", "https"}:
+            return True
+        path = str(parsed.path or "")
+        if path == "/avatar-preset.svg":
+            return True
+        avatar_prefixes = ("/media/avatars/", "/static/uploads/profile_avatars/")
+        banner_prefixes = ("/media/profile-banners/", "/static/uploads/profile_banners/")
+        prefixes = avatar_prefixes if kind == "avatar" else banner_prefixes
+        if not any(path.startswith(prefix) for prefix in prefixes):
+            return True
+        filename = path.rsplit("/", 1)[-1]
+        safe_name = secure_filename(filename or "")
+        safe_owner = secure_filename(str(username or "")) or "user"
+        return bool(safe_name and safe_name == filename and safe_name.startswith(f"{safe_owner}-"))
+
+
+    def _profile_local_media_change_requires_upload_permission(old_url: str | None, new_url: str | None) -> bool:
+        """Return True when the profile edit points at uploaded local media."""
+        old_value = str(old_url or "").strip()
+        new_value = str(new_url or "").strip()
+        if not new_value or new_value == old_value:
+            return False
+        try:
+            parsed = urllib.parse.urlparse(new_value)
+        except Exception:
+            return False
+        if parsed.scheme in {"http", "https"}:
+            return False
+        path = str(parsed.path or "")
+        upload_prefixes = (
+            "/media/avatars/",
+            "/static/uploads/profile_avatars/",
+            "/media/profile-banners/",
+            "/static/uploads/profile_banners/",
+        )
+        return any(path.startswith(prefix) for prefix in upload_prefixes)
+
+
+    def _profile_socket_write_denial(username: str, *, action: str = "write"):
+        if is_user_sanctioned(username, "ban"):
+            return {"success": False, "error": "Profile changes are disabled for this account"}
+        # set_my_profile changes visible profile text/media and can push presence/profile updates.
+        if action in {"write", "media"} and is_user_sanctioned(username, "mute"):
+            return {"success": False, "error": "Profile editing is disabled for this account"}
+        if action == "media" and is_user_sanctioned(username, "upload"):
+            return {"success": False, "error": "Uploads are disabled for this account"}
+        return None
 
 
     def _sanitize_profile_text(raw, max_len=120):
@@ -1056,9 +1266,36 @@ def register(socketio, settings, ctx):
         if website_url is None:
             return {"success": False, "error": "Website URL must be a direct http/https URL"}
 
+        denied = _profile_socket_write_denial(username, action="write")
+        if denied is not None:
+            return denied
+
+        if not _profile_local_media_owner_ok(avatar_url, username, kind="avatar"):
+            return {"success": False, "error": "Avatar URL must belong to your account"}
+        if not _profile_local_media_owner_ok(banner_url, username, kind="banner"):
+            return {"success": False, "error": "Banner URL must belong to your account"}
+
         try:
             conn = get_db()
+            old_avatar_url = None
+            old_banner_url = None
             with conn.cursor() as cur:
+                cur.execute("SELECT avatar_url, banner_url FROM users WHERE username = %s LIMIT 1;", (username,))
+                old_media_row = cur.fetchone()
+                if old_media_row:
+                    old_avatar_url = old_media_row[0]
+                    old_banner_url = old_media_row[1]
+
+                media_changed = (
+                    _profile_local_media_change_requires_upload_permission(old_avatar_url, avatar_url)
+                    or _profile_local_media_change_requires_upload_permission(old_banner_url, banner_url)
+                )
+                if media_changed:
+                    denied = _profile_socket_write_denial(username, action="media")
+                    if denied is not None:
+                        conn.rollback()
+                        return denied
+
                 cur.execute(
                     """
                     UPDATE users
@@ -1159,6 +1396,9 @@ def register(socketio, settings, ctx):
             return {"success": False, "error": "missing_username"}
         if len(target) > 64 or any(c.isspace() for c in target):
             return {"success": False, "error": "invalid_username"}
+        target = _resolve_canonical_username(target)
+        if not target:
+            return {"success": False, "error": "not_found"}
 
         try:
             conn = get_db()
@@ -1188,8 +1428,8 @@ def register(socketio, settings, ctx):
                     """
                     SELECT 1
                       FROM friend_requests
-                     WHERE ((from_user = %s AND to_user = %s)
-                         OR (from_user = %s AND to_user = %s))
+                     WHERE ((LOWER(from_user) = LOWER(%s) AND LOWER(to_user) = LOWER(%s))
+                         OR (LOWER(from_user) = LOWER(%s) AND LOWER(to_user) = LOWER(%s)))
                        AND request_status = 'accepted'
                      LIMIT 1;
                     """,
@@ -1259,6 +1499,9 @@ def register(socketio, settings, ctx):
         guard = _socket_event_guard(username, "accept_friend_request", data, default_max_bytes=4096, default_limit=60, default_window=60)
         if guard:
             return guard
+        denied = _social_action_denial(username, action="accept_friend")
+        if denied is not None:
+            return denied
         from_user = _resolve_canonical_username((data or {}).get("from_user"))
 
         if not from_user:
@@ -1374,6 +1617,9 @@ def register(socketio, settings, ctx):
         guard = _socket_event_guard(blocker, "block_user", data, default_max_bytes=4096, default_limit=60, default_window=60)
         if guard:
             return guard
+        denied = _social_action_denial(blocker, action="block")
+        if denied is not None:
+            return denied
 
         lim, win = _parse_rate_limit(settings.get("social_action_rate_limit"), default_limit=60, default_window=60)
         try:
@@ -1395,6 +1641,7 @@ def register(socketio, settings, ctx):
         removed_room_invites = False
         removed_group_invites = False
         removed_offline_pms = False
+        removed_profile_notifications = False
 
         try:
             conn = get_db()
@@ -1489,6 +1736,38 @@ def register(socketio, settings, ctx):
                 )
                 removed_offline_pms = bool(cur.rowcount)
 
+                # Hide persisted profile-post alerts created by the newly
+                # blocked pair. Rows are kept for retention/audit, but they stop
+                # surfacing as unread notifications after the block.
+                profile_notification_ids = []
+                cur.execute(
+                    """
+                    SELECT n.id, u.username, n.notification
+                      FROM notifications n
+                      JOIN users u ON u.id = n.user_id
+                     WHERE n.type LIKE 'profile_post_%%'
+                       AND (LOWER(u.username) = LOWER(%s) OR LOWER(u.username) = LOWER(%s));
+                    """,
+                    (blocker, blocked),
+                )
+                for row in cur.fetchall() or []:
+                    try:
+                        notif_id = int(row[0])
+                        recipient = str(row[1] or "").strip()
+                        payload = json.loads(str(row[2] or "{}"))
+                        actor = str((payload or {}).get("actor") or "").strip() if isinstance(payload, dict) else ""
+                        if ((recipient.lower() == str(blocker).lower() and actor.lower() == str(blocked).lower())
+                                or (recipient.lower() == str(blocked).lower() and actor.lower() == str(blocker).lower())):
+                            profile_notification_ids.append(notif_id)
+                    except Exception:
+                        continue
+                if profile_notification_ids:
+                    cur.execute(
+                        "UPDATE notifications SET is_read = TRUE WHERE id = ANY(%s);",
+                        (profile_notification_ids,),
+                    )
+                    removed_profile_notifications = bool(cur.rowcount)
+
                 cur.execute(
                     """
                     DELETE FROM friends
@@ -1520,6 +1799,8 @@ def register(socketio, settings, ctx):
                 pass
             print(f"[DB ERROR] block_user: {e}")
             return {"success": False, "error": "Database error"}
+
+        live_cleanup = _cleanup_social_pair_realtime_sessions(blocker, blocked)
 
         try:
             _emit_blocked_users_state(blocker)
@@ -1555,6 +1836,11 @@ def register(socketio, settings, ctx):
         except Exception:
             pass
 
+        try:
+            _emit_pair_room_visibility_refresh(blocker, blocked, reason="block")
+        except Exception:
+            pass
+
         if removed_group_invites:
             try:
                 _emit_to_user(blocker, "groups_refresh", {"reason": "block_cleanup", "peer": blocked})
@@ -1577,7 +1863,7 @@ def register(socketio, settings, ctx):
         except Exception:
             pass
 
-        return {"success": True, "blocked": blocked, "removed_friendship": bool(removed_friendship), "removed_pending": bool(removed_pending), "removed_room_invites": bool(removed_room_invites), "removed_group_invites": bool(removed_group_invites), "removed_offline_pms": bool(removed_offline_pms)}
+        return {"success": True, "blocked": blocked, "removed_friendship": bool(removed_friendship), "removed_pending": bool(removed_pending), "removed_room_invites": bool(removed_room_invites), "removed_group_invites": bool(removed_group_invites), "removed_offline_pms": bool(removed_offline_pms), "removed_profile_notifications": bool(removed_profile_notifications), "live_cleanup": live_cleanup}
 
 
     @socketio.on("unblock_user")
@@ -1590,6 +1876,9 @@ def register(socketio, settings, ctx):
         guard = _socket_event_guard(blocker, "unblock_user", data, default_max_bytes=4096, default_limit=60, default_window=60)
         if guard:
             return guard
+        denied = _social_action_denial(blocker, action="unblock")
+        if denied is not None:
+            return denied
 
         lim, win = _parse_rate_limit(settings.get("social_action_rate_limit"), default_limit=60, default_window=60)
         try:
@@ -1634,9 +1923,15 @@ def register(socketio, settings, ctx):
             # so refresh the social panels even though it does not recreate a
             # friendship by itself.
             _emit_friend_request_state(blocker)
+            _emit_friend_request_state(blocked)
+            _emit_unblock_realtime_refresh(blocker, blocked)
             return {"success": True, "blocked": blocked}
         _emit_blocked_users_state(blocker)
-        return {"success": False, "error": "Not blocked"}
+        # A stale browser may ask to unblock after the DB row is already gone.
+        # Treat the client-side privacy state as clear and refresh live room state
+        # instead of leaving the sender with an old E2EE recipient exclusion.
+        _emit_unblock_realtime_refresh(blocker, blocked)
+        return {"success": False, "error": "Not blocked", "blocked": blocked}
 
 
     @socketio.on("get_friends")
@@ -1651,6 +1946,10 @@ def register(socketio, settings, ctx):
             return guard
         friends = get_friends_for_user(username)
         emit("friends_list", friends, to=request.sid)
+        try:
+            emit("friends_presence", [_public_presence_for_user(f) for f in (friends or [])], to=request.sid)
+        except Exception:
+            pass
         return {"friends": friends}
 
 
@@ -1712,6 +2011,10 @@ def register(socketio, settings, ctx):
 
         if not (presence_provided or custom_provided):
             return {"success": False, "error": "No updates"}
+
+        denied = _social_action_denial(username, action="presence")
+        if denied is not None:
+            return denied
 
         try:
             conn = get_db()
@@ -1805,6 +2108,9 @@ def register(socketio, settings, ctx):
         guard = _socket_event_guard(from_username, "send_friend_request", data, default_max_bytes=4096, default_limit=60, default_window=60)
         if guard:
             return guard
+        denied = _social_action_denial(from_username, action="friend_request")
+        if denied is not None:
+            return denied
 
         to_username = _resolve_canonical_username(to_username_raw)
         if not to_username:
@@ -1961,6 +2267,9 @@ def register(socketio, settings, ctx):
         guard = _socket_event_guard(username, "reject_friend_request", data, default_max_bytes=4096, default_limit=60, default_window=60)
         if guard:
             return guard
+        denied = _social_action_denial(username, action="reject_friend")
+        if denied is not None:
+            return denied
         from_user = _resolve_canonical_username((data or {}).get("from_user"))
 
         if not from_user:
@@ -2011,6 +2320,7 @@ def register(socketio, settings, ctx):
 
         if affected or already_rejected:
             _emit_friend_request_state(username)
+            _emit_friend_request_state(from_user)
             _emit_to_user(from_user, "friend_request_rejected", {"by": username})
             return {"success": True, "already_rejected": bool(already_rejected and not affected)}
 

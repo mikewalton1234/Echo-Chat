@@ -14,4 +14,4 @@ def upgrade(conn) -> None:
     """
     from database import _legacy_bootstrap_schema
 
-    _legacy_bootstrap_schema()
+    _legacy_bootstrap_schema(conn, commit=False)

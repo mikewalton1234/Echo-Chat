@@ -112,6 +112,38 @@ def register(socketio, settings, ctx):
                 continue
         return delivered
 
+    def _feature_bool(key: str, default: bool = False) -> bool:
+        val = settings.get(key, default)
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, (int, float)):
+            return bool(val)
+        text = str(val or "").strip().lower()
+        if text in {"1", "true", "yes", "y", "on", "enabled"}:
+            return True
+        if text in {"0", "false", "no", "n", "off", "disabled", "none"}:
+            return False
+        return bool(default)
+
+    def _group_typing_payload(group_id: int, username: str, *, typing: bool) -> dict:
+        return {
+            "group_id": int(group_id),
+            "username": str(username or "").strip(),
+            "typing": bool(typing),
+            "expires_in": int(TYPING_EXPIRY_SECONDS),
+            "ts": time.time(),
+        }
+
+    def _emit_group_typing_block_aware(group_id: int, sender: str, payload: dict, event_name: str) -> int:
+        delivered = 0
+        for username in _group_visible_usernames_for_sender(group_id, sender):
+            try:
+                if _emit_to_user(username, event_name, payload):
+                    delivered += 1
+            except Exception:
+                continue
+        return delivered
+
     def _is_group_cipher_envelope(value) -> bool:
         """Validate the outer ECG1 group-message envelope before relay/storage.
 
@@ -144,6 +176,21 @@ def register(socketio, settings, ctx):
         if len(keys) > 500:
             return False
         return all(isinstance(k, str) and k.strip() and isinstance(v, str) and v.strip() for k, v in keys.items())
+
+    def _group_history_room_values(group_id: int) -> list[str]:
+        """Return allowed DB room keys for group history.
+
+        New group messages are stored under g:<id>.  Older builds sometimes used
+        the bare numeric id as messages.room, but that can collide with a public
+        room named like "123".  Keep the legacy numeric key opt-in only.
+        """
+        primary = _group_store_room(group_id)
+        values = [primary]
+        if bool(settings.get("allow_legacy_numeric_group_history", False)):
+            legacy = str(int(group_id))
+            if legacy not in values:
+                values.append(legacy)
+        return values
 
     def _format_group_history_payload(group_id: int, rows, *, require_e2ee: bool, allow_legacy: bool, limit: int, before_id=None):
         rows = list(rows or [])
@@ -207,6 +254,7 @@ def register(socketio, settings, ctx):
         total = 0
         read = 0
         try:
+            room_values = _group_history_room_values(group_id)
             conn = get_db()
             with conn.cursor() as cur:
                 cur.execute(
@@ -221,14 +269,14 @@ def register(socketio, settings, ctx):
                              )
                            ) AS read_messages
                       FROM messages m
-                     WHERE (m.room = %s OR m.room = %s)
+                     WHERE m.room = ANY(%s)
                        AND NOT EXISTS (
                            SELECT 1 FROM blocks b
                             WHERE (LOWER(b.blocker) = LOWER(%s) AND LOWER(b.blocked) = LOWER(m.sender))
                                OR (LOWER(b.blocker) = LOWER(m.sender) AND LOWER(b.blocked) = LOWER(%s))
                        );
                     """,
-                    (actor, _group_store_room(group_id), str(int(group_id)), actor, actor),
+                    (actor, room_values, actor, actor),
                 )
                 row = cur.fetchone() or (0, 0)
                 total = int(row[0] or 0)
@@ -285,6 +333,91 @@ def register(socketio, settings, ctx):
             details = []
         return members, details
 
+    @socketio.on("group_typing")
+    @jwt_required()
+    def handle_group_typing(data):
+        sender = get_jwt_identity()
+        rejection = _reject_if_stale_socket_session(touch_activity=True)
+        if rejection is not None:
+            return rejection
+        data = data if isinstance(data, dict) else {}
+        guard = _socket_event_guard(sender, "group_typing", data, default_max_bytes=4096, default_limit=60, default_window=10)
+        if guard is not None:
+            return guard
+        try:
+            group_id = int(data.get("group_id"))
+        except Exception:
+            return {"success": False, "error": "bad_group_id"}
+        if not _feature_bool("enable_group_typing_indicators", True):
+            return {"success": True, "group_id": group_id, "typing": False, "disabled": True}
+        ok, err = _require_not_sanctioned(sender, action="send")
+        if not ok:
+            return {"success": False, "error": err or "send_denied"}
+        user_id = _get_user_id_by_username(sender)
+        if not user_id or not _is_group_member(group_id, user_id):
+            return {"success": False}
+        if _is_group_muted(group_id, sender):
+            return {"success": False, "error": "muted"}
+        try:
+            lim, win = _parse_rate_limit(settings.get("group_typing_rate_limit") or settings.get("room_typing_rate_limit"), default_limit=30, default_window=10)
+            if settings.get("group_typing_rate_window_sec") is not None:
+                win = int(settings.get("group_typing_rate_window_sec"))
+        except Exception:
+            lim, win = 30, 10
+        if not _group_rl(f"gtyping:{sender}:{group_id}", limit=lim, window_sec=win):
+            if _abuse_strike(sender, "group_typing_rate"):
+                return {"success": False, "error": "Auto-muted for spamming. Try again later."}
+            return {"success": False, "error": "rate_limited"}
+        shadowbanned_sender = False
+        try:
+            shadowbanned_sender = bool(_is_effectively_shadowbanned(sender))
+        except Exception:
+            shadowbanned_sender = False
+        delivered = 0
+        if not shadowbanned_sender:
+            delivered = _emit_group_typing_block_aware(group_id, sender, _group_typing_payload(group_id, sender, typing=True), "group_typing")
+        return {"success": True, "group_id": group_id, "typing": True, "expires_in": int(TYPING_EXPIRY_SECONDS), "delivered_visible_members": delivered}
+
+    @socketio.on("group_stop_typing")
+    @jwt_required()
+    def handle_group_stop_typing(data):
+        sender = get_jwt_identity()
+        rejection = _reject_if_stale_socket_session(touch_activity=True)
+        if rejection is not None:
+            return rejection
+        data = data if isinstance(data, dict) else {}
+        guard = _socket_event_guard(sender, "group_stop_typing", data, default_max_bytes=4096, default_limit=90, default_window=10)
+        if guard is not None:
+            return guard
+        try:
+            group_id = int(data.get("group_id"))
+        except Exception:
+            return {"success": False, "error": "bad_group_id"}
+        if not _feature_bool("enable_group_typing_indicators", True):
+            return {"success": True, "group_id": group_id, "typing": False, "disabled": True}
+        user_id = _get_user_id_by_username(sender)
+        if not user_id or not _is_group_member(group_id, user_id):
+            return {"success": False}
+        try:
+            lim, win = _parse_rate_limit(settings.get("group_typing_rate_limit") or settings.get("room_typing_rate_limit"), default_limit=30, default_window=10)
+            if settings.get("group_typing_rate_window_sec") is not None:
+                win = int(settings.get("group_typing_rate_window_sec"))
+        except Exception:
+            lim, win = 30, 10
+        if not _group_rl(f"gtyping:{sender}:{group_id}", limit=lim, window_sec=win):
+            if _abuse_strike(sender, "group_typing_rate"):
+                return {"success": False, "error": "Auto-muted for spamming. Try again later."}
+            return {"success": False, "error": "rate_limited"}
+        shadowbanned_sender = False
+        try:
+            shadowbanned_sender = bool(_is_effectively_shadowbanned(sender))
+        except Exception:
+            shadowbanned_sender = False
+        delivered = 0
+        if not shadowbanned_sender:
+            delivered = _emit_group_typing_block_aware(group_id, sender, _group_typing_payload(group_id, sender, typing=False), "group_stop_typing")
+        return {"success": True, "group_id": group_id, "typing": False, "delivered_visible_members": delivered}
+
     @socketio.on("group_message")
     @jwt_required()
     def handle_group_message(data):
@@ -301,6 +434,10 @@ def register(socketio, settings, ctx):
             group_id = int(data.get("group_id"))
         except Exception:
             return {"success": False, "error": "bad_group_id"}
+
+        ok, err = _require_not_sanctioned(sender, action="send")
+        if not ok:
+            return {"success": False, "error": err or "send_denied"}
 
         cipher = data.get("cipher")
         message = data.get("message")
@@ -323,6 +460,10 @@ def register(socketio, settings, ctx):
                 return {"success": False, "error": "bad_message"}
             max_plain_chars = _safe_positive_int(settings.get("max_group_message_chars"), 2000, minimum=1, maximum=100000)
             message = sanitize_user_visible_text(message, max_len=max_plain_chars, keep_newlines=True)
+            try:
+                message, _ec_removed_emoticons = _filter_excess_emoticons(message)
+            except Exception:
+                _ec_removed_emoticons = 0
             if not message:
                 return {"success": False, "error": "empty"}
             if len(message) > max_plain_chars:
@@ -455,6 +596,10 @@ def register(socketio, settings, ctx):
             group_id = int((data or {}).get("group_id"))
         except Exception:
             return {"success": False}
+
+        ok, err = _require_not_sanctioned(username, action="join")
+        if not ok:
+            return {"success": False, "error": err or "join_denied"}
     
         if not _group_rl(f"gjoin:{username}:{group_id}", limit=10, window_sec=30):
             if _abuse_strike(username, "group_join_rate"):
@@ -480,7 +625,7 @@ def register(socketio, settings, ctx):
                     """
                     SELECT id, sender, message, is_encrypted, timestamp
                       FROM messages
-                     WHERE (room = %s OR room = %s)
+                     WHERE room = ANY(%s)
                        AND NOT EXISTS (
                            SELECT 1 FROM blocks b
                             WHERE (LOWER(b.blocker) = LOWER(%s) AND LOWER(b.blocked) = LOWER(messages.sender))
@@ -489,39 +634,43 @@ def register(socketio, settings, ctx):
                      ORDER BY id DESC
                      LIMIT %s;
                     """,
-                    (_group_store_room(group_id), str(group_id), username, username, limit),
+                    (_group_history_room_values(group_id), username, username, limit),
                 )
                 rows = cur.fetchall() or []
             rows.reverse()
             history = _format_group_history_rows(rows, require_e2ee=require_e2ee, allow_legacy=allow_legacy)
         except Exception:
             history = []
-        try:
-            conn = get_db()
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO message_reads (message_id, username)
-                    SELECT id, %s
-                      FROM messages
-                     WHERE (room = %s OR room = %s)
-                       AND NOT EXISTS (
-                           SELECT 1 FROM blocks b
-                            WHERE (LOWER(b.blocker) = LOWER(%s) AND LOWER(b.blocked) = LOWER(messages.sender))
-                               OR (LOWER(b.blocker) = LOWER(messages.sender) AND LOWER(b.blocked) = LOWER(%s))
-                       )
-                     ORDER BY id DESC
-                     LIMIT 500
-                    ON CONFLICT (message_id, username) DO NOTHING;
-                    """,
-                    (username, _group_store_room(group_id), str(group_id), username, username),
-                )
-            conn.commit()
-        except Exception:
+        # UI04: do not mark group history read just because the socket joined.
+        # The browser now ACKs only messages it actually rendered/decrypted; this
+        # preserves unread state for locked E2EE history and failed decrypts.
+        if bool(settings.get("mark_group_read_on_join", False)):
             try:
-                conn.rollback()
+                conn = get_db()
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO message_reads (message_id, username)
+                        SELECT id, %s
+                          FROM messages
+                         WHERE room = ANY(%s)
+                           AND NOT EXISTS (
+                               SELECT 1 FROM blocks b
+                                WHERE (LOWER(b.blocker) = LOWER(%s) AND LOWER(b.blocked) = LOWER(messages.sender))
+                                   OR (LOWER(b.blocker) = LOWER(messages.sender) AND LOWER(b.blocked) = LOWER(%s))
+                           )
+                         ORDER BY id DESC
+                         LIMIT 500
+                        ON CONFLICT (message_id, username) DO NOTHING;
+                        """,
+                        (username, _group_history_room_values(group_id), username, username),
+                    )
+                conn.commit()
             except Exception:
-                pass
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
     
         # Provide member list for client-side group E2EE key wrapping and roster UI.
         members, member_details = _group_members_for_client(group_id, username)
@@ -597,7 +746,7 @@ def register(socketio, settings, ctx):
                         """
                         SELECT id, sender, message, is_encrypted, timestamp
                           FROM messages
-                         WHERE (room = %s OR room = %s) AND id < %s
+                         WHERE room = ANY(%s) AND id < %s
                            AND NOT EXISTS (
                                SELECT 1 FROM blocks b
                                 WHERE (LOWER(b.blocker) = LOWER(%s) AND LOWER(b.blocked) = LOWER(messages.sender))
@@ -606,14 +755,14 @@ def register(socketio, settings, ctx):
                          ORDER BY id DESC
                          LIMIT %s;
                         """,
-                        (_group_store_room(group_id), str(group_id), before_id, username, username, limit),
+                        (_group_history_room_values(group_id), before_id, username, username, limit),
                     )
                 else:
                     cur.execute(
                         """
                         SELECT id, sender, message, is_encrypted, timestamp
                           FROM messages
-                         WHERE (room = %s OR room = %s)
+                         WHERE room = ANY(%s)
                            AND NOT EXISTS (
                                SELECT 1 FROM blocks b
                                 WHERE (LOWER(b.blocker) = LOWER(%s) AND LOWER(b.blocked) = LOWER(messages.sender))
@@ -622,7 +771,7 @@ def register(socketio, settings, ctx):
                          ORDER BY id DESC
                          LIMIT %s;
                         """,
-                        (_group_store_room(group_id), str(group_id), username, username, limit),
+                        (_group_history_room_values(group_id), username, username, limit),
                     )
                 rows = cur.fetchall() or []
             rows.reverse()
@@ -692,8 +841,8 @@ def register(socketio, settings, ctx):
                     INSERT INTO message_reads (message_id, username)
                     SELECT id, %s
                       FROM messages
-                     -- single-message guard equivalent: WHERE id = %s AND (room = %s OR room = %s)
-                     WHERE id = ANY(%s) AND (room = %s OR room = %s)
+                     -- single-message guard is scoped to allowed group history keys.
+                     WHERE id = ANY(%s) AND room = ANY(%s)
                        AND NOT EXISTS (
                            SELECT 1 FROM blocks b
                             WHERE (LOWER(b.blocker) = LOWER(%s) AND LOWER(b.blocked) = LOWER(messages.sender))
@@ -701,7 +850,7 @@ def register(socketio, settings, ctx):
                        )
                     ON CONFLICT (message_id, username) DO NOTHING;
                     """,
-                    (username, message_ids, _group_store_room(group_id), str(group_id), username, username),
+                    (username, message_ids, _group_history_room_values(group_id), username, username),
                 )
                 changed = int(cur.rowcount or 0)
             conn.commit()

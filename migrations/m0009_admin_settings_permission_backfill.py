@@ -30,4 +30,3 @@ def upgrade(conn) -> None:
             """,
             ("admin:basic", "admin:settings", "admin:manage_roles", "admin"),
         )
-    conn.commit()

@@ -17,4 +17,3 @@ def upgrade(conn) -> None:
              WHERE email_hash IS NOT NULL AND BTRIM(email_hash) <> '';
             """
         )
-    conn.commit()

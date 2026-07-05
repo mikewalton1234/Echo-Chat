@@ -177,4 +177,3 @@ def upgrade(conn) -> None:
         )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_profile_notifications_user_unread ON notifications(user_id, is_read, timestamp DESC) WHERE type LIKE 'profile_post_%';")
 
-    conn.commit()

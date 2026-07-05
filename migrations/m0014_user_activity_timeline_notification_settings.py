@@ -35,4 +35,3 @@ def upgrade(conn) -> None:
             """
         )
 
-    conn.commit()

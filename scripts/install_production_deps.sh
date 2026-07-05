@@ -11,13 +11,13 @@ fi
 
 PYTHON_BIN="${PYTHON:-python}"
 
-echo "Installing Echo-Chat production dependencies into: $($PYTHON_BIN -c 'import sys; print(sys.executable)')"
-$PYTHON_BIN -m pip install --upgrade pip
-$PYTHON_BIN -m pip install -r requirements.txt
+echo "Installing Echo-Chat production dependencies into: $("$PYTHON_BIN" -c 'import sys; print(sys.executable)')"
+"$PYTHON_BIN" -m pip install --upgrade pip
+"$PYTHON_BIN" -m pip install -r requirements.txt
 
 echo
 echo "Production dependency check:"
-$PYTHON_BIN - <<'PY'
+"$PYTHON_BIN" - <<'PY'
 from gunicorn.util import load_class
 import simple_websocket
 load_class('gthread')
