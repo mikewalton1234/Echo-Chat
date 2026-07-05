@@ -2,7 +2,7 @@
 
 Echo-Chat is a self-hosted Python chat server with browser chat rooms, private messages, group chat, admin tooling, file/media controls, room radio helpers, voice/webcam controls, and a guided setup wizard.
 
-Current version: **0.11.0-beta.429-github-ready**
+Current version: **0.11.0-beta.429**
 
 ## Highlights
 
