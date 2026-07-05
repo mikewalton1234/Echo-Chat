@@ -57,7 +57,8 @@ Public chat rooms are protected with login security, CSRF protection, rate limit
 
 ## Chat Rooms
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/16f910b7-319b-456f-93a8-ef0d9f084159" />
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/902c7c6b-ceb9-4bc6-a462-3e8ec6fbc59e" />
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/8b8547ae-9430-4817-b0dc-4339f7204d1f" />
+
 
 Echo-Chat supports different kinds of rooms so a server can have both public and private spaces.
 
