@@ -187,9 +187,16 @@ function ecClearConversationTypingForWindow(win) {
   }
 }
 
-function ecTypingEmit(eventName, payload) {
-  if (!socket?.connected) return;
-  try { socket.emit(eventName, payload || {}, () => {}); } catch {}
+function ecTypingEmit(eventName, payload, onAck = null) {
+  if (!socket?.connected) return false;
+  try {
+    socket.emit(eventName, payload || {}, (res) => {
+      try { if (typeof onAck === 'function') onAck(res || {}); } catch {}
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function ecConversationTypingStop(input, opts = {}) {
@@ -202,6 +209,7 @@ function ecConversationTypingStop(input, opts = {}) {
   }
   const wasTyping = !!input._ecTypingActive;
   input._ecTypingActive = false;
+  input._ecTypingLastSent = 0;
   if (!wasTyping && !opts.force) return;
   if (surface === 'pm') {
     const peer = ecPmPeerName(input._ecTypingPeer || '');
@@ -212,6 +220,113 @@ function ecConversationTypingStop(input, opts = {}) {
   }
 }
 
+
+function ecConversationTypingStart(input) {
+  if (!input) return false;
+  const surface = String(input._ecTypingSurface || '').trim();
+  if (!surface || !ecTypingFeatureEnabled(surface)) return false;
+  if (!input.value || !input.value.trim()) {
+    ecConversationTypingStop(input, { force: true });
+    return false;
+  }
+  const now = Date.now();
+  if (input._ecTypingActive && input._ecTypingLastSent && (now - input._ecTypingLastSent) <= EC_CONVO_TYPING_SEND_THROTTLE_MS) {
+    return true;
+  }
+
+  const onAck = (res = {}) => {
+    const err = String(res?.error || '').toLowerCase();
+    if (res && res.success === false && (err.includes('blocked') || err.includes('self_dm_disabled') || err.includes('not found') || err.includes('denied'))) {
+      input._ecTypingActive = false;
+      input._ecTypingLastSent = 0;
+      if (input._ecTypingStopTimer) {
+        clearTimeout(input._ecTypingStopTimer);
+        input._ecTypingStopTimer = null;
+      }
+    }
+  };
+
+  let emitted = false;
+  if (surface === 'pm') {
+    const peer = ecPmPeerName(input._ecTypingPeer || '');
+    if (peer) emitted = ecTypingEmit('direct_typing', { to: peer }, onAck);
+  } else if (surface === 'group') {
+    const gid = Number(input._ecTypingGroupId || 0);
+    if (gid) emitted = ecTypingEmit('group_typing', { group_id: gid }, onAck);
+  }
+
+  if (!emitted) {
+    input._ecTypingActive = false;
+    input._ecTypingLastSent = 0;
+    return false;
+  }
+  input._ecTypingActive = true;
+  input._ecTypingLastSent = now;
+  return true;
+}
+
+function ecConversationTypingArmStopTimer(input) {
+  if (!input) return;
+  if (input._ecTypingStopTimer) clearTimeout(input._ecTypingStopTimer);
+  input._ecTypingStopTimer = setTimeout(() => ecConversationTypingStop(input), EC_CONVO_TYPING_TIMEOUT_MS - 1500);
+}
+
+function ecStopAllConversationTyping(opts = {}) {
+  try {
+    if (!UIState?.windows || typeof UIState.windows.values !== 'function') return;
+    for (const win of UIState.windows.values()) {
+      const input = win?._ym?.input;
+      if (input?._ecTypingSurface) ecConversationTypingStop(input, { force: opts.force !== false });
+    }
+  } catch {}
+}
+
+function ecClearAllConversationTypingIndicators() {
+  try {
+    for (const [_key, entry] of EC_CONVO_TYPING_STATE.entries()) {
+      if (entry?.timer) clearTimeout(entry.timer);
+    }
+    EC_CONVO_TYPING_STATE.clear();
+    if (UIState?.windows && typeof UIState.windows.values === 'function') {
+      for (const win of UIState.windows.values()) {
+        const node = win?._ym?.typingIndicator;
+        if (node) {
+          node.textContent = '';
+          node.classList.add('hidden');
+        }
+      }
+    }
+  } catch {}
+}
+
+try {
+  if (!window.__ecConvoTypingLifecycleBound) {
+    window.__ecConvoTypingLifecycleBound = true;
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) ecStopAllConversationTyping({ force: true });
+    });
+    window.addEventListener('pagehide', () => ecStopAllConversationTyping({ force: true }));
+    socket.on('disconnect', () => {
+      ecStopAllConversationTyping({ force: true });
+      ecClearAllConversationTypingIndicators();
+    });
+    socket.on('connect', () => {
+      try {
+        if (!UIState?.windows || typeof UIState.windows.values !== 'function') return;
+        for (const win of UIState.windows.values()) {
+          const input = win?._ym?.input;
+          if (input?._ecTypingSurface && input.value && input.value.trim()) {
+            input._ecTypingActive = false;
+            input._ecTypingLastSent = 0;
+            ecConversationTypingStart(input);
+            ecConversationTypingArmStopTimer(input);
+          }
+        }
+      } catch {}
+    });
+  }
+} catch {}
+
 function ecBindConversationTypingInput(win, surface, conversationId) {
   const input = win?._ym?.input;
   if (!input || !ecTypingFeatureEnabled(surface)) return;
@@ -221,6 +336,7 @@ function ecBindConversationTypingInput(win, surface, conversationId) {
   if (surface === 'pm') input._ecTypingPeer = conv;
   if (surface === 'group') input._ecTypingGroupId = Number(conv || 0);
   ecEnsureConversationTypingIndicator(win, surface);
+  try { setTimeout(() => ecRenderConversationTyping(surface, conv), 0); } catch {}
   if (input._ecConversationTypingBound) return;
   input._ecConversationTypingBound = true;
   input.addEventListener('input', () => {
@@ -228,20 +344,22 @@ function ecBindConversationTypingInput(win, surface, conversationId) {
       ecConversationTypingStop(input, { force: true });
       return;
     }
-    const now = Date.now();
-    if (!input._ecTypingActive || !input._ecTypingLastSent || (now - input._ecTypingLastSent) > EC_CONVO_TYPING_SEND_THROTTLE_MS) {
-      input._ecTypingActive = true;
-      input._ecTypingLastSent = now;
-      if (input._ecTypingSurface === 'pm') {
-        const peer = ecPmPeerName(input._ecTypingPeer || '');
-        if (peer) ecTypingEmit('direct_typing', { to: peer });
-      } else if (input._ecTypingSurface === 'group') {
-        const gid = Number(input._ecTypingGroupId || 0);
-        if (gid) ecTypingEmit('group_typing', { group_id: gid });
-      }
+    ecConversationTypingStart(input);
+    ecConversationTypingArmStopTimer(input);
+  });
+  input.addEventListener('focus', () => {
+    if (input.value && input.value.trim()) {
+      input._ecTypingActive = false;
+      input._ecTypingLastSent = 0;
+      ecConversationTypingStart(input);
+      ecConversationTypingArmStopTimer(input);
     }
-    if (input._ecTypingStopTimer) clearTimeout(input._ecTypingStopTimer);
-    input._ecTypingStopTimer = setTimeout(() => ecConversationTypingStop(input), EC_CONVO_TYPING_TIMEOUT_MS - 1500);
+  });
+  input.addEventListener('compositionend', () => {
+    if (input.value && input.value.trim()) {
+      ecConversationTypingStart(input);
+      ecConversationTypingArmStopTimer(input);
+    }
   });
   input.addEventListener('blur', () => ecConversationTypingStop(input));
   try { registerWindowCleanup(win, () => { ecConversationTypingStop(input, { force: true }); ecClearConversationTypingForWindow(win); }); } catch {}
@@ -250,6 +368,15 @@ function ecBindConversationTypingInput(win, surface, conversationId) {
 function ecBindDirectTypingInput(win, peer) {
   ecBindConversationTypingInput(win, 'pm', ecPmPeerName(peer));
 }
+
+try {
+  window.ecPmTypingDebugState = () => Array.from(EC_CONVO_TYPING_STATE.values()).map((entry) => ({
+    surface: entry.surface,
+    conversationId: entry.conversationId,
+    username: entry.username,
+    expiresInMs: Math.max(0, Math.round((entry.expiresAt || 0) - Date.now())),
+  }));
+} catch {}
 
 function ecBindGroupTypingInput(win, groupId) {
   const gid = Number(groupId || 0);

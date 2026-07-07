@@ -318,7 +318,10 @@ const CodeEmoticons = {
   animationStopMs: 4500,
   regexp: null,
   byCode: new Map(),
-  promise: null
+  promise: null,
+  assetPreloadPromise: null,
+  assetsPreloaded: false,
+  preloadedSrcs: new Set()
 };
 
 function escapeCodeRegexp(text) {
@@ -444,13 +447,141 @@ function rebuildCodeEmoticonIndex(entries) {
     : null;
 }
 
+function ecEmoticonBootPreloadEnabled() {
+  const cfg = (window.ECHOCHAT_CFG && typeof window.ECHOCHAT_CFG === "object") ? window.ECHOCHAT_CFG : {};
+  if (cfg.emoticons_boot_preload_enabled === false) return false;
+  if (cfg.emoticons_preload_enabled === false) return false;
+  return true;
+}
+
+function ecEmoticonBootPreloadLimit() {
+  const cfg = (window.ECHOCHAT_CFG && typeof window.ECHOCHAT_CFG === "object") ? window.ECHOCHAT_CFG : {};
+  const raw = cfg.emoticons_boot_preload_limit ?? cfg.emoticons_preload_limit ?? 180;
+  const n = parseInt(raw, 10);
+  if (Number.isNaN(n)) return 180;
+  // 0 means catalog-only boot loading. Keep a hard upper bound so one oversized
+  // custom catalog cannot flood a browser on first chat connect.
+  return Math.max(0, Math.min(240, n));
+}
+
+function ecEmoticonBootPreloadConcurrency() {
+  const cfg = (window.ECHOCHAT_CFG && typeof window.ECHOCHAT_CFG === "object") ? window.ECHOCHAT_CFG : {};
+  const device = (window.ECHOCHAT_DEVICE && typeof window.ECHOCHAT_DEVICE === "object") ? window.ECHOCHAT_DEVICE : {};
+  const fallback = device.is_phone || device.is_mobile || String(cfg.device_profile || "").toLowerCase() === "phone" ? 2 : 4;
+  const n = parseInt(cfg.emoticons_boot_preload_concurrency ?? cfg.emoticons_preload_concurrency ?? fallback, 10);
+  if (Number.isNaN(n)) return fallback;
+  return Math.max(1, Math.min(8, n));
+}
+
+function ecOnBrowserIdle(callback, timeout = 900) {
+  if (typeof callback !== "function") return;
+  try {
+    if (typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(callback, { timeout });
+      return;
+    }
+  } catch (_) {}
+  window.setTimeout(callback, Math.max(25, Math.min(1000, timeout)));
+}
+
+function ecPreloadEmoticonImage(entry) {
+  return new Promise((resolve) => {
+    const srcs = Array.isArray(entry?.fallbackSrcs) && entry.fallbackSrcs.length
+      ? entry.fallbackSrcs
+      : [entry?.src].filter(Boolean);
+    const uniqueSrcs = srcs.filter((src, index, arr) => src && arr.indexOf(src) === index);
+    if (!uniqueSrcs.length) { resolve(false); return; }
+
+    let index = 0;
+    const img = new Image();
+    img.decoding = "async";
+    img.referrerPolicy = "no-referrer";
+    if (/^https?:/i.test(String(uniqueSrcs[0] || ""))) {
+      try { img.crossOrigin = "anonymous"; } catch (_) {}
+    }
+
+    const tryNext = () => {
+      if (index >= uniqueSrcs.length) { resolve(false); return; }
+      const src = uniqueSrcs[index++];
+      if (CodeEmoticons.preloadedSrcs.has(src)) { resolve(true); return; }
+      img.onload = () => {
+        CodeEmoticons.preloadedSrcs.add(src);
+        resolve(true);
+      };
+      img.onerror = () => tryNext();
+      img.src = src;
+    };
+
+    tryNext();
+  });
+}
+
+async function ecPreloadCodeEmoticonAssets(opts = {}) {
+  if (!ecEmoticonBootPreloadEnabled() && !opts.force) return false;
+  if (CodeEmoticons.assetsPreloaded && !opts.force) return true;
+  if (CodeEmoticons.assetPreloadPromise && !opts.force) return CodeEmoticons.assetPreloadPromise;
+
+  CodeEmoticons.assetPreloadPromise = (async () => {
+    const ok = await ensureCodeEmoticonsLoaded({ retryOnEmpty: true });
+    if (!ok || !CodeEmoticons.enabled) return false;
+
+    const limit = opts.limit === undefined ? ecEmoticonBootPreloadLimit() : Math.max(0, Math.min(240, parseInt(opts.limit, 10) || 0));
+    if (!limit) return true;
+
+    const entries = (CodeEmoticons.entries || []).slice(0, limit);
+    const concurrency = opts.concurrency === undefined ? ecEmoticonBootPreloadConcurrency() : Math.max(1, Math.min(8, parseInt(opts.concurrency, 10) || 1));
+    let next = 0;
+    let active = 0;
+    let finished = 0;
+
+    await new Promise((resolve) => {
+      const pump = () => {
+        if (finished >= entries.length) { resolve(); return; }
+        while (active < concurrency && next < entries.length) {
+          const entry = entries[next++];
+          active += 1;
+          ecPreloadEmoticonImage(entry).finally(() => {
+            active -= 1;
+            finished += 1;
+            pump();
+          });
+        }
+      };
+      pump();
+    });
+
+    CodeEmoticons.assetsPreloaded = true;
+    try { document.dispatchEvent(new CustomEvent("ec:emoticon-assets-preloaded", { detail: { count: CodeEmoticons.preloadedSrcs.size } })); } catch (_) {}
+    return true;
+  })();
+
+  try {
+    return await CodeEmoticons.assetPreloadPromise;
+  } finally {
+    CodeEmoticons.assetPreloadPromise = null;
+  }
+}
+
+function ecPrimeEmoticonsOnChatBoot(opts = {}) {
+  // Called as soon as the chat bundle loads and again from DOM boot. The first
+  // phase fetches /api/emoticons/catalog immediately, so typed shortcuts can
+  // render without waiting for the picker. The second phase warms image assets
+  // during browser idle time so opening the picker feels instant.
+  const loadPromise = ensureCodeEmoticonsLoaded({ retryOnEmpty: true });
+  if (!ecEmoticonBootPreloadEnabled() && !opts.force) return loadPromise;
+  ecOnBrowserIdle(() => {
+    try { void ecPreloadCodeEmoticonAssets(opts); } catch (_) {}
+  }, opts.idleTimeout || 750);
+  return loadPromise;
+}
+
 async function ensureCodeEmoticonsLoaded(opts = {}) {
   const retryOnEmpty = !!opts.retryOnEmpty;
   if (CodeEmoticons.loaded && (!retryOnEmpty || CodeEmoticons.enabled)) return true;
   if (CodeEmoticons.promise) return CodeEmoticons.promise;
   CodeEmoticons.promise = (async () => {
     try {
-      const resp = await fetch(ecVersionedStaticUrl("/api/emoticons/catalog"), { credentials: "same-origin", cache: "no-store" });
+      const resp = await fetch(ecVersionedStaticUrl("/api/emoticons/catalog"), { credentials: "same-origin", cache: "force-cache" });
       if (!resp.ok) throw new Error(`catalog HTTP ${resp.status}`);
       const data = await resp.json().catch(() => ({}));
       if (data && data.success === false) throw new Error(String(data.error || "catalog disabled"));
@@ -575,8 +706,10 @@ function ecAppendCodeEmoticons(container, rawText, opts = {}) {
 }
 
 window.ensureCodeEmoticonsLoaded = ensureCodeEmoticonsLoaded;
+window.ecPreloadCodeEmoticonAssets = ecPreloadCodeEmoticonAssets;
+window.ecPrimeEmoticonsOnChatBoot = ecPrimeEmoticonsOnChatBoot;
 window.ecAppendCodeEmoticons = ecAppendCodeEmoticons;
-try { void ensureCodeEmoticonsLoaded(); } catch {}
+try { void ecPrimeEmoticonsOnChatBoot({ reason: "module-load" }); } catch {}
 
 
 function ecRichComposerEntryForCode(code) {
@@ -615,7 +748,7 @@ function ecRichComposerNodeToText(node) {
   if (node.nodeType !== Node.ELEMENT_NODE) return "";
   const el = node;
   if (el.dataset && el.dataset.ecEmoticonCode) return String(el.dataset.ecEmoticonCode || "");
-  if (el.tagName === "BR") return "";
+  if (el.tagName === "BR") return "\n";
   let out = "";
   for (const child of Array.from(el.childNodes || [])) out += ecRichComposerNodeToText(child);
   return out;
@@ -712,6 +845,17 @@ function ecRichComposerInsertText(editor, text) {
   ecRichComposerInsertNode(editor, node);
 }
 
+function ecRichComposerInsertNewline(editor) {
+  ecRichComposerInsertText(editor, "\n");
+}
+
+function ecIsPlainEnterToSend(ev) {
+  if (!ev || ev.key !== "Enter" || ev.isComposing) return false;
+  return !ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey;
+}
+
+window.ecIsPlainEnterToSend = ecIsPlainEnterToSend;
+
 function ecEnsureRichComposer(inputEl) {
   if (!inputEl || inputEl._ecRichComposer) return inputEl?._ecRichComposer || null;
   if (inputEl.dataset.ecRichComposer === "off") return null;
@@ -720,7 +864,7 @@ function ecEnsureRichComposer(inputEl) {
   editor.className = "ec-richComposer ym-input";
   editor.contentEditable = "true";
   editor.setAttribute("role", "textbox");
-  editor.setAttribute("aria-multiline", "false");
+  editor.setAttribute("aria-multiline", "true");
   editor.setAttribute("spellcheck", inputEl.getAttribute("spellcheck") || "true");
   editor.dataset.placeholder = inputEl.getAttribute("placeholder") || "Type a message…";
   if (inputEl.id) editor.dataset.forInput = inputEl.id;
@@ -823,23 +967,43 @@ function ecEnsureRichComposer(inputEl) {
     } catch (_) {}
   });
   editor.addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter" && !ev.shiftKey) {
+    if (ev.key !== "Enter" || ev.isComposing) return;
+
+    // Plain Enter sends. Ctrl+Enter / Cmd+Enter / Shift+Enter inserts a real
+    // newline into the hidden message value so room chat, PMs, and group chat
+    // can send multi-line messages without accidentally firing Send.
+    if (ev.ctrlKey || ev.metaKey || ev.shiftKey) {
       ev.preventDefault();
+      ecRichComposerInsertNewline(editor);
       composer.syncFromEditor();
+      return;
+    }
+
+    ev.preventDefault();
+    composer.syncFromEditor();
+    try {
+      inputEl.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Enter",
+        code: "Enter",
+        bubbles: true,
+        cancelable: true,
+        ctrlKey: false,
+        altKey: false,
+        metaKey: false,
+        shiftKey: false
+      }));
+    } catch (_) {
       try {
-        inputEl.dispatchEvent(new KeyboardEvent("keydown", {
+        inputEl.onkeydown && inputEl.onkeydown({
           key: "Enter",
-          code: "Enter",
-          bubbles: true,
-          cancelable: true,
-          ctrlKey: ev.ctrlKey,
-          altKey: ev.altKey,
-          metaKey: ev.metaKey,
-          shiftKey: ev.shiftKey
-        }));
-      } catch (_) {
-        try { inputEl.onkeydown && inputEl.onkeydown({ key: "Enter", preventDefault() {} }); } catch {}
-      }
+          isComposing: false,
+          shiftKey: false,
+          ctrlKey: false,
+          metaKey: false,
+          altKey: false,
+          preventDefault() {}
+        });
+      } catch {}
     }
   });
   editor.addEventListener("blur", () => {

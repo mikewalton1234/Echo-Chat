@@ -494,6 +494,88 @@ function rbStopPolling() {
   } catch {}
 }
 
+
+function ecNormalizeRoomNameForMatch(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function ecRoomLogHasVisibleMessages(log) {
+  if (!log) return false;
+  try {
+    return !!log.querySelector('.ec-msgGroup, .ec-systemRow, .ec-globalAnnouncementRow, .ec-msgItem');
+  } catch { return false; }
+}
+
+function ecRoomRemoveLiveOnlyState(viewEl) {
+  const log = viewEl?._ym?.log || viewEl?.querySelector?.('#roomEmbedLog, .roomEmbedLog, .ym-log');
+  if (!log) return;
+  try { log.querySelectorAll('[data-ec-room-live-state="1"]').forEach((el) => el.remove()); } catch {}
+}
+
+function ecRoomRenderLiveOnlyState(viewEl, room, reason = '') {
+  const log = viewEl?._ym?.log || viewEl?.querySelector?.('#roomEmbedLog, .roomEmbedLog, .ym-log');
+  if (!log) return;
+  if (ecRoomLogHasVisibleMessages(log)) return;
+  let row = null;
+  try { row = log.querySelector('[data-ec-room-live-state="1"]'); } catch {}
+  if (!row) {
+    row = document.createElement('div');
+    row.className = 'ec-roomLiveState';
+    row.dataset.ecRoomLiveState = '1';
+    row.setAttribute('role', 'status');
+    row.setAttribute('aria-live', 'polite');
+    log.appendChild(row);
+  }
+  const label = ecNormalizeRoomNameForMatch(room || UIState?.currentRoom || UIState?.roomEmbedRoom || 'this room') || 'this room';
+  row.textContent = `Live chat is ready in ${label}. New messages will appear here.`;
+  if (reason) row.dataset.reason = String(reason || '');
+}
+
+function ecRoomFindVisibleMessage(viewEl, messageId) {
+  const mid = String(messageId || '').trim();
+  if (!mid || !viewEl) return null;
+  try {
+    if (typeof _findMsgEl === 'function') return _findMsgEl(viewEl, mid);
+  } catch {}
+  try { return viewEl.querySelector(`[data-msgid="${CSS.escape(mid)}"]`); } catch {}
+  return null;
+}
+
+function ecRoomEnsureAckVisible(room, plaintext, ack, opts = {}) {
+  try {
+    if (!ack || !ack.success || ack.command || ack.shadowbanned) return;
+    const messageId = String(ack.message_id || ack.messageId || '').trim();
+    if (!messageId) return;
+    const cleanRoom = ecNormalizeRoomNameForMatch(ack.room || room || UIState?.currentRoom || UIState?.roomEmbedRoom);
+    if (!cleanRoom) return;
+    const delayMs = Math.max(150, Number(opts.delayMs || 700));
+    setTimeout(() => {
+      try {
+        const view = (typeof getActiveRoomView === 'function') ? getActiveRoomView(cleanRoom) : null;
+        if (!view) return;
+        if (ecRoomFindVisibleMessage(view, messageId)) return;
+        if (typeof appendRoomMessage !== 'function') return;
+        appendRoomMessage(view, {
+          room: cleanRoom,
+          message_id: messageId,
+          username: String(currentUser || '').trim(),
+          avatar_url: (UIState?.myProfile && (UIState.myProfile.avatar_url || UIState.myProfile.avatarUrl)) || '',
+          message: String(plaintext ?? ''),
+          encrypted: !!ack.encrypted,
+          ts: Date.now(),
+          message_kind: ack.message_kind || opts.messageKind || 'text',
+          ttl_seconds: ack.ttl_seconds,
+          expires_at: ack.expires_at,
+          client_echo_fallback: true,
+        });
+        try { console.info('[Echo-Chat] room message rendered from ACK fallback after broadcast was not visible', { room: cleanRoom, message_id: messageId }); } catch {}
+      } catch (e) {
+        try { console.warn('[Echo-Chat] room ACK fallback render failed', e); } catch {}
+      }
+    }, delayMs);
+  } catch {}
+}
+
 function openRoomEmbedded(room, opts = {}) {
   const preserveLog = !!opts.preserveLog;
   const previousRoom = String(UIState.roomEmbedRoom || '').trim();
@@ -518,6 +600,7 @@ function openRoomEmbedded(room, opts = {}) {
           const clean = url;
           const msg = `gif:${clean}`;
           const res = await sendRoomTo(roomNow, msg);
+          if (res?.success) ecRoomEnsureAckVisible(roomNow, msg, res, { messageKind: 'gif' });
           if (!res?.success) toast(`❌ ${res?.error || "Send failed"}`, "error");
         } catch (e) {
           console.error(e);
@@ -531,6 +614,7 @@ function openRoomEmbedded(room, opts = {}) {
   // On transient reconnect to the *same* room, preserve the current log and scroll position.
   if (pane._ym?.log && !preserveLog) resetChatLogState(pane._ym.log);
   if (pane._ym && !preserveLog) pane._ym.msgIndex = new Map();
+  if (pane._ym?.log && !preserveLog) ecRoomRenderLiveOnlyState(pane, room, 'live_only_join');
   // Server emits join notifications (e.g., "user has entered room").
 
   // Wire send
@@ -606,6 +690,7 @@ function openRoomEmbedded(room, opts = {}) {
         };
         sendRoomTo(room, JSON.stringify(wire)).then((res) => {
           if (res?.success) {
+            ecRoomEnsureAckVisible(room, JSON.stringify(wire), res, { messageKind: 'torrent' });
             if (typeof ecRoomTypingStop === 'function') ecRoomTypingStop(room, input, { force: true });
             optimistic?.commit?.();
           } else {
@@ -630,9 +715,11 @@ function openRoomEmbedded(room, opts = {}) {
       : null;
     sendRoomTo(room, msg).then((res) => {
       if (res?.success) {
+        ecRoomEnsureAckVisible(room, msg, res, { messageKind: res?.message_kind || 'text' });
         if (typeof ecRoomTypingStop === 'function') ecRoomTypingStop(room, input, { force: true });
-        // Don't append locally; we wait for the server broadcast so we get
-        // the authoritative message_id (needed for reactions).
+        // Prefer the server broadcast because it has the authoritative message_id;
+        // if Firefox/extension/socket timing hides that broadcast, the ACK fallback
+        // above renders the same message once.
         optimistic?.commit?.();
       } else {
         optimistic?.restore?.(res?.error || "Send failed");
@@ -649,7 +736,10 @@ function openRoomEmbedded(room, opts = {}) {
   if (pane._ym?.input && typeof ecBindRoomTypingInput === 'function') ecBindRoomTypingInput(room, pane._ym.input);
   if (pane._ym?.input) {
     pane._ym.input.onkeydown = (e) => {
-      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+      const shouldSend = (typeof ecIsPlainEnterToSend === "function")
+        ? ecIsPlainEnterToSend(e)
+        : (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing);
+      if (shouldSend) {
         e.preventDefault();
         sendFn();
       }
@@ -732,6 +822,7 @@ function openRoomEmbedded(room, opts = {}) {
           };
 
           sendRoomTo(room, JSON.stringify(wire)).then((res) => {
+            if (res?.success) ecRoomEnsureAckVisible(room, JSON.stringify(wire), res, { messageKind: 'torrent' });
             if (!res?.success) toast(`❌ ${res?.error || "Send failed"}`, "error");
           });
           toast("🧲 Torrent posted. Looking up seeds/leechers…", "ok", 2500);
@@ -862,9 +953,13 @@ function openRoomEmbedded(room, opts = {}) {
 }
 
 function getActiveRoomView(room) {
-  if (UIState.roomEmbedRoom === room) {
-    return getRoomEmbedEl();
+  const target = (typeof ecNormalizeRoomNameForMatch === 'function') ? ecNormalizeRoomNameForMatch(room) : String(room || '').trim();
+  const embedRoom = (typeof ecNormalizeRoomNameForMatch === 'function') ? ecNormalizeRoomNameForMatch(UIState.roomEmbedRoom) : String(UIState.roomEmbedRoom || '').trim();
+  const currentRoom = (typeof ecNormalizeRoomNameForMatch === 'function') ? ecNormalizeRoomNameForMatch(UIState.currentRoom) : String(UIState.currentRoom || '').trim();
+  if (target && (embedRoom === target || currentRoom === target)) {
+    const embed = getRoomEmbedEl();
+    if (embed) return embed;
   }
-  const win = UIState.windows.get("room:" + room);
+  const win = UIState.windows.get("room:" + target) || UIState.windows.get("room:" + room);
   return win || null;
 }

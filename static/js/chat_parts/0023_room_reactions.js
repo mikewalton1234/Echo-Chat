@@ -277,6 +277,11 @@ function appendRoomMessage(viewEl, payload) {
   if (!log) return;
 
   const username = payload?.username || "";
+  try {
+    if (username && (payload?.avatar_url || payload?.avatarUrl)) {
+      ecCacheUserAvatar(username, payload.avatar_url || payload.avatarUrl, { online: true, presence: 'online' });
+    }
+  } catch {}
   if (typeof ecRoomShouldHideBlockedSender === "function" && ecRoomShouldHideBlockedSender(username)) return null;
   const message = payload?.message ?? "";
   const room = payload?.room || UIState.currentRoom || null;
@@ -307,6 +312,7 @@ function appendRoomMessage(viewEl, payload) {
     return existing;
   }
 
+  try { if (typeof ecRoomRemoveLiveOnlyState === "function") ecRoomRemoveLiveOnlyState(viewEl); } catch {}
   const group = getOrCreateChatGroup(log, username ? String(username) : "?", tsMs, { variant: "room", context: "room" });
   if (!group?.itemsEl) return;
 

@@ -3785,6 +3785,20 @@ body {
   font-size: 11px;
 }
 
+
+.ec-roomLiveState {
+  margin: 18px auto;
+  max-width: 520px;
+  padding: 12px 14px;
+  border: 1px dashed rgba(var(--accent-rgb), 0.32);
+  border-radius: 14px;
+  background: rgba(var(--accent-rgb), 0.08);
+  color: var(--muted);
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
 .ec-msgGroup {
   margin: 0 0 14px;
   display: grid;

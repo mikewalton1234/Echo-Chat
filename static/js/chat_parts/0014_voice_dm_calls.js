@@ -159,8 +159,10 @@ async function voiceStartDmCallUnlocked(peer) {
     // Send invite first (lets receiver accept/decline)
     const inv = await new Promise((resolve) => socket.emit("voice_dm_invite", { to: peer, call_id }, resolve));
     if (!inv?.success || !inv?.delivered) {
-      voiceDmCleanup(peer, inv?.error || "User offline");
-      return toast(inv?.error ? `❌ ${inv.error}` : "❌ Voice invite not delivered", "error");
+      const msg = inv?.error || "User realtime connection unavailable. Ask them to refresh and try again.";
+      voiceDmCleanup(peer, msg);
+      if (inv?.voice_realtime) console.warn("Voice invite realtime diagnostic", inv.voice_realtime);
+      return toast(`❌ ${msg}`, "error");
     }
 
     // Wait for accept event to start offer (see socket.on handlers)
@@ -200,8 +202,10 @@ async function voiceAcceptDmCallUnlocked(peer) {
 
     const ack = await new Promise((resolve) => socket.emit("voice_dm_accept", { to: peer, call_id: call.call_id }, resolve));
     if (!ack?.success || !ack?.delivered) {
-      voiceDmCleanup(peer, ack?.error || "Caller offline");
-      toast(ack?.error ? `❌ ${ack.error}` : "❌ Caller is no longer available", "error");
+      const msg = ack?.error || "Caller realtime connection unavailable. Ask them to refresh and try again.";
+      voiceDmCleanup(peer, msg);
+      if (ack?.voice_realtime) console.warn("Voice accept realtime diagnostic", ack.voice_realtime);
+      toast(`❌ ${msg}`, "error");
       return;
     }
     voiceDmUi(peer, { statusText: "Connecting…", mode: "active", muteLabel: "Mute" });

@@ -7,10 +7,14 @@ function ecRoomSidebarLeft(dotClass, nameText, opts = {}) {
   dot.className = `presDot ${dotClass || 'offline'}`;
   left.appendChild(dot);
 
-  if (opts.avatarText) {
+  if (opts.avatarText || opts.avatarUrl) {
     const av = document.createElement('span');
     av.className = 'liAvatar';
-    av.textContent = String(opts.avatarText || '');
+    if (opts.avatarUrl && typeof renderDockAvatar === 'function') {
+      renderDockAvatar(av, nameText, opts.avatarUrl);
+    } else {
+      av.textContent = String(opts.avatarText || '');
+    }
     left.appendChild(av);
   }
 
@@ -144,12 +148,68 @@ function renderRooms(rooms) {
   });
 }
 
-function getRooms() {
+function ecNormalizeRoomRows(rows) {
+  if (!Array.isArray(rows)) return [];
+  const seen = new Set();
+  const out = [];
+  rows.forEach((row) => {
+    const name = String((row && typeof row === 'object') ? (row.name || row.room || row.room_id || '') : row || '').replace(/\s+/g, ' ').trim();
+    if (!name) return;
+    const key = name.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (row && typeof row === 'object') out.push({ ...row, name });
+    else out.push({ name });
+  });
+  return out;
+}
+
+async function ecLoadRoomsViaHttpFallback(reason = '') {
+  try {
+    if (typeof fetchWithAuth !== 'function') return false;
+    const resp = await fetchWithAuth('/api/rooms', { method: 'GET' }, { retryOn401: true });
+    const data = (typeof ecReadApiJson === 'function') ? await ecReadApiJson(resp, {}) : await resp.json().catch(() => ({}));
+    if (!resp || !resp.ok) return false;
+    const rooms = ecNormalizeRoomRows(Array.isArray(data) ? data : (Array.isArray(data?.rooms) ? data.rooms : []));
+    if (rooms.length) {
+      renderRooms(rooms);
+      try { if (typeof rbRefreshLists === 'function') rbRefreshLists(); } catch {}
+      return true;
+    }
+  } catch (e) {
+    try { console.warn('[Echo-Chat] room HTTP fallback failed', reason, e); } catch {}
+  }
+  return false;
+}
+
+async function getRooms(opts = {}) {
   // If we have server-rendered initial rooms, show instantly:
   if (Array.isArray(window.INIT_ROOMS) && window.INIT_ROOMS.length > 0) {
     renderRooms(window.INIT_ROOMS);
   }
-  socket.emit("get_rooms");
+
+  const useAck = typeof ecEmitAck === 'function';
+  if (useAck) {
+    const res = await ecEmitAck('get_rooms', {}, Number(opts.timeoutMs || 6500), { connectBannerText: '🔌 Loading rooms…' });
+    if (res && res.success !== false && Array.isArray(res.rooms)) {
+      const rows = ecNormalizeRoomRows(res.rooms);
+      renderRooms(rows);
+      return rows;
+    }
+    await ecLoadRoomsViaHttpFallback(res?.error || 'socket_ack_failed');
+    return [];
+  }
+
+  try { socket.emit("get_rooms"); } catch (_) {}
+  // Safety net: if the socket event was dropped during reconnect/auth recovery,
+  // load the same room list through the REST endpoint so the UI does not stay blank.
+  window.setTimeout(() => {
+    try {
+      const cur = Array.isArray(UIState.roomsCache) ? UIState.roomsCache : [];
+      if (!cur.length) ecLoadRoomsViaHttpFallback('socket_no_room_list');
+    } catch {}
+  }, 1800);
+  return [];
 }
 
 socket.on("room_list", (data) => {
@@ -157,7 +217,7 @@ socket.on("room_list", (data) => {
     toast("❌ Failed to fetch rooms", "error");
     return;
   }
-  renderRooms(data.rooms);
+  renderRooms(ecNormalizeRoomRows(data.rooms));
 });
 
 // Server hint that room inventory changed (autoscaled room created/deleted).
@@ -552,8 +612,14 @@ function ecNormalizeRoomUsersList(users) {
   const out = [];
   const seen = new Set();
   for (const raw of Array.isArray(users) ? users : []) {
-    const name = String(raw || "").replace(/\s+/g, " ").trim();
+    const rawName = (raw && typeof raw === "object")
+      ? (raw.username || raw.name || raw.user || raw.friend || '')
+      : raw;
+    const name = String(rawName || "").replace(/\s+/g, " ").trim();
     if (!name) continue;
+    if (raw && typeof raw === "object") {
+      try { ecCacheUserProfileAvatar(name, raw, { online: true, presence: 'online' }); } catch {}
+    }
     const key = name.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
@@ -569,6 +635,66 @@ function ecNormalizeRoomUsersList(users) {
     return a.localeCompare(b, undefined, { sensitivity: "base" });
   });
 }
+
+function ecCacheRoomUsersPayloadProfiles(payload, users = []) {
+  if (!payload || typeof payload !== "object") return;
+  const profileMap = payload.user_profiles || payload.profiles || payload.profile_map || null;
+  if (profileMap && typeof profileMap === "object" && !Array.isArray(profileMap)) {
+    Object.entries(profileMap).forEach(([name, profile]) => {
+      try { ecCacheUserProfileAvatar(name, profile || {}, { online: true, presence: 'online' }); } catch {}
+    });
+  }
+  const avatars = payload.avatars || payload.avatar_map || payload.avatar_urls || null;
+  if (avatars && typeof avatars === "object" && !Array.isArray(avatars)) {
+    Object.entries(avatars).forEach(([name, avatarUrl]) => {
+      try { ecCacheUserAvatar(name, avatarUrl, { online: true, presence: 'online' }); } catch {}
+    });
+  }
+  if (Array.isArray(payload.users)) {
+    payload.users.forEach((row) => {
+      if (row && typeof row === "object") {
+        const name = row.username || row.name || row.user || '';
+        try { ecCacheUserProfileAvatar(name, row, { online: true, presence: 'online' }); } catch {}
+      }
+    });
+  }
+  if (Array.isArray(users)) {
+    users.forEach((name) => {
+      const avatarUrl = ecRoomUserAvatarUrl(name);
+      if (avatarUrl) {
+        try { ecCacheUserAvatar(name, avatarUrl, { online: true, presence: 'online' }); } catch {}
+      }
+    });
+  }
+}
+
+function ecRoomUserAvatarUrl(username) {
+  const name = String(username || "").replace(/\s+/g, " ").trim();
+  if (!name) return "";
+  const selfKey = String(currentUser || "").trim().toLowerCase();
+  const userKey = name.toLowerCase();
+  try {
+    if (selfKey && userKey === selfKey && UIState.myProfile && (UIState.myProfile.avatar_url || UIState.myProfile.avatarUrl)) {
+      return String(UIState.myProfile.avatar_url || UIState.myProfile.avatarUrl || '').trim();
+    }
+  } catch {}
+  try {
+    const p = typeof ecGetPresenceForUsername === "function" ? ecGetPresenceForUsername(name) : null;
+    if (p && typeof p === "object" && (p.avatar_url || p.avatarUrl)) return String(p.avatar_url || p.avatarUrl || '').trim();
+  } catch {}
+  try {
+    if (typeof ecDomAvatarUrlForUsername === "function") return ecDomAvatarUrlForUsername(name) || "";
+  } catch {}
+  return "";
+}
+
+function ecRoomUserAvatarInitial(username) {
+  try { if (typeof dockInitials === "function") return dockInitials(username); } catch {}
+  try { if (typeof getGroupAvatarInitial === "function") return getGroupAvatarInitial(username); } catch {}
+  const s = String(username || "").trim();
+  return (s[0] || "?").toUpperCase();
+}
+
 
 function ecRoomUserRelation(username) {
   const u = String(username || "").trim();
@@ -704,6 +830,7 @@ function ecRenderRoomUsersPayload(payload) {
   );
   const provisionalSelfHeal = !!(activeRoom && payloadRoom === activeRoom && rawUsers.length === 0 && selfName);
   const users = staleSoloAfterUnblock ? priorUsers : (provisionalSelfHeal ? [selfName] : rawUsers);
+  try { ecCacheRoomUsersPayloadProfiles(payload, users); } catch {}
 
   try {
     const cur = activeRoom;
@@ -771,10 +898,15 @@ function ecRenderRoomUsersPayload(payload) {
     const relation = ecRoomUserRelation(u);
     if (relation) li.classList.add(`is-${relation}`);
 
-    const left = ecRoomSidebarLeft('online', u);
+    const avatarUrl = ecRoomUserAvatarUrl(u);
+    const left = ecRoomSidebarLeft('online', u, {
+      avatarText: ecRoomUserAvatarInitial(u),
+      avatarUrl
+    });
     try {
       if (typeof voiceMediaIconNode === "function") left.appendChild(voiceMediaIconNode(u, room || activeRoom));
     } catch {}
+    try { window.ecRefreshMessageAvatarsForUsername?.(u); } catch {}
 
     const actions = document.createElement("div");
     actions.className = "liActions";
@@ -1321,10 +1453,17 @@ function ecIsRoomMessageQuietlyVisible(room, view) {
 // When someone sends a room message:
 socket.on("chat_message", async (payload) => {
   if (!payload) return;
-  const room = payload.room || UIState.currentRoom;
+  const room = (typeof ecNormalizeRoomNameForMatch === 'function')
+    ? ecNormalizeRoomNameForMatch(payload.room || UIState.currentRoom || UIState.roomEmbedRoom)
+    : String(payload.room || UIState.currentRoom || UIState.roomEmbedRoom || '').trim();
   if (!room) return;
 
   const incomingUsername = payload.username || payload.sender || "";
+  try {
+    if (incomingUsername && (payload.avatar_url || payload.avatarUrl)) {
+      ecCacheUserAvatar(incomingUsername, payload.avatar_url || payload.avatarUrl, { online: true, presence: 'online' });
+    }
+  } catch {}
   if (ecRoomShouldHideBlockedSender(incomingUsername)) {
     ecClearRoomTyping(room, incomingUsername);
     return;
@@ -1361,6 +1500,7 @@ socket.on("chat_message", async (payload) => {
 
   const view = getActiveRoomView(room);
   if (!view) {
+    try { console.warn('[Echo-Chat] chat_message had no active room view', { room, currentRoom: UIState.currentRoom, roomEmbedRoom: UIState.roomEmbedRoom }); } catch {}
     try { if (room && room !== UIState.currentRoom) { rbBumpUnread(room); rbRenderRoomLists(); } } catch {}
     return;
   }

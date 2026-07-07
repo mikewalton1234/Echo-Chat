@@ -231,13 +231,68 @@ function ecPrompt(message, defaultValue = '', opts = {}) {
 
 window.ecPrompt = ecPrompt;
 
-function getFriends() {
-  socket.emit("get_friends", {}, (res) => {
-    if (res && Array.isArray(res.friends)) {
-      updateFriendsListUI(res.friends);
+function ecNormalizeFriendRows(rows) {
+  const names = ecCanonicalUsernameList(Array.isArray(rows) ? rows : [], { excludeSelf: true, excludeBlocked: true });
+  try {
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      if (!row || typeof row !== 'object') return;
+      const username = String(row.username || row.name || row.user || row.friend || '').replace(/\s+/g, ' ').trim();
+      if (!username) return;
+      ecSetPresenceForUsername(username, {
+        online: !!row.online,
+        presence: row.presence || row.presence_status || (row.online ? 'online' : 'offline'),
+        custom_status: row.custom_status || row.customStatus || '',
+        last_seen: row.last_seen || row.lastSeen || null,
+        avatar_url: row.avatar_url || row.avatarUrl || '',
+      });
+    });
+  } catch (_) {}
+  return names;
+}
+
+async function ecLoadFriendsViaHttpFallback(reason = '') {
+  try {
+    if (typeof fetchWithAuth !== 'function') return false;
+    const resp = await fetchWithAuth('/api/friends', { method: 'GET' }, { retryOn401: true });
+    const data = (typeof ecReadApiJson === 'function') ? await ecReadApiJson(resp, {}) : await resp.json().catch(() => ({}));
+    if (!resp || !resp.ok) return false;
+    const friends = ecNormalizeFriendRows(Array.isArray(data) ? data : (Array.isArray(data?.friends) ? data.friends : []));
+    updateFriendsListUI(friends);
+    try { socket.emit("get_friend_presence"); } catch (_) {}
+    return true;
+  } catch (e) {
+    try { console.warn('[Echo-Chat] friends HTTP fallback failed', reason, e); } catch {}
+  }
+  return false;
+}
+
+async function getFriends(opts = {}) {
+  const useAck = typeof ecEmitAck === 'function';
+  if (useAck) {
+    const res = await ecEmitAck('get_friends', {}, Number(opts.timeoutMs || 6500), { connectBannerText: '🔌 Loading friends…' });
+    if (res && res.success !== false && Array.isArray(res.friends)) {
+      const friends = ecNormalizeFriendRows(res.friends);
+      updateFriendsListUI(friends);
       try { socket.emit("get_friend_presence"); } catch (_) {}
+      return friends;
     }
-  });
+    await ecLoadFriendsViaHttpFallback(res?.error || 'socket_ack_failed');
+    return [];
+  }
+
+  try {
+    socket.emit("get_friends", {}, (res) => {
+      if (res && Array.isArray(res.friends)) {
+        updateFriendsListUI(ecNormalizeFriendRows(res.friends));
+        try { socket.emit("get_friend_presence"); } catch (_) {}
+      } else {
+        ecLoadFriendsViaHttpFallback('socket_empty_response');
+      }
+    });
+  } catch (_) {
+    ecLoadFriendsViaHttpFallback('socket_emit_failed');
+  }
+  return [];
 }
 
 function getPendingFriendRequests() {

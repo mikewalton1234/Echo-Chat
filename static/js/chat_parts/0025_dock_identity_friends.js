@@ -11,7 +11,14 @@ function ecCanonicalUsernameList(list, opts = {}) {
   const seen = new Set();
   const out = [];
   (Array.isArray(list) ? list : []).forEach((value) => {
-    const name = String(value || '').replace(/\s+/g, ' ').trim();
+    // Accept either the older socket payload form ["buddy"] or the newer
+    // REST fallback form [{ username, online, presence, avatar_url }].  A hard
+    // refresh or reconnect can use either source, and converting objects with
+    // String(value) made the friends list look empty/broken.
+    const rawName = (value && typeof value === 'object')
+      ? (value.username || value.name || value.user || value.friend || '')
+      : value;
+    const name = String(rawName || '').replace(/\s+/g, ' ').trim();
     const key = ecNormalizeUsernameKey(name);
     if (!name || !key || seen.has(key)) return;
     if (excludeSelf && selfKey && key === selfKey) return;
@@ -37,16 +44,50 @@ function ecSetPresenceForUsername(username, payload = {}) {
   const name = String(username || '').replace(/\s+/g, ' ').trim();
   const key = ecNormalizeUsernameKey(name);
   if (!name || !key) return;
+  const prior = UIState.presence?.get?.(name) || UIState.presence?.get?.(key) || null;
+  const hasAvatarKey = !!(payload && typeof payload === 'object' && (
+    Object.prototype.hasOwnProperty.call(payload, 'avatar_url') ||
+    Object.prototype.hasOwnProperty.call(payload, 'avatarUrl')
+  ));
+  const avatarValue = hasAvatarKey
+    ? String(payload.avatar_url || payload.avatarUrl || '')
+    : String((prior && (prior.avatar_url || prior.avatarUrl)) || '');
+  const hasOnlineKey = !!(payload && typeof payload === 'object' && Object.prototype.hasOwnProperty.call(payload, 'online'));
+  const onlineValue = hasOnlineKey ? !!payload.online : !!(prior && prior.online);
   const data = {
-    online: !!payload.online,
-    presence: String(payload.presence || (payload.online ? 'online' : 'offline')),
+    online: onlineValue,
+    presence: String(payload.presence || (onlineValue ? 'online' : 'offline')),
     custom_status: String(payload.custom_status || payload.customStatus || ''),
     last_seen: payload.last_seen || payload.lastSeen || null,
-    avatar_url: String(payload.avatar_url || payload.avatarUrl || ''),
+    avatar_url: avatarValue,
   };
   UIState.presence.set(name, data);
   UIState.presence.set(key, data);
   try { window.ecRefreshMessageAvatarsForUsername?.(name); } catch {}
+}
+
+function ecCacheUserAvatar(username, avatarUrl, opts = {}) {
+  const name = String(username || '').replace(/\s+/g, ' ').trim();
+  const key = ecNormalizeUsernameKey(name);
+  if (!name || !key) return;
+  const raw = String(avatarUrl || '').trim();
+  let safe = raw;
+  try { safe = normalizeDockAvatarUrl(raw) || ''; } catch { safe = raw; }
+  const prior = ecGetPresenceForUsername(name) || {};
+  ecSetPresenceForUsername(name, {
+    online: Object.prototype.hasOwnProperty.call(opts || {}, 'online') ? !!opts.online : (prior.online !== undefined ? !!prior.online : true),
+    presence: opts.presence || prior.presence || 'online',
+    custom_status: opts.custom_status || opts.customStatus || prior.custom_status || '',
+    last_seen: opts.last_seen || opts.lastSeen || prior.last_seen || null,
+    avatar_url: safe,
+  });
+}
+
+function ecCacheUserProfileAvatar(username, profile = {}, opts = {}) {
+  if (!username && profile && typeof profile === 'object') username = profile.username || profile.name || profile.user || '';
+  if (!profile || typeof profile !== 'object') return;
+  if (!Object.prototype.hasOwnProperty.call(profile, 'avatar_url') && !Object.prototype.hasOwnProperty.call(profile, 'avatarUrl')) return;
+  ecCacheUserAvatar(username, profile.avatar_url || profile.avatarUrl || '', opts);
 }
 
 function ecGetPresenceForUsername(username) {

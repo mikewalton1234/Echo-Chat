@@ -628,9 +628,13 @@ toolbar.appendChild(gifHint);
     }
   } catch {}
 
-  // Enter-to-send
+  // Plain Enter sends. Ctrl+Enter / Shift+Enter are reserved for multiline
+  // composers and must not accidentally click Send.
   input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    const shouldSend = (typeof ecIsPlainEnterToSend === "function")
+      ? ecIsPlainEnterToSend(e)
+      : (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing);
+    if (shouldSend) {
       e.preventDefault();
       send.click();
     }

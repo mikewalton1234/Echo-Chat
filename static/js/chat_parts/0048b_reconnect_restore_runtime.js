@@ -44,6 +44,24 @@ async function restoreLastRoomAndVoice() {
   }
 }
 
+
+function ecLiveDataBootstrapRescue(reason = '') {
+  // One more pass after connect/auth recovery.  This fixes the visible symptom
+  // where the socket connects but an early event/ack is dropped, leaving Rooms,
+  // Friends, Groups, and invite panels empty until a manual refresh.
+  window.setTimeout(() => {
+    try { getRooms({ timeoutMs: 7000, reason: reason || 'bootstrap_rescue' }); } catch (e) { try { console.warn('[Echo-Chat] rescue getRooms failed', e); } catch {} }
+    try { getFriends({ timeoutMs: 7000, reason: reason || 'bootstrap_rescue' }); } catch (e) { try { console.warn('[Echo-Chat] rescue getFriends failed', e); } catch {} }
+    try { getPendingFriendRequests(); } catch (_) {}
+    try { getBlockedUsers(); } catch (_) {}
+    try { refreshMyGroups(); } catch (_) {}
+    try { refreshGroupInvites(); } catch (_) {}
+    try { refreshRoomInvites(); } catch (_) {}
+    try { refreshCustomRoomInvites(); } catch (_) {}
+  }, 2200);
+}
+window.ecLiveDataBootstrapRescue = ecLiveDataBootstrapRescue;
+
 socket.on("connect", () => {
   EC_RECONNECT_IN_PROGRESS = false;
   EC_SERVER_DISCONNECT_RETRIES = 0;
@@ -100,6 +118,7 @@ socket.on("connect", () => {
   if (doFullBootstrap) {
     refreshMyGroups();
     refreshGroupInvites();
+    try { ecLiveDataBootstrapRescue(first ? 'first_connect' : 'reconnect'); } catch (_) {}
   }
 
   // Re-join the remembered room after transient reconnects and after a fresh

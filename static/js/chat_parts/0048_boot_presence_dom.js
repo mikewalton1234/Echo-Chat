@@ -39,6 +39,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   applyRoomFontSize(UIState.prefs.roomFontSize);
   try { ecBindClassicRoomComposerToolbar(); } catch (_) { try { ecApplyRoomComposerPrefs(); } catch (__) {} }
   try { ecApplyEmoticonSizePrefs(UIState.prefs.emoticonSize); } catch (_) {}
+  try { if (typeof ecPrimeEmoticonsOnChatBoot === "function") void ecPrimeEmoticonsOnChatBoot({ reason: "dom-boot" }); } catch (_) {}
   applyGifPickerPrefs();
 
   // Dock section ordering / drag-to-move

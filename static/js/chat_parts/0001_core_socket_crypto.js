@@ -22,8 +22,90 @@ window.addEventListener("error", (event) => {
 window.addEventListener("unhandledrejection", (event) => {
   try { echoChatRecordJsError("unhandledrejection", event.reason || "unhandled promise rejection"); } catch {}
 });
-if (typeof window.io !== "function") {
-  echoChatRecordJsError("boot", "Socket.IO client library did not load; chat JavaScript cannot connect.");
+const __socketIoAvailable = typeof window.io === "function";
+if (!__socketIoAvailable) {
+  echoChatRecordJsError("boot", "Socket.IO client library did not load; continuing with limited HTTP-only GUI bootstrap.");
+  window.ECHOCHAT_SOCKETIO_CLIENT_MISSING = true;
+}
+
+function ecCreateSocketFallback(reason = "socketio_client_missing") {
+  const handlers = new Map();
+  const managerHandlers = new Map();
+
+  function addHandler(store, eventName, fn, once = false) {
+    if (typeof fn !== "function") return;
+    const key = String(eventName || "");
+    const list = store.get(key) || [];
+    list.push({ fn, once: !!once });
+    store.set(key, list);
+  }
+
+  function removeHandler(store, eventName, fn) {
+    if (!eventName) {
+      store.clear();
+      return;
+    }
+    const key = String(eventName || "");
+    if (!store.has(key)) return;
+    if (typeof fn !== "function") {
+      store.delete(key);
+      return;
+    }
+    const next = (store.get(key) || []).filter((entry) => entry.fn !== fn);
+    if (next.length) store.set(key, next);
+    else store.delete(key);
+  }
+
+  function fire(store, eventName, ...args) {
+    const key = String(eventName || "");
+    const list = (store.get(key) || []).slice();
+    if (!list.length) return;
+    const keep = [];
+    for (const entry of list) {
+      try { entry.fn(...args); } catch (e) { echoChatRecordJsError("socket_fallback_handler", e); }
+      if (!entry.once) keep.push(entry);
+    }
+    if (keep.length) store.set(key, keep);
+    else store.delete(key);
+  }
+
+  const manager = {
+    opts: {},
+    on(eventName, fn) { addHandler(managerHandlers, eventName, fn, false); return manager; },
+    once(eventName, fn) { addHandler(managerHandlers, eventName, fn, true); return manager; },
+    off(eventName, fn) { removeHandler(managerHandlers, eventName, fn); return manager; },
+  };
+
+  const sock = {
+    connected: false,
+    disconnected: true,
+    active: false,
+    io: manager,
+    on(eventName, fn) { addHandler(handlers, eventName, fn, false); return sock; },
+    once(eventName, fn) { addHandler(handlers, eventName, fn, true); return sock; },
+    off(eventName, fn) { removeHandler(handlers, eventName, fn); return sock; },
+    emit(eventName, ...args) {
+      const ack = args.length && typeof args[args.length - 1] === "function" ? args[args.length - 1] : null;
+      if (ack) {
+        setTimeout(() => {
+          try { ack({ success: false, error: reason, event: String(eventName || "") }); } catch {}
+        }, 0);
+      }
+      return sock;
+    },
+    connect() {
+      setTimeout(() => {
+        const err = new Error("Socket.IO client library is missing");
+        err.code = reason;
+        fire(handlers, "connect_error", err);
+        fire(managerHandlers, "reconnect_error", err);
+      }, 0);
+      return sock;
+    },
+    disconnect() { sock.connected = false; sock.disconnected = true; return sock; },
+    close() { return sock.disconnect(); },
+  };
+  return sock;
 }
 
 const __wsEnabled = !!(window.ECHOCHAT_CFG && window.ECHOCHAT_CFG.ws_enabled);
@@ -34,7 +116,7 @@ const SERVER_NAME = String(ECHOCHAT_CFG.server_name || "Echo-Chat").trim() || "E
 const SERVER_ADMIN_NAME = `${SERVER_NAME} Admin`;
 const serverRoomLabel = () => `${SERVER_NAME} room`;
 
-const socket = io({
+const socket = __socketIoAvailable ? window.io({
   transports: __socketTransports,
   upgrade: __wsEnabled && !__socketWebsocketOnly,
   rememberUpgrade: __wsEnabled,
@@ -52,7 +134,13 @@ const socket = io({
 
   // Don't auto-connect; we first try to refresh the short-lived access token.
   autoConnect: false
-});
+}) : ecCreateSocketFallback("socketio_client_missing");
+
+try {
+  window.socket = socket;
+  window.ECHOCHAT_SOCKET = socket;
+  window.ECHOCHAT_SOCKETIO_AVAILABLE = __socketIoAvailable;
+} catch {}
 
 // When the server rejects Socket.IO events because the access JWT expired,
 // we try a silent refresh + reconnect. This flag suppresses the generic
