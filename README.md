@@ -1,5 +1,5 @@
 # Echo-Chat
-
+TRY OUT NOW!!!!   https://Echo-Chat.replit.app
 **Echo-Chat** is a self-hosted chat server for people who want to run their own private chat app.
 
 It includes chat rooms, private messages, group chats, friends, profiles, radio listening, file sharing, torrent/magnet tools, voice chat, webcam sharing, mobile support, and a full admin control panel.
