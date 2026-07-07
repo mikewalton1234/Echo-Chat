@@ -155,6 +155,28 @@ def init_database():
     # default server_config.json may point somewhere else, and logging that older
     # value makes wrong-database investigations misleading.
     effective_dsn = shared._DSN or get_db_connection_string()
+    # Defensive runtime self-heal: migrations may be skipped on an existing DB,
+    # but the official room catalog can still be missing if the DB was created
+    # manually, partially restored, or pointed at the wrong/empty database during
+    # setup.  Re-syncing official rooms is idempotent and keeps the Rooms UI from
+    # going blank after setup detects an existing database.
+    try:
+        from db.rooms import load_rooms_from_json
+        from db.schema import sync_chat_room_kinds
+        conn, from_pool = _acquire_conn()
+        try:
+            sync_chat_room_kinds(conn, commit=False)
+            load_rooms_from_json(conn, commit=False)
+            conn.commit()
+            logging.info("Official room catalog sync completed")
+        finally:
+            try:
+                _release_conn(conn, from_pool)
+            except Exception:
+                pass
+    except Exception as exc:
+        logging.warning("Official room catalog sync skipped/failed: %s", exc)
+
     logging.info("✅  DB ready at %s", redact_postgres_dsn(effective_dsn))
     try:
         logging.info("Tracked schema state: %s", get_schema_version())

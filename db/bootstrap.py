@@ -471,6 +471,95 @@ def inspect_echochat_database(dsn: str) -> dict[str, Any]:
 
 
 
+def _database_exists_via_local_admin(parts: dict[str, Any], dbname: str) -> bool | None:
+    """Return database existence using local postgres tools when normal DSN access is limited.
+
+    This is intentionally read-only. It helps setup distinguish "database does
+    not exist" from "database exists but the configured runtime role cannot
+    connect/list/inspect it yet" on local Linux installs.
+    """
+    try:
+        proc = _run_local_postgres_tool(
+            [
+                "psql",
+                "-At",
+                "-d",
+                "postgres",
+                "-c",
+                "SELECT 1 FROM pg_database WHERE datname = " + _quote_literal(str(dbname or "")) + ";",
+            ],
+            parts=parts,
+            system_user="postgres",
+            capture=True,
+        )
+        return str(getattr(proc, "stdout", "") or "").strip() == "1"
+    except Exception:
+        return None
+
+
+def target_database_status(dsn: str, *, bootstrap_dsn: str | None = None) -> dict[str, Any]:
+    """Report whether the configured target database exists, separately from Echo-Chat schema detection.
+
+    Auto-discovery intentionally looks for Echo-Chat marker tables. That is not
+    the same thing as detecting whether the configured PostgreSQL database
+    already exists. Setup needs both facts so an existing empty database is not
+    reported as "none found" in a confusing way.
+    """
+    parts = dsn_parts(dsn)
+    dbname = str(parts.get("db") or "")
+    target_dsn = build_postgres_dsn(parts, dbname)
+    status: dict[str, Any] = {
+        "database": dbname,
+        "dsn": target_dsn,
+        "exists": False,
+        "connectable": False,
+        "inspectable": False,
+        "state": "missing",
+        "source": "target",
+        "error": "",
+    }
+
+    try:
+        report = inspect_echochat_database(target_dsn)
+        report = dict(report or {})
+        report.update({
+            "exists": True,
+            "connectable": True,
+            "inspectable": True,
+            "source": "target",
+            "error": "",
+        })
+        return report
+    except Exception as exc:
+        status["error"] = str(exc)
+        status["state"] = "missing" if _should_treat_as_missing_db(exc) else "exists_inaccessible"
+
+    # If direct inspection failed, ask a maintenance/admin connection whether
+    # the database name exists. This catches the common local case where the DB
+    # exists but the configured runtime role has not been granted CONNECT yet.
+    try:
+        admin_conn = connect_maintenance_db(target_dsn, bootstrap_dsn=bootstrap_dsn, forbid_db=dbname)
+    except Exception:
+        admin_conn = None
+    if admin_conn is not None:
+        try:
+            status["exists"] = bool(database_exists(admin_conn, dbname))
+            status["source"] = "maintenance"
+            if status["exists"]:
+                status["state"] = "exists_inaccessible"
+        finally:
+            admin_conn.close()
+
+    if not bool(status.get("exists")) and _is_local_postgres_target(parts):
+        local_exists = _database_exists_via_local_admin(parts, dbname)
+        if local_exists is not None:
+            status["exists"] = bool(local_exists)
+            status["source"] = "local_postgres_admin"
+            status["state"] = "exists_inaccessible" if local_exists else "missing"
+
+    return status
+
+
 def validate_echochat_database(dsn: str) -> dict[str, Any]:
     """Public setup/runtime helper: inspect the configured database target."""
     return inspect_echochat_database(dsn)
