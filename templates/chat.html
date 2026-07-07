@@ -10,6 +10,20 @@
   <script nonce="{{ csp_nonce }}" src="{{ socketio_client_url }}"></script>
   <script nonce="{{ csp_nonce }}">
     (function () {
+      // The packaged local file may be a small bootstrap loader. If it did not
+      // expose window.io, synchronously fall back to the official browser bundle
+      // before the deferred Echo-Chat modules execute.
+      try {
+        if (typeof window.io === 'function') return;
+        window.ECHOCHAT_SOCKETIO_CLIENT_FALLBACK_SRC = 'https://cdn.socket.io/4.5.0/socket.io.min.js';
+        if (document.readyState === 'loading' && typeof document.write === 'function') {
+          document.write('<script src="https://cdn.socket.io/4.5.0/socket.io.min.js"><\/script>');
+        }
+      } catch (e) {}
+    })();
+  </script>
+  <script nonce="{{ csp_nonce }}">
+    (function () {
       try {
         const host = String(window.location.hostname || '').trim();
         const isBindAllHost = host === '0.0.0.0' || host === '::' || host === '[::]';

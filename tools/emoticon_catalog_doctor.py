@@ -63,7 +63,7 @@ def main() -> int:
     for token in ["local_emoticon_root", "local_emoticon_roots", "_normalize_external_bases", "emoticons_custom_entries", "emoticons_external_asset_base_url", "emoticons_asset_mode", "emoticons_animation_stop_ms", "animation_stop_ms", "_DEFAULT_EXTERNAL_ASSET_BASE_URL", "fallback_srcs", "_external_asset_candidates_for_row", "static_candidates"]:
         if token not in catalog_py:
             failures.append(f"catalog missing {token}")
-    for token in ['@app.get("/api/emoticons/catalog")', '@app.get("/api/emoticons/selftest")', '@app.get("/emoticons/<path:filename>")', 'for root in local_emoticon_roots(settings)', 'safe_existing_file_under(root, safe_name)']:
+    for token in ['@app.get("/api/emoticons/catalog")', '@app.get("/api/emoticons/selftest")', '@app.get("/emoticons/<path:filename>")', 'for root in local_emoticon_roots(settings)', '_safe_emoticon_file_path(root, safe_name)']:
         if token not in routes_main:
             failures.append(f"routes_main missing {token}")
     catalog_route_slice = routes_main[routes_main.find('@app.get("/api/emoticons/catalog")'):routes_main.find('@app.get("/api/emoticons/selftest")')]
