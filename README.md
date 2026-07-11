@@ -1,15 +1,20 @@
-# Echo-Chat
-please note: the server hosting echo chat is very slow.... paying for a host sucks lol. Sorry ahead of time.
-TRY OUT NOW!!!!   https://Echo-Chat.replit.app
-**Echo-Chat** is a self-hosted chat server for people who want to run their own private chat app.
+# Hui Chat
 
-It includes chat rooms, private messages, group chats, friends, profiles, radio listening, file sharing, torrent/magnet tools, voice chat, webcam sharing, mobile support, and a full admin control panel.
+**Pronounced “Hoo-ee.”**
 
-Current build: **0.11.0-beta.429**
-https://Echo-Chat.replit.app
-## What Makes Echo-Chat Special
+Hui Chat is a self-hosted community chat platform for people who want to run their own private social chat service.
 
-Echo-Chat is more than a simple chat room. It is built to feel like a full social chat app that you can host yourself.
+It includes public and private chat rooms, direct messages, group chats, friends, profiles, room radio, file sharing, torrent and magnet tools, voice chat, webcam sharing, mobile support, and a full administrative control panel.
+
+> **Public demo notice:** The current hosted demo may respond slowly because it runs on limited hosting resources.
+
+**Try the current demo:** https://Echo-Chat.replit.app
+
+Current build: **0.11.0-beta.447**
+
+## What Makes Hui Chat Special
+
+Hui Chat is more than a simple chat room. It is built to feel like a full social chat app that you can host yourself.
 
 Main highlights:
 
@@ -33,7 +38,7 @@ Main highlights:
 
 ## Encryption and Privacy
 
-Echo-Chat includes encryption and privacy features for private communication and file sharing.
+Hui Chat includes encryption and privacy features for private communication and file sharing.
 
 Encryption features include:
 
@@ -60,8 +65,7 @@ Public chat rooms are protected with login security, CSRF protection, rate limit
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/16f910b7-319b-456f-93a8-ef0d9f084159" />
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/8b8547ae-9430-4817-b0dc-4339f7204d1f" />
 
-
-Echo-Chat supports different kinds of rooms so a server can have both public and private spaces.
+Hui Chat supports different kinds of rooms so a server can have both public and private spaces.
 
 Room features include:
 
@@ -101,10 +105,10 @@ Private message features include:
 * Encrypted file sharing
 * Mobile full-screen private message view
 
-## Group Chats (still alpha)
+## Group Chats (Alpha)
  <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/c2a0a3e9-6b31-43e8-b1bf-0e98ba21dcdf" />
 
-Echo-Chat includes group chats for smaller private communities.
+Hui Chat includes group chats for smaller private communities.
 
 Group features include:
 
@@ -128,7 +132,7 @@ Group features include:
 
 ## Friends, Blocks, and Alerts
 
-Echo-Chat includes social tools so users can manage who they talk to.
+Hui Chat includes social tools so users can manage who they talk to.
 
 Social features include:
 
@@ -171,7 +175,7 @@ Profile features include:
 
 ## File Sharing
 
-Echo-Chat includes multiple ways to share files.
+Hui Chat includes multiple ways to share files.
 
 File-sharing features include:
 
@@ -187,7 +191,7 @@ File-sharing features include:
 ## Torrent and Magnet Tools
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/1a0f73b1-4916-4aa3-9fdb-72d0e746cf10" />
 
-Echo-Chat includes torrent and magnet helper tools for chat rooms.
+Hui Chat includes torrent and magnet helper tools for chat rooms.
 
 Torrent features include:
 
@@ -208,7 +212,7 @@ Server owners are responsible for how torrent and file-sharing features are conf
 ## Room Radio
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/65b15de8-fa30-482f-9536-3d2c154c9622" />
 
-Echo-Chat includes room radio so users can listen while chatting.
+Hui Chat includes room radio so users can listen while chatting.
 
 Room radio features include:
 
@@ -229,7 +233,7 @@ Room radio features include:
 
 ## Voice and Webcam
 
-Echo-Chat includes built-in voice and webcam features.
+Hui Chat includes built-in voice and webcam features.
 
 Voice and webcam features include:
 
@@ -247,7 +251,7 @@ Voice and webcam features include:
 ## Admin Control Panel
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/fd41b4d3-a1df-4b7e-97d6-ef51f52449c7" />
 
-Echo-Chat includes a full Admin Panel for server owners and moderators.
+Hui Chat includes a full admin panel for server owners and moderators.
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/e8e24a75-f2cb-4d48-92b6-0b19f06a8a6d" />
 
 Admin features include:
@@ -279,7 +283,7 @@ Admin features include:
 ## Admin Test Lab
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/1d8c6b3c-2b62-428c-be6b-ab593d53e010" />
 
-Echo-Chat includes an Admin Test Lab to help check the server before release or public use.
+Hui Chat includes an Admin Test Lab to help check the server before release or public use.
 
 Test Lab features include:
 
@@ -291,9 +295,9 @@ Test Lab features include:
 * Exportable test results
 * Hidden/randomized test link for admins
 
-## Mobile Support (Alpha as Fu@@)
+## Mobile Support (Alpha)
 
-Echo-Chat has mobile-friendly layouts for phones and small screens.
+Hui Chat has mobile-friendly layouts for phones and small screens.
 
 Mobile features include:
 
@@ -312,7 +316,7 @@ Mobile features include:
 ## Setup and Server Tools
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/fe86a461-9e65-4ada-83e9-5bd3793f9de5" />
 
-Echo-Chat includes tools to help server owners set up, check, and release the project.
+Hui Chat includes tools to help server owners set up, check, and release the project.
 
 Server tools include:
 
@@ -337,7 +341,7 @@ Server tools include:
 
 ## Release and Handoff Tools
 
-Echo-Chat includes tools to help package and verify a release before handing it off or running it publicly.
+Hui Chat includes tools to help package and verify a release before handing it off or running it publicly.
 
 Release tools include:
 
@@ -353,9 +357,13 @@ Release tools include:
 * Admin handoff guide
 * Operator first-run guide
 
+## Naming
+
+The product’s official name is **Hui Chat**. **Hui** is pronounced **“Hoo-ee”** and may be used as the shorter logo or app name.
+
 ## Tech Stack
 
-Echo-Chat is built with:
+Hui Chat is built with:
 
 * Python
 * Flask
@@ -373,7 +381,7 @@ Echo-Chat is built with:
 
 ## Status
 
-Echo-Chat is currently in **beta**.
+Hui Chat—shortened to **Hui** in some interface and branding elements—is currently in **beta**.
 
 The project is being tested feature-by-feature before a full public release.
 
