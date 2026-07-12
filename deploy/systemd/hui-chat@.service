@@ -1,0 +1,52 @@
+# Hui Chat systemd template for multiple one-worker instances
+#
+# Preferred path:
+#   python main.py --write-deployment-kit
+#
+# Install example:
+#   sudo cp deploy/systemd/hui-chat@.service /etc/systemd/system/hui-chat@.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now hui-chat@5000 hui-chat@5001
+#
+# The instance name is the backend port. Keep every process at one Gunicorn
+# worker. For 10 instances use ports such as 5000-5009 behind sticky reverse-
+# proxy routing and configure HUI_SOCKETIO_MESSAGE_QUEUE=redis://127.0.0.1:6379/1.
+
+[Unit]
+Description=Hui Chat one-worker instance on port %i
+After=network-online.target redis.service
+Wants=network-online.target redis.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/hui/hui-chat
+EnvironmentFile=/etc/hui/hui-chat.env
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=/opt/hui/hui-chat/.venv/bin/python tools/config_doctor.py --config /opt/hui/hui-chat/server_config.json
+ExecStartPre=/opt/hui/hui-chat/.venv/bin/python main.py --config /opt/hui/hui-chat/server_config.json --redis-socketio-check
+# Bind overrides live in ExecStart so EnvironmentFile cannot force every instance back to port 5000.
+ExecStart=/usr/bin/env HUI_CONFIG=/opt/hui/hui-chat/server_config.json HUI_BIND=127.0.0.1:%i HUI_PRODUCTION_BIND=127.0.0.1:%i HUI_PRODUCTION_WORKERS=1 HUI_WORKERS=1 /opt/hui/hui-chat/.venv/bin/python main.py --production
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=25
+
+User=hui
+Group=hui
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=full
+RestrictSUIDSGID=true
+LockPersonality=true
+
+ReadWritePaths=/opt/hui/hui-chat/logs
+ReadWritePaths=/opt/hui/hui-chat/uploads
+ReadWritePaths=/opt/hui/hui-chat/private_uploads
+ReadWritePaths=/opt/hui/hui-chat/instance
+ReadWritePaths=/opt/hui/hui-chat/static/uploads
+ReadWritePaths=/opt/hui/hui-chat/server_config.json
+
+[Install]
+WantedBy=multi-user.target

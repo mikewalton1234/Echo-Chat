@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 if [[ ! -f "main.py" ]]; then
-  echo "Echo-Chat main.py not found in: $ROOT_DIR" >&2
+  echo "Hui Chat main.py not found in: $ROOT_DIR" >&2
   exit 1
 fi
 
@@ -22,13 +22,13 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
   set +a
 fi
 
-export ECHOCHAT_CONFIG="${ECHOCHAT_CONFIG:-$ROOT_DIR/server_config.json}"
-export ECHOCHAT_RUN_MODE="${ECHOCHAT_RUN_MODE:-production}"
-export ECHOCHAT_PRODUCTION_MODE="${ECHOCHAT_PRODUCTION_MODE:-1}"
-export ECHOCHAT_WORKERS="${ECHOCHAT_WORKERS:-1}"
-export ECHOCHAT_PRODUCTION_WORKERS="${ECHOCHAT_PRODUCTION_WORKERS:-$ECHOCHAT_WORKERS}"
-export ECHOCHAT_SOCKETIO_ASYNC="${ECHOCHAT_SOCKETIO_ASYNC:-threading}"
-export ECHOCHAT_GUNICORN_WORKER_CLASS="${ECHOCHAT_GUNICORN_WORKER_CLASS:-gthread}"
-export ECHOCHAT_FORWARDED_ALLOW_IPS="${ECHOCHAT_FORWARDED_ALLOW_IPS:-127.0.0.1}"
+export HUI_CONFIG="${HUI_CONFIG:-$ROOT_DIR/server_config.json}"
+export HUI_RUN_MODE="${HUI_RUN_MODE:-production}"
+export HUI_PRODUCTION_MODE="${HUI_PRODUCTION_MODE:-1}"
+export HUI_WORKERS="${HUI_WORKERS:-1}"
+export HUI_PRODUCTION_WORKERS="${HUI_PRODUCTION_WORKERS:-$HUI_WORKERS}"
+export HUI_SOCKETIO_ASYNC="${HUI_SOCKETIO_ASYNC:-threading}"
+export HUI_GUNICORN_WORKER_CLASS="${HUI_GUNICORN_WORKER_CLASS:-gthread}"
+export HUI_FORWARDED_ALLOW_IPS="${HUI_FORWARDED_ALLOW_IPS:-127.0.0.1}"
 
 exec python main.py --production

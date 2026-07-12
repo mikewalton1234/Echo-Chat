@@ -1,4 +1,4 @@
-"""Central Socket.IO abuse guardrails for Echo-Chat.
+"""Central Socket.IO abuse guardrails for Hui Chat.
 
 These helpers are deliberately dependency-light so they work in tests and in the
 split realtime handler modules. They cover the controls that are easy to miss
@@ -9,7 +9,7 @@ when adding a new Socket.IO event:
 * conservative connection/session ceilings;
 * low-detail audit messages for denied realtime traffic.
 
-The limits are still backed by Echo-Chat's existing simple in-process limiter.
+The limits are still backed by Hui Chat's existing simple in-process limiter.
 Public beta startup already requires shared Redis-backed HTTP limits; these
 Socket.IO guards provide a second line of defence and clear static coverage.
 """

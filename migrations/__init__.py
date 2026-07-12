@@ -1,1 +1,1 @@
-"""EchoChat migration package."""
+"""HuiChat migration package."""

@@ -34,7 +34,7 @@ from database import (
 from security import log_audit_event
 from permissions import check_user_permission
 from moderation import is_user_sanctioned, mute_user
-from echo_voice_protocol import echo_voice_bool, echo_voice_room_capacity, echo_voice_room_limit
+from hui_voice_protocol import hui_voice_bool, hui_voice_room_capacity, hui_voice_room_limit
 
 from realtime.state import *
 
@@ -46,7 +46,7 @@ def register(socketio, settings, ctx):
 
     def _voice_feature_enabled() -> bool:
         """Return whether room/DM voice signaling is enabled by admin settings."""
-        return echo_voice_bool(settings, "voice_enabled", True)
+        return hui_voice_bool(settings, "voice_enabled", True)
 
     def _voice_disabled_payload() -> dict:
         return {"success": False, "error": "Voice is disabled by admin policy", "error_code": "voice_disabled"}
@@ -65,7 +65,7 @@ def register(socketio, settings, ctx):
 
     def _voice_socketio_queue_configured() -> bool:
         try:
-            queue = str(current_app.config.get("ECHOCHAT_SOCKETIO_MESSAGE_QUEUE") or "").strip()
+            queue = str(current_app.config.get("HUI_SOCKETIO_MESSAGE_QUEUE") or "").strip()
             if queue:
                 return True
         except Exception:
@@ -216,7 +216,7 @@ def register(socketio, settings, ctx):
         return bool(default)
 
     def _group_voice_id(room: str) -> int | None:
-        """Return group id for EchoChat group voice rooms like group_123."""
+        """Return group id for HuiChat group voice rooms like group_123."""
         m = re.match(r"^group_(\d+)$", str(room or "").strip())
         if not m:
             return None
@@ -306,7 +306,7 @@ def register(socketio, settings, ctx):
             join_room(room)
 
         ok2, err2, roster = _voice_room_add(room, username)
-        capacity = echo_voice_room_capacity(len(roster), settings)
+        capacity = hui_voice_room_capacity(len(roster), settings)
         limit = int(capacity.get("limit") or 0)
         if not ok2:
             payload = {
@@ -328,7 +328,7 @@ def register(socketio, settings, ctx):
 
         # Push roster to the joiner; notify others.  Viewer-only webcam watchers
         # join the signaling mesh but must not be advertised as speaking/voice-on.
-        capacity = echo_voice_room_capacity(len(roster), settings)
+        capacity = hui_voice_room_capacity(len(roster), settings)
         media_status_update(room, username, voice_on=voice_on)
         media_map = media_status_for_room(room)
         emit("voice_room_roster", {"room": room, "users": roster, "limit": int(capacity.get("limit") or 0), "capacity": capacity, "media_status": media_map}, to=sid)
@@ -391,7 +391,7 @@ def register(socketio, settings, ctx):
         except Exception:
             pass
         roster = _voice_room_users(room)
-        capacity = echo_voice_room_capacity(len(roster), settings)
+        capacity = hui_voice_room_capacity(len(roster), settings)
         emit("voice_room_roster", {"room": room, "users": roster, "limit": int(capacity.get("limit") or 0), "capacity": capacity}, to=sid)
         return {"success": True}
 
@@ -409,15 +409,15 @@ def register(socketio, settings, ctx):
             return {"success": False, "error": "Rate limited", "retry_after": retry}
         return None
 
-    # Echo webcam viewer policy helpers. EchoChat keeps the policy/approval
+    # Hui webcam viewer policy helpers. HuiChat keeps the policy/approval
     # source of truth here; the camera owner browser mirrors approved viewers
-    # into Echo webcam's track-subscription permissions so unapproved viewers
+    # into Hui webcam's track-subscription permissions so unapproved viewers
     # do not receive camera tracks.
     def _webcam_policy():
         # Compatibility policy for old webcam-control events.  The active media
-        # engine is Echo built-in WebRTC; this local policy avoids any external
+        # engine is Hui built-in WebRTC; this local policy avoids any external
         # media-server dependency.
-        enabled = echo_voice_bool(settings, "webcam_enabled", echo_voice_bool(settings, "echo_webcam_enabled", True))
+        enabled = hui_voice_bool(settings, "webcam_enabled", hui_voice_bool(settings, "hui_webcam_enabled", True))
         raw_mode = str(settings.get("webcam_approval_mode") or settings.get("webcam_approval_mode") or "owner_approval").strip().lower().replace("-", "_")
         if not enabled or raw_mode in {"disabled", "blocked", "off"}:
             approval_mode = "disabled"
@@ -523,7 +523,7 @@ def register(socketio, settings, ctx):
         return sorted(set(changed))
 
     def _webcam_room_member(room: str, username: str) -> bool:
-        """Fail-closed live-room target check for Echo webcam controls."""
+        """Fail-closed live-room target check for Hui webcam controls."""
         room = str(room or "").strip()
         username = str(username or "").strip()
         if not room or not username:
@@ -543,8 +543,8 @@ def register(socketio, settings, ctx):
             return True, None
         return False, {"success": False, "error": f"{label} not in room", "error_code": "webcam_target_not_in_room"}
 
-    # Echo webcam webcam view request controls. These events are deliberately
-    # server-relayed through the existing EchoChat room membership layer so a
+    # Hui webcam webcam view request controls. These events are deliberately
+    # server-relayed through the existing HuiChat room membership layer so a
     # camera owner can approve/deny/kick viewers in the GUI.
     @socketio.on("webcam_status")
     @jwt_required()

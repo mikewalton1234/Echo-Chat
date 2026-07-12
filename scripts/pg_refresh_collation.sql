@@ -1,7 +1,7 @@
--- Echo-Chat: Refresh collation version + reindex (fixes glibc collation mismatch warnings)
+-- Hui Chat: Refresh collation version + reindex (fixes glibc collation mismatch warnings)
 --
 -- Usage:
---   sudo -u postgres psql -d echo_db -f scripts/pg_refresh_collation.sql
+--   sudo -u postgres psql -d hui_db -f scripts/pg_refresh_collation.sql
 \set ON_ERROR_STOP on
 
 DO $$

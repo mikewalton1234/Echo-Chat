@@ -3,7 +3,7 @@
 -- After running this, you can retry creating the case-insensitive unique index.
 --
 -- Usage:
---   sudo -u postgres psql -d echo_db -f scripts/pg_dedupe_emails_set_null.sql
+--   sudo -u postgres psql -d hui_db -f scripts/pg_dedupe_emails_set_null.sql
 \set ON_ERROR_STOP on
 
 WITH ranked AS (

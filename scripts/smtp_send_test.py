@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """smtp_send_test.py
 
-Quick one-off test for Echo-Chat SMTP settings in server_config.json.
+Quick one-off test for Hui Chat SMTP settings in server_config.json.
 
 Usage:
   python scripts/smtp_send_test.py you@domain.com

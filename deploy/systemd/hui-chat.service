@@ -1,0 +1,59 @@
+# Hui Chat systemd unit (single instance)
+#
+# Preferred path:
+#   python main.py --write-deployment-kit
+#
+# This static template is safe for a default /opt install, but the generated
+# deployment kit is better because it fills in your exact paths/settings.
+#
+# Install:
+#   sudo cp deploy/systemd/hui-chat.service /etc/systemd/system/hui-chat.service
+#   sudo mkdir -p /etc/hui
+#   sudo cp deploy/systemd/hui-chat.env.example /etc/hui/hui-chat.env
+#   sudo chown root:hui /etc/hui/hui-chat.env
+#   sudo chmod 640 /etc/hui/hui-chat.env
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now hui
+#
+# Notes:
+# - Adjust WorkingDirectory, python path, and config path to your install.
+# - Keep one Gunicorn worker per Hui Chat process. Scale with hui-chat@.service.
+# - Keep the Redis Socket.IO gate; it blocks unsafe multi-instance topology.
+
+[Unit]
+Description=Chat server powered by Hui Chat
+After=network-online.target redis.service
+Wants=network-online.target redis.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/hui/hui-chat
+EnvironmentFile=/etc/hui/hui-chat.env
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=/opt/hui/hui-chat/.venv/bin/python tools/config_doctor.py --config /opt/hui/hui-chat/server_config.json
+ExecStartPre=/opt/hui/hui-chat/.venv/bin/python main.py --config /opt/hui/hui-chat/server_config.json --redis-socketio-check
+ExecStart=/usr/bin/env HUI_CONFIG=/opt/hui/hui-chat/server_config.json HUI_PRODUCTION_WORKERS=1 HUI_WORKERS=1 /opt/hui/hui-chat/.venv/bin/python main.py --production
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=25
+
+User=hui
+Group=hui
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=full
+RestrictSUIDSGID=true
+LockPersonality=true
+
+ReadWritePaths=/opt/hui/hui-chat/logs
+ReadWritePaths=/opt/hui/hui-chat/uploads
+ReadWritePaths=/opt/hui/hui-chat/private_uploads
+ReadWritePaths=/opt/hui/hui-chat/instance
+ReadWritePaths=/opt/hui/hui-chat/static/uploads
+ReadWritePaths=/opt/hui/hui-chat/server_config.json
+
+[Install]
+WantedBy=multi-user.target

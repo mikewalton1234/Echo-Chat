@@ -1,4 +1,4 @@
-# Echo-Chat Caddy reverse proxy example
+# Hui Chat Caddy reverse proxy example
 #
 # Safe default: LAN-only HTTP helper. This works for home/LAN testing and will
 # not request a public TLS certificate for a fake placeholder domain.
@@ -11,7 +11,7 @@
 http://:8080 {
     encode zstd gzip
 
-    # Echo-Chat backend. Keep the raw app port private when using a proxy.
+    # Hui Chat backend. Keep the raw app port private when using a proxy.
     reverse_proxy http://127.0.0.1:5000 {
         header_up Host {host}
         header_up X-Real-IP {remote_host}
@@ -20,5 +20,5 @@ http://:8080 {
     }
 
     # Health probes are proxied by the catch-all reverse_proxy above.
-    # Default Echo-Chat health path: /health
+    # Default Hui Chat health path: /health
 }

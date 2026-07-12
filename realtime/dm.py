@@ -107,7 +107,7 @@ def register(socketio, settings, ctx):
         return raw
 
     def _looks_like_dm_cipher_envelope(value) -> bool:
-        """Accept only the EC1 hybrid envelope shape produced by the Echo-Chat browser client.
+        """Accept only the EC1 hybrid envelope shape produced by the Hui Chat browser client.
 
         This is a server-side relay/storage boundary, not decryption. The server
         validates the non-secret envelope structure so plaintext cannot be shoved
@@ -129,7 +129,7 @@ def register(socketio, settings, ctx):
             return False
         if env.get("v") != 1 or env.get("alg") != "RSA-OAEP+AES-GCM":
             return False
-        # ek is an RSA-OAEP-wrapped AES key. Echo-Chat normally uses 2048-bit
+        # ek is an RSA-OAEP-wrapped AES key. Hui Chat normally uses 2048-bit
         # account RSA keys (256 bytes), but accept a bounded range for future
         # 3072/4096-bit upgrades without code churn.
         if _dm_b64_field(env.get("ek"), min_bytes=128, max_bytes=512) is None:

@@ -1,0 +1,48 @@
+# Hui Chat janitor service
+#
+# Run exactly one cleanup process when the chat server is served by Gunicorn or
+# multiple one-worker instances. Do not start one janitor per web instance.
+#
+# Preferred path:
+#   python main.py --write-deployment-kit
+#
+# Install:
+#   sudo cp deploy/systemd/hui-chat-janitor.service /etc/systemd/system/hui-chat-janitor.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now hui-chat-janitor
+
+[Unit]
+Description=Chat server janitor for Hui Chat deployments
+After=network-online.target redis.service
+Wants=network-online.target redis.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/hui/hui-chat
+EnvironmentFile=/etc/hui/hui-chat.env
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=/opt/hui/hui-chat/.venv/bin/python tools/config_doctor.py --config /opt/hui/hui-chat/server_config.json
+ExecStart=/opt/hui/hui-chat/.venv/bin/python janitor_runner.py --config /opt/hui/hui-chat/server_config.json
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=25
+
+User=hui
+Group=hui
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=full
+RestrictSUIDSGID=true
+LockPersonality=true
+
+ReadWritePaths=/opt/hui/hui-chat/logs
+ReadWritePaths=/opt/hui/hui-chat/uploads
+ReadWritePaths=/opt/hui/hui-chat/private_uploads
+ReadWritePaths=/opt/hui/hui-chat/instance
+ReadWritePaths=/opt/hui/hui-chat/static/uploads
+
+[Install]
+WantedBy=multi-user.target

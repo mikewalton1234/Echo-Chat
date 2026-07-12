@@ -1616,12 +1616,24 @@ def register(socketio, settings, ctx):
                         emit("notification", {"room": room, "message": "⛔ 18+ room (age restriction)."}, to=sid)
                         return {"success": False, "error": "age_restricted"}
 
-            ok, err = _require_not_sanctioned(username, action="join")
+            try:
+                ok, err = _require_not_sanctioned(username, action="join")
+            except Exception:
+                # Moderation DB error: fail-closed — deny join rather than let an
+                # unknown-sanctions user through.
+                emit("notification", {"room": room, "message": "⚠️ Could not verify account status. Please try again."}, to=sid)
+                return {"success": False, "error": "sanctions_check_failed"}
             if not ok:
                 emit("notification", {"room": room, "message": err or "Join denied"}, to=sid)
                 return {"success": False, "error": err or "join_denied"}
 
-            if is_user_sanctioned(username, f"room_ban:{room}"):
+            try:
+                room_banned = is_user_sanctioned(username, f"room_ban:{room}")
+            except Exception:
+                # Fail-closed: deny room entry when ban state cannot be confirmed.
+                emit("notification", {"room": room, "message": "⚠️ Could not verify room access. Please try again."}, to=sid)
+                return {"success": False, "error": "room_ban_check_failed"}
+            if room_banned:
                 emit("notification", {"room": room, "message": "⛔ You are banned from this room."}, to=sid)
                 return {"success": False, "error": "room_banned"}
 
@@ -1912,7 +1924,7 @@ def register(socketio, settings, ctx):
     @socketio.on("get_room_history")
     @jwt_required()
     def handle_get_room_history(data):
-        """Fetch room history metadata while honoring Echo-Chat's no-room-history policy."""
+        """Fetch room history metadata while honoring Hui Chat's no-room-history policy."""
         data = data or {}
         username = get_jwt_identity()
         rejection = _reject_if_stale_socket_session(touch_activity=True)
@@ -3042,7 +3054,7 @@ def register(socketio, settings, ctx):
     def _room_message_mutation_disabled_response(action: str, room: str = "", message_id: str = "") -> dict:
         """Return the canonical disabled-policy response for retired room-message controls.
 
-        Echo-Chat room chat is intentionally live-only and immutable.  Users,
+        Hui Chat room chat is intentionally live-only and immutable.  Users,
         moderators, and admins are not allowed to edit, delete, or highlight room
         messages; future clients should treat these events as retired policy
         checks, not supported moderation actions.

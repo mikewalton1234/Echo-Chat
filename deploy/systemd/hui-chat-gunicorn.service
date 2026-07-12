@@ -1,0 +1,58 @@
+# Hui Chat systemd unit (direct Gunicorn single instance)
+#
+# Preferred path:
+#   python main.py --write-deployment-kit
+#
+# This direct-Gunicorn template is for advanced operators. The safer beginner
+# path is hui-chat.service, which launches through main.py --production.
+#
+# Install:
+#   sudo cp deploy/systemd/hui-chat-gunicorn.service /etc/systemd/system/hui-chat-gunicorn.service
+#   sudo mkdir -p /etc/hui
+#   sudo cp deploy/systemd/hui-chat.env.example /etc/hui/hui-chat.env
+#   sudo chown root:hui /etc/hui/hui-chat.env
+#   sudo chmod 640 /etc/hui/hui-chat.env
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now hui-chat-gunicorn
+#
+# Notes:
+# - Adjust WorkingDirectory, python/gunicorn paths, and config path to your install.
+# - Keep Gunicorn at one worker; use hui-chat@.service for multiple one-worker instances with Redis Socket.IO queue.
+
+[Unit]
+Description=Chat server powered by Hui Chat (Gunicorn single instance)
+After=network-online.target redis.service
+Wants=network-online.target redis.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/hui/hui-chat
+EnvironmentFile=/etc/hui/hui-chat.env
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=/opt/hui/hui-chat/.venv/bin/python tools/config_doctor.py --config /opt/hui/hui-chat/server_config.json
+ExecStartPre=/opt/hui/hui-chat/.venv/bin/python main.py --config /opt/hui/hui-chat/server_config.json --redis-socketio-check
+ExecStart=/usr/bin/env HUI_CONFIG=/opt/hui/hui-chat/server_config.json HUI_WORKERS=1 /opt/hui/hui-chat/.venv/bin/gunicorn -c /opt/hui/hui-chat/gunicorn_conf.py wsgi:app
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=25
+
+User=hui
+Group=hui
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=full
+RestrictSUIDSGID=true
+LockPersonality=true
+
+ReadWritePaths=/opt/hui/hui-chat/logs
+ReadWritePaths=/opt/hui/hui-chat/uploads
+ReadWritePaths=/opt/hui/hui-chat/private_uploads
+ReadWritePaths=/opt/hui/hui-chat/instance
+ReadWritePaths=/opt/hui/hui-chat/static/uploads
+ReadWritePaths=/opt/hui/hui-chat/server_config.json
+
+[Install]
+WantedBy=multi-user.target

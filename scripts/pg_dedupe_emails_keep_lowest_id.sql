@@ -3,8 +3,8 @@
 -- ⚠️ Review before running. This deletes user rows.
 --
 -- Usage:
---   sudo -u postgres psql -d echo_db -f scripts/pg_find_duplicate_emails.sql
---   sudo -u postgres psql -d echo_db -f scripts/pg_dedupe_emails_keep_lowest_id.sql
+--   sudo -u postgres psql -d hui_db -f scripts/pg_find_duplicate_emails.sql
+--   sudo -u postgres psql -d hui_db -f scripts/pg_dedupe_emails_keep_lowest_id.sql
 \set ON_ERROR_STOP on
 
 WITH ranked AS (

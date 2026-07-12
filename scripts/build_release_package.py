@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a sanitized Echo-Chat release package.
+"""Build a sanitized Hui Chat release package.
 
 This script is intentionally self-contained and stdlib-only so it can run from
 an extracted source folder before dependencies are installed. It creates:
@@ -101,7 +101,7 @@ EXCLUDED_GLOBS = (
     "*.tar.gz",
     "*.tgz",
     "*.sha256",
-    "Echo-Chat-v*.zip",
+    "Hui-Chat-v*.zip",
 )
 
 ALLOWED_DOTENV_TEMPLATES = {".env.example"}
@@ -246,7 +246,7 @@ def build_package(output_dir: Path, label: str) -> dict:
     version = _read_version()
     label = _slug(label)
     output_dir.mkdir(parents=True, exist_ok=True)
-    package_root = f"Echo-Chat-v{version}-{label}"
+    package_root = f"Hui-Chat-v{version}-{label}"
     zip_path = output_dir / f"{package_root}.zip"
     sha_path = output_dir / f"{zip_path.name}.sha256"
     manifest_path = output_dir / f"{package_root}.release_manifest.json"
@@ -267,7 +267,7 @@ def build_package(output_dir: Path, label: str) -> dict:
     sha_path.write_text(f"{zip_hash}  {zip_path.name}\n", encoding="utf-8")
 
     manifest = {
-        "project": "Echo-Chat",
+        "project": "Hui Chat",
         "version": version,
         "package_name": zip_path.name,
         "package_root": package_root,
@@ -302,7 +302,7 @@ def build_package(output_dir: Path, label: str) -> dict:
 
 
 def main(argv: Iterable[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build sanitized Echo-Chat release zip, checksum, and manifest")
+    parser = argparse.ArgumentParser(description="Build sanitized Hui Chat release zip, checksum, and manifest")
     parser.add_argument("--output-dir", default="dist", help="Directory where release artifacts will be written")
     parser.add_argument("--label", default="ui02-room-message-rendering", help="Package filename suffix after the version")
     parser.add_argument("--json", action="store_true", help="Print manifest JSON instead of a short human summary")

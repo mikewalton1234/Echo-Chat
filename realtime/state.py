@@ -1,4 +1,4 @@
-"""Shared runtime state for EchoChat Socket.IO handlers.
+"""Shared runtime state for HuiChat Socket.IO handlers.
 
 This module keeps the legacy in-process registries for compatibility while also
 optionally projecting the important presence / room-membership state into Redis
@@ -70,9 +70,9 @@ ROOM_ACTIVE_POLLS_LOCK = threading.Lock()
 VOICE_ROOMS: dict[str, set[str]] = {}
 VOICE_ROOMS_LOCK = threading.Lock()
 
-# Echo webcam webcam owner/viewer permissions — in-memory. The browser publisher
-# applies this state to Echo webcam track-subscription permissions so camera tracks
-# are blocked by the Echo webcam server unless EchoChat has approved the viewer.
+# Hui webcam webcam owner/viewer permissions — in-memory. The browser publisher
+# applies this state to Hui webcam track-subscription permissions so camera tracks
+# are blocked by the Hui webcam server unless HuiChat has approved the viewer.
 WEBCAM_PERMISSIONS: dict[str, dict[str, dict[str, object]]] = {}
 WEBCAM_PERMISSIONS_LOCK = threading.RLock()
 
@@ -163,7 +163,7 @@ def clear_room_slowmode_cache(room: str | None = None) -> None:
 _SHARED_STATE_LOCK = threading.Lock()
 _SHARED_STATE_CLIENT = None
 _SHARED_STATE_URL: str | None = None
-_SHARED_STATE_PREFIX = "echochat"
+_SHARED_STATE_PREFIX = "hui"
 _SHARED_STATE_SESSION_TTL_SECONDS = 300
 
 
@@ -206,12 +206,12 @@ def configure_shared_state(settings: dict | None = None) -> bool:
 
     settings = settings or {}
     prefix = (
-        os.environ.get("ECHOCHAT_SHARED_STATE_PREFIX")
+        os.environ.get("HUI_SHARED_STATE_PREFIX")
         or settings.get("shared_state_prefix")
-        or "echochat"
+        or "hui"
     )
     ttl_raw = (
-        os.environ.get("ECHOCHAT_SHARED_STATE_SESSION_TTL")
+        os.environ.get("HUI_SHARED_STATE_SESSION_TTL")
         or settings.get("shared_state_session_ttl_seconds")
         or 300
     )
@@ -221,17 +221,17 @@ def configure_shared_state(settings: dict | None = None) -> bool:
         ttl = 300
 
     # Shared realtime state intentionally requires its own explicit Redis URL.
-    # Do not silently reuse the Socket.IO pub/sub DB or generic REDIS_URL; Echo-Chat
+    # Do not silently reuse the Socket.IO pub/sub DB or generic REDIS_URL; Hui Chat
     # keeps Redis DB 0/1/2 separated for rate limits, Socket.IO, and shared state.
     url = (
-        os.environ.get("ECHOCHAT_SHARED_STATE_REDIS_URL")
+        os.environ.get("HUI_SHARED_STATE_REDIS_URL")
         or os.environ.get("SHARED_STATE_REDIS_URL")
         or settings.get("shared_state_redis_url")
         or ""
     ).strip()
 
     with _SHARED_STATE_LOCK:
-        _SHARED_STATE_PREFIX = str(prefix or "echochat").strip() or "echochat"
+        _SHARED_STATE_PREFIX = str(prefix or "hui").strip() or "hui"
         _SHARED_STATE_SESSION_TTL_SECONDS = ttl
 
         if not url or redis is None:

@@ -11,7 +11,7 @@ fi
 
 PYTHON_BIN="${PYTHON:-python}"
 
-echo "Installing Echo-Chat production dependencies into: $("$PYTHON_BIN" -c 'import sys; print(sys.executable)')"
+echo "Installing Hui Chat production dependencies into: $("$PYTHON_BIN" -c 'import sys; print(sys.executable)')"
 "$PYTHON_BIN" -m pip install --upgrade pip
 "$PYTHON_BIN" -m pip install -r requirements.txt
 
@@ -27,11 +27,11 @@ PY
 echo
 cat <<'MSG'
 Default production mode now uses:
-  ECHOCHAT_SOCKETIO_ASYNC=threading
-  ECHOCHAT_GUNICORN_WORKER_CLASS=gthread
-  ECHOCHAT_GUNICORN_THREADS=100
+  HUI_SOCKETIO_ASYNC=threading
+  HUI_GUNICORN_WORKER_CLASS=gthread
+  HUI_GUNICORN_THREADS=100
 
 Optional Eventlet mode is still possible for advanced installs:
   python -m pip install -r requirements-eventlet.txt
-  ECHOCHAT_SOCKETIO_ASYNC=eventlet ECHOCHAT_GUNICORN_WORKER_CLASS=eventlet python main.py --production
+  HUI_SOCKETIO_ASYNC=eventlet HUI_GUNICORN_WORKER_CLASS=eventlet python main.py --production
 MSG

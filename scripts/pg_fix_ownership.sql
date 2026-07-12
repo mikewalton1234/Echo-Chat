@@ -1,7 +1,7 @@
--- Echo-Chat: Fix table ownership so migrations can run
+-- Hui Chat: Fix table ownership so migrations can run
 --
 -- Usage (example):
---   sudo -u postgres psql -d echo_db -v new_owner=app_user -f scripts/pg_fix_ownership.sql
+--   sudo -u postgres psql -d hui_db -v new_owner=app_user -f scripts/pg_fix_ownership.sql
 --
 -- This will ALTER OWNER for all tables and sequences in schema public.
 \set ON_ERROR_STOP on

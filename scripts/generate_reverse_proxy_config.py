@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate Caddy/Nginx reverse proxy configs for Echo-Chat.
+"""Generate Caddy/Nginx reverse proxy configs for Hui Chat.
 
 Run from the project root:
     python scripts/generate_reverse_proxy_config.py --proxy all --output-dir deploy/generated-proxy
@@ -21,7 +21,7 @@ from reverse_proxy_generator import format_proxy_generation_report, write_proxy_
 
 def _fallback_settings() -> dict:
     return {
-        "server_name": "Echo-Chat",
+        "server_name": "Hui Chat",
         "server_host": "127.0.0.1",
         "server_port": 5000,
         "public_base_url": "https://chat.example.com",
@@ -44,7 +44,7 @@ def load_settings(path: Path) -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="generate Echo-Chat reverse proxy configs")
+    parser = argparse.ArgumentParser(description="generate Hui Chat reverse proxy configs")
     parser.add_argument("--config", default="server_config.json", help="path to server config JSON")
     parser.add_argument("--proxy", choices=["all", "caddy", "nginx"], default="all", help="which config to generate")
     parser.add_argument("--output-dir", default="deploy/generated-proxy", help="where to write generated config files")
