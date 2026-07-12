@@ -1,6 +1,6 @@
 """secrets_policy.py
 
-Central policy for whether EchoChat should persist *secrets* into server_config.json.
+Central policy for whether HuiChat should persist *secrets* into server_config.json.
 
 Why this exists:
 - In production you typically want secrets in environment variables or a secret manager,
@@ -11,8 +11,8 @@ Default behavior:
 - Production/public mode does *not* persist secrets unless explicitly allowed.
 
 Override persistence:
-  export ECHOCHAT_PERSIST_SECRETS=0  # never write secrets to server_config.json
-  export ECHOCHAT_PERSIST_SECRETS=1  # explicitly allow legacy config persistence
+  export HUI_PERSIST_SECRETS=0  # never write secrets to server_config.json
+  export HUI_PERSIST_SECRETS=1  # explicitly allow legacy config persistence
 """
 
 from __future__ import annotations
@@ -67,10 +67,10 @@ def _looks_production(settings: Dict[str, Any] | None) -> bool:
 def persist_secrets_enabled(settings: Dict[str, Any] | None = None) -> bool:
     """Whether secret values should be written into server_config.json.
 
-    Explicit ECHOCHAT_PERSIST_SECRETS always wins. Without that override, production
+    Explicit HUI_PERSIST_SECRETS always wins. Without that override, production
     and public deployments default to env/secret-manager-only secret storage.
     """
-    env_override = _env_bool("ECHOCHAT_PERSIST_SECRETS", None)
+    env_override = _env_bool("HUI_PERSIST_SECRETS", None)
     if env_override is not None:
         return bool(env_override)
     if _looks_production(settings):
@@ -137,9 +137,9 @@ SECRET_SETTING_KEYS = {
 
 
 # PostgreSQL DSN keys may be either non-secret local identifiers
-#   postgresql://linux_user@localhost:5432/echochat
+#   postgresql://linux_user@localhost:5432/hui_chat
 # or real secrets with embedded passwords
-#   postgresql://linux_user:password@db-host:5432/echochat
+#   postgresql://linux_user:password@db-host:5432/hui_chat
 # Keep passwordless local/LAN examples usable; scrub credential-bearing URLs.
 PASSWORDLESS_PERSISTABLE_POSTGRES_DSN_KEYS = {
     "database_url",

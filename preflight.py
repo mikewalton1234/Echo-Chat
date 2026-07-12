@@ -93,7 +93,7 @@ def _safe_int(value: Any, default: int, *, minimum: int | None = None, maximum: 
 
 
 def _resolve_worker_count(settings: dict) -> int:
-    for name in ("ECHOCHAT_WORKERS", "ECHOCHAT_PRODUCTION_WORKERS", "WEB_CONCURRENCY", "PRODUCTION_WORKERS"):
+    for name in ("HUI_WORKERS", "HUI_PRODUCTION_WORKERS", "WEB_CONCURRENCY", "PRODUCTION_WORKERS"):
         raw = os.environ.get(name)
         if raw:
             return _safe_positive_int(raw, 1)
@@ -105,7 +105,7 @@ def _resolve_worker_count(settings: dict) -> int:
 
 
 def _resolve_instance_count(settings: dict) -> int:
-    for name in ("ECHOCHAT_PRODUCTION_INSTANCES", "ECHOCHAT_INSTANCE_COUNT", "PRODUCTION_INSTANCES"):
+    for name in ("HUI_PRODUCTION_INSTANCES", "HUI_INSTANCE_COUNT", "PRODUCTION_INSTANCES"):
         raw = os.environ.get(name)
         if raw:
             return _safe_positive_int(raw, 1, maximum=10)
@@ -146,7 +146,7 @@ def _resolve_runtime_paths(settings: dict) -> dict[str, Path]:
 def _write_probe(path: Path) -> tuple[bool, str | None]:
     try:
         path.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(prefix=".echochat-preflight-", dir=str(path), delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(prefix=".hui-preflight-", dir=str(path), delete=False) as tmp:
             tmp.write(b"ok")
             probe = Path(tmp.name)
         try:
@@ -242,7 +242,7 @@ def _check_upload_surface(settings: dict) -> dict:
 
 
 def _resolve_message_queue(settings: dict) -> str | None:
-    for key in ("ECHOCHAT_SOCKETIO_MESSAGE_QUEUE", "SOCKETIO_MESSAGE_QUEUE"):
+    for key in ("HUI_SOCKETIO_MESSAGE_QUEUE", "SOCKETIO_MESSAGE_QUEUE"):
         v = (os.environ.get(key) or "").strip()
         if v:
             return v
@@ -363,7 +363,7 @@ def _check_runtime_paths(settings: dict) -> dict:
 
 
 def _resolve_shared_state_url(settings: dict) -> str | None:
-    for key in ("ECHOCHAT_SHARED_STATE_REDIS_URL", "SHARED_STATE_REDIS_URL"):
+    for key in ("HUI_SHARED_STATE_REDIS_URL", "SHARED_STATE_REDIS_URL"):
         v = (os.environ.get(key) or "").strip()
         if v:
             return v
@@ -476,13 +476,13 @@ def _check_media_mode(settings: dict) -> dict:
     return _status(
         "media_mode",
         "ok" if bool(decision.get("voice_enabled")) else "disabled",
-        str(decision.get("label") or "Echo media mode ready"),
+        str(decision.get("label") or "Hui media mode ready"),
         requested_av_mode=decision.get("requested_mode"),
         active_av_mode=decision.get("mode"),
         webcam_enabled=bool(features.get("webcam")),
         microphone_enabled=bool(features.get("microphone")),
         webcam_policy=policy,
-        transport="echo-webrtc-mesh",
+        transport="hui-webrtc-mesh",
     )
 
 def _check_health_endpoint(settings: dict) -> dict:

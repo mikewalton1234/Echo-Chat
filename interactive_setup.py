@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """interactive_setup.py
 
-Echo-Chat setup wizard.
+Hui Chat setup wizard.
 
-This project uses a focused numbered setup flow for the settings Echo-Chat needs
+This project uses a focused numbered setup flow for the settings Hui Chat needs
 at runtime: database DSN, bind host/port, JWT secret, cookies, mail, abuse
 controls, media, voice, hosting mode, diagnostics, and initial DB-backed admin
 accounts.
 
-The wizard compacts saved JSON to known Echo-Chat runtime keys so
+The wizard compacts saved JSON to known Hui Chat runtime keys so
 server_config.json stays readable and avoids legacy setup clutter.
 """
 
@@ -85,13 +85,13 @@ from db.bootstrap import (
     build_postgres_dsn,
     delete_database_via_bootstrap,
     discover_existing_server_database_dsn as _discover_existing_server_database_dsn_impl,
-    discover_echochat_database_candidates as _discover_echochat_database_candidates_impl,
+    discover_hui_database_candidates as _discover_hui_database_candidates_impl,
     dsn_parts,
     ensure_database_ready,
     ensure_database_ready_via_local_admin as _ensure_database_ready_via_local_admin_impl,
     is_protected_database_name,
     target_database_status as _target_database_status_impl,
-    validate_echochat_database as _validate_echochat_database_impl,
+    validate_hui_database as _validate_hui_database_impl,
 )
 
 
@@ -117,17 +117,17 @@ def _set_active_setup_server_name(value: Any) -> None:
 def _brand_ui_text(value: Any, settings: Optional[Dict[str, Any]] = None) -> str:
     """Normalize old visible project labels without hiding the server-name distinction.
 
-    Echo-Chat is the project/software name. ``server_name`` is the admin-chosen
+    Hui Chat is the project/software name. ``server_name`` is the admin-chosen
     public name of this specific chat server. This helper fixes stale legacy
     project labels, but it no longer rewrites every project reference into the
     server display name.
     """
     text = str(value)
     return (
-        text.replace("Echo Messenger", PROJECT_NAME)
-            .replace("Echo Chat Server", f"{PROJECT_NAME} server")
-            .replace("Echo Chat", PROJECT_NAME)
-            .replace("EchoChat", PROJECT_NAME)
+        text.replace("Hui Messenger", PROJECT_NAME)
+            .replace("Hui Chat Server", f"{PROJECT_NAME} server")
+            .replace("Hui Chat", PROJECT_NAME)
+            .replace("HuiChat", PROJECT_NAME)
     )
 
 
@@ -180,7 +180,7 @@ _RUNTIME_CONFIG_DEFAULTS: Dict[str, Any] = {
     "admin_socket_write_rate_limit": 60,
     "admin_socket_write_rate_window_sec": 60,
     "shared_state_redis_url": "redis://127.0.0.1:6379/2",
-    "shared_state_prefix": "echochat",
+    "shared_state_prefix": "hui",
     "shared_state_session_ttl_seconds": 300,
     "socketio_client_url": "/static/vendor/socket.io.min.js",
     "api_rate_limit_write_guard": "300 per minute",
@@ -215,7 +215,7 @@ _RUNTIME_CONFIG_DEFAULTS: Dict[str, Any] = {
     "voice_echo_cancellation": True,
     "voice_auto_gain_control": True,
     "voice_default_push_to_talk": True,
-    "echo_media_transport": "echo-webrtc-mesh",
+    "hui_media_transport": "hui-webrtc-mesh",
     "torrent_public_fallback_scrape_enabled": True,
     "torrent_public_fallback_trackers": [
         "udp://tracker.opentrackr.org:1337/announce",
@@ -257,7 +257,7 @@ def _saved_setting_keys(template: Optional[Dict[str, Any]] = None) -> list[str]:
 
 
 def get_default_settings() -> Dict[str, Any]:
-    """Return a compact set of defaults for EchoChat.
+    """Return a compact set of defaults for HuiChat.
 
     Notes:
       - Keep secrets out of JSON when possible; prefer env vars.
@@ -350,11 +350,11 @@ def get_default_settings() -> Dict[str, Any]:
         "reverse_proxy_backend_port": 5000,
         "reverse_proxy_output_dir": "deploy/generated-proxy",
         "deployment_kit_output_dir": "deploy/generated-deployment",
-        "systemd_service_user": "echochat",
-        "systemd_service_group": "echochat",
-        "systemd_working_directory": "/opt/echochat/Echo-Chat-main",
-        "systemd_python": "/opt/echochat/Echo-Chat-main/.venv/bin/python",
-        "systemd_env_file": "/etc/echochat/echochat.env",
+        "systemd_service_user": "hui",
+        "systemd_service_group": "hui",
+        "systemd_working_directory": "/opt/hui/hui-chat",
+        "systemd_python": "/opt/hui/hui-chat/.venv/bin/python",
+        "systemd_env_file": "/etc/hui/hui-chat.env",
 
         # ── Email (SMTP relay; password reset) ───────────────────────────
         "smtp_enabled": False,
@@ -472,7 +472,7 @@ def get_default_settings() -> Dict[str, Any]:
         "emoticons_boot_preload_concurrency": 4,
         "emoticons_catalog_cache_seconds": 86400,
         "emoticons_custom_entries": [],
-        "sound_pack_default": "echo_modern_generated",
+        "sound_pack_default": "hui_modern_generated",
         "sound_theme_default": "soft_chime",
         "sound_event_dm": "mellow_pluck",
         "sound_event_room_message": "soft_chime",
@@ -632,14 +632,14 @@ def get_default_settings() -> Dict[str, Any]:
         "voice_dm_invite_ttl_seconds": 30,
         "voice_dm_active_ttl_seconds": 120,
 
-        # ── Echo built-in media / webcam ─────────────────────────────────
+        # ── Hui built-in media / webcam ─────────────────────────────────
         # Room voice and webcam controls use the built-in browser WebRTC path.
         # No external media server is required.
-        "av_mode": "echo",  # echo | standard
+        "av_mode": "hui",  # hui | standard
         "webcam_enabled": True,
-        "echo_webcam_enabled": True,
+        "hui_webcam_enabled": True,
         "webcam_quality": "balanced",
-        "echo_webcam_quality": "balanced",
+        "hui_webcam_quality": "balanced",
         "webcam_codec_strategy": "prefer-compatible",
         "webcam_approval_mode": "owner_approval",  # owner_approval | open | disabled
         "webcam_max_viewers": 0,  # 0 means unlimited
@@ -711,7 +711,7 @@ def _promote_alias(settings: Dict[str, Any], canonical: str, *aliases: str) -> N
 def normalize_setup_settings(settings: Dict[str, Any] | None) -> Dict[str, Any]:
     """Normalize old saved config keys before setup/runtime defaults are applied.
 
-    Older EchoChat builds and hand-edited configs may contain legacy aliases such
+    Older HuiChat builds and hand-edited configs may contain legacy aliases such
     as ``host`` instead of ``server_host`` or ``jwt_secret_key`` instead of
     ``jwt_secret``. The setup wizard must treat those saved values as the
     default answer when an admin does not edit a section. This helper promotes
@@ -801,19 +801,18 @@ def normalize_setup_settings(settings: Dict[str, Any] | None) -> Dict[str, Any]:
     _promote_alias(out, "webrtc_ice_servers", "p2p_ice_servers", "p2p_ice", "ice_servers")
     _promote_alias(out, "ice_servers", "p2p_ice_servers", "p2p_ice", "webrtc_ice_servers")
 
-    # Echo A/V mode aliases and consistency. Older built-in/WebRTC labels are
-    # normalized to the current Echo media mode.
+    # Generic WebRTC/built-in labels are normalized to the Hui media mode.
     raw_mode = str(out.get("av_mode") or "").strip().lower().replace("-", "_")
     if raw_mode in {"webrtc", "built_in", "builtin"}:
-        raw_mode = "echo"
-    if raw_mode not in {"standard", "echo"}:
-        raw_mode = "echo" if bool(out.get("webcam_enabled", out.get("echo_webcam_enabled", True))) else "standard"
+        raw_mode = "hui"
+    if raw_mode not in {"standard", "hui"}:
+        raw_mode = "hui" if bool(out.get("webcam_enabled", out.get("hui_webcam_enabled", True))) else "standard"
     out["av_mode"] = raw_mode
-    out["webcam_enabled"] = bool(out.get("webcam_enabled", out.get("echo_webcam_enabled", raw_mode == "echo")))
-    out["echo_webcam_enabled"] = bool(out["webcam_enabled"])
+    out["webcam_enabled"] = bool(out.get("webcam_enabled", out.get("hui_webcam_enabled", raw_mode == "hui")))
+    out["hui_webcam_enabled"] = bool(out["webcam_enabled"])
     if raw_mode == "standard":
         out["webcam_enabled"] = False
-        out["echo_webcam_enabled"] = False
+        out["hui_webcam_enabled"] = False
     out["webcam_approval_mode"] = str(out.get("webcam_approval_mode") or "owner_approval").strip() or "owner_approval"
     try:
         out["webcam_max_viewers"] = max(0, int(out.get("webcam_max_viewers") or 0))
@@ -821,8 +820,21 @@ def normalize_setup_settings(settings: Dict[str, Any] | None) -> Dict[str, Any]:
         out["webcam_max_viewers"] = 0
     out["default_media_policy"] = str(out.get("default_media_policy") or "user_choice").strip() or "user_choice"
 
+    # Reconcile a real public HTTPS production configuration before saving.
+    # A stale/default hosting_mode=lan must not leave public deployments with
+    # local-only memory:// rate limiting and then fail during WSGI startup.
+    public_url = str(out.get("public_base_url") or "").strip()
+    run_mode = str(out.get("run_mode") or "").strip().lower()
+    production_mode = bool(out.get("production_mode", False)) or run_mode in {"production", "prod"}
+    if production_mode and public_url.lower().startswith("https://"):
+        from urllib.parse import urlparse
+
+        parsed_public = urlparse(public_url)
+        if parsed_public.scheme == "https" and parsed_public.hostname:
+            out = apply_hosting_mode_preset(out, "public_beta", public_url)
+
     # Automatically fill the Redis DB split when the admin chooses multiple
-    # one-worker Echo-Chat instances. Admins should not need to memorize DB 0/1/2.
+    # one-worker Hui Chat instances. Admins should not need to memorize DB 0/1/2.
     apply_scaled_runtime_safety_defaults(out)
 
     # Compatibility mirrors that are derived from current-minute controls.
@@ -980,7 +992,7 @@ def _smtp_from_setup_error(provider: str, from_value: str) -> str | None:
 
     Setup cannot call every provider API to prove verification. It can, however,
     refuse the exact class of mistake that just broke delivery: using an
-    EchoChat/sample/local/login address instead of a real verified sender.
+    HuiChat/sample/local/login address instead of a real verified sender.
     """
 
     provider_name = str(provider or "SMTP provider").strip() or "SMTP provider"
@@ -994,7 +1006,7 @@ def _smtp_from_setup_error(provider: str, from_value: str) -> str | None:
             "From address looks like a placeholder, local address, or provider login. "
             f"Use a sender that is actually verified in {provider_name}. "
             "For Brevo, check Settings > Senders, domains, IPs and use one of those verified senders. "
-            "Do not use noreply@echochat.com, no-reply@yourdomain.com, localhost, or the Brevo SMTP login address."
+            "Do not use no-reply@yourdomain.com, no-reply@yourdomain.com, localhost, or the Brevo SMTP login address."
         )
     return f"From address is not safe for reliable delivery: {warning}"
 
@@ -1052,7 +1064,7 @@ def _smtp_setup_errors(merged: Dict[str, Any]) -> list[str]:
     if not str(cfg.get("username") or "").strip():
         errors.append("SMTP is enabled, but SMTP username is missing. Password-reset email requires authenticated SMTP.")
     if not str(cfg.get("password") or ""):
-        errors.append("SMTP is enabled, but SMTP password is missing. Store it in config or set ECHOCHAT_SMTP_PASSWORD / SMTP_PASSWORD before testing or saving.")
+        errors.append("SMTP is enabled, but SMTP password is missing. Store it in config or set HUI_SMTP_PASSWORD / SMTP_PASSWORD before testing or saving.")
     from_problem = _smtp_from_setup_error(str(cfg.get("provider") or merged.get("smtp_provider") or ""), str(cfg.get("from_email") or merged.get("smtp_from") or ""))
     if from_problem:
         errors.append(from_problem)
@@ -1114,19 +1126,19 @@ def _tui_require_verified_smtp_from(stdscr, merged: Dict[str, Any]) -> None:
 def _discover_existing_server_database_dsn(dsn: str, bootstrap_dsn: str | None = None) -> str | None:
     """Wrapper kept in interactive_setup.py so setup code remains easy to inspect.
 
-    Legacy guard phrase: Auto-detected EchoChat database.
+    Legacy guard phrase: Auto-detected HuiChat database.
     """
     return _discover_existing_server_database_dsn_impl(dsn, bootstrap_dsn=bootstrap_dsn)
 
 
 def _discover_existing_server_database_candidates(dsn: str, bootstrap_dsn: str | None = None) -> list[dict[str, Any]]:
-    """Return all accessible Echo-Chat-looking PostgreSQL databases for admin selection."""
-    return _discover_echochat_database_candidates_impl(dsn, bootstrap_dsn=bootstrap_dsn)
+    """Return all accessible Hui Chat-looking PostgreSQL databases for admin selection."""
+    return _discover_hui_database_candidates_impl(dsn, bootstrap_dsn=bootstrap_dsn)
 
 
-def _validate_echochat_database(dsn: str) -> dict[str, Any]:
-    """Check whether the current PostgreSQL target looks valid for Echo-Chat."""
-    return _validate_echochat_database_impl(dsn)
+def _validate_hui_database(dsn: str) -> dict[str, Any]:
+    """Check whether the current PostgreSQL target looks valid for Hui Chat."""
+    return _validate_hui_database_impl(dsn)
 
 
 def _target_database_status(dsn: str, bootstrap_dsn: str | None = None) -> dict[str, Any]:
@@ -1166,7 +1178,7 @@ def _autobrand_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
 def _ensure_users_table(conn) -> None:
     """Ensure the users table exists and has the columns required for E2EE keys."""
     with conn.cursor() as cur:
-        # Create table if missing (minimal subset used by EchoChat)
+        # Create table if missing (minimal subset used by HuiChat)
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -1456,7 +1468,7 @@ def _prepare_full_schema_in_setup(conn) -> None:
         )
         cur.execute(
             """
-            CREATE TABLE IF NOT EXISTS echochat_schema_meta (
+            CREATE TABLE IF NOT EXISTS hui_schema_meta (
                 version     TEXT PRIMARY KEY,
                 name        TEXT NOT NULL,
                 kind        TEXT NOT NULL DEFAULT 'python',
@@ -1691,7 +1703,7 @@ def _sync_admin_login_user_in_db(
     """Create/update an admin-capable login user so E2EE keys match the password.
 
     The stored account is a normal row in ``users`` plus the RBAC admin role, which
-    gives the current full admin rights model used by EchoChat.
+    gives the current full admin rights model used by HuiChat.
 
     Returns ``(password_hash_to_store_in_config, status_message)``.
     """
@@ -1901,7 +1913,7 @@ def _generate_new_keypair_blob(raw_password: str) -> tuple[str, str]:
 
 
 def _interactive_setup_legacy(settings: Dict[str, Any]) -> Dict[str, Any]:
-    """Run the Echo-Chat setup wizard and return an updated (compacted) settings dict."""
+    """Run the Hui Chat setup wizard and return an updated (compacted) settings dict."""
 
     # Start from compact defaults, but allow existing values to carry forward.
     base = get_default_settings()
@@ -1996,7 +2008,7 @@ def _interactive_setup_legacy(settings: Dict[str, Any]) -> Dict[str, Any]:
             merged["smtp_password"] = _prompt_secret("SMTP password / key")
         else:
             merged["smtp_password"] = ""
-            print("ℹ️  SMTP password will be read from env var ECHOCHAT_SMTP_PASSWORD (or SMTP_PASSWORD).")
+            print("ℹ️  SMTP password will be read from env var HUI_SMTP_PASSWORD (or SMTP_PASSWORD).")
 
         default_from = str(merged.get("smtp_from") or f"{merged['server_name']} <no-reply@yourdomain.com>")
         merged["smtp_from"] = _prompt_verified_smtp_from(
@@ -2039,7 +2051,7 @@ def _interactive_setup_legacy(settings: Dict[str, Any]) -> Dict[str, Any]:
             merged["twilio_auth_token"] = _prompt_secret("Twilio Auth Token")
         else:
             merged["twilio_auth_token"] = ""
-            print("ℹ️  Twilio Auth Token will be read from env var ECHOCHAT_TWILIO_AUTH_TOKEN (or TWILIO_AUTH_TOKEN).")
+            print("ℹ️  Twilio Auth Token will be read from env var HUI_TWILIO_AUTH_TOKEN (or TWILIO_AUTH_TOKEN).")
         merged["twilio_verify_service_sid"] = _prompt_str("Twilio Verify Service SID", str(merged.get("twilio_verify_service_sid") or ""))
         merged["two_factor_login_timeout_seconds"] = _prompt_int(
             "2FA login timeout seconds",
@@ -2076,7 +2088,7 @@ def _interactive_setup_legacy(settings: Dict[str, Any]) -> Dict[str, Any]:
             merged["dynamic_dns_password"] = _prompt_secret("DDNS password / token")
         else:
             merged["dynamic_dns_password"] = ""
-            print("ℹ️  DDNS password/token will be read from env var ECHOCHAT_DYNAMIC_DNS_PASSWORD (or DDNS_PASSWORD).")
+            print("ℹ️  DDNS password/token will be read from env var HUI_DYNAMIC_DNS_PASSWORD (or DDNS_PASSWORD).")
         merged["dynamic_dns_update_url"] = _prompt_str("DDNS provider update URL", str(merged.get("dynamic_dns_update_url") or "https://dynupdate.no-ip.com/nic/update"))
         ddns_errors = dynamic_dns_setup_errors(merged)
         if ddns_errors:
@@ -2188,14 +2200,14 @@ def _interactive_setup_legacy(settings: Dict[str, Any]) -> Dict[str, Any]:
             merged["p2p_ice_servers"] = p2p_ice_servers(merged)
             merged["voice_ice_servers"] = merged.get("voice_ice_servers") or []
 
-        print("\n— Echo media / webcam —")
+        print("\n— Hui media / webcam —")
         enable_webcam = _yn(
-            "Enable built-in Echo webcam controls? (No keeps voice-only mode)",
-            default=str(merged.get("av_mode") or "echo").strip().lower() == "echo" and bool(merged.get("webcam_enabled", True)),
+            "Enable built-in Hui webcam controls? (No keeps voice-only mode)",
+            default=str(merged.get("av_mode") or "hui").strip().lower() == "hui" and bool(merged.get("webcam_enabled", True)),
         )
-        merged["av_mode"] = "echo" if enable_webcam else "standard"
+        merged["av_mode"] = "hui" if enable_webcam else "standard"
         merged["webcam_enabled"] = enable_webcam
-        merged["echo_webcam_enabled"] = enable_webcam
+        merged["hui_webcam_enabled"] = enable_webcam
         if enable_webcam:
             merged["webcam_approval_mode"] = _prompt_str(
                 "Webcam approval mode (owner_approval/open/disabled)",
@@ -2668,7 +2680,7 @@ def _show_public_beta_readiness_report(stdscr, merged: Dict[str, Any]) -> None:
         )
     except Exception as exc:
         lines = [
-            "Echo-Chat Public Beta Readiness",
+            "Hui Chat Public Beta Readiness",
             "",
             "Could not build the readiness report.",
             f"Error: {exc}",
@@ -2700,21 +2712,21 @@ def _collect_setup_readiness_lines(merged: Dict[str, Any], runtime: Dict[str, An
     validation_valid = bool(validation_report.get("valid")) if isinstance(validation_report, dict) else False
     db_configured = bool(str(merged.get("database_url") or "").strip())
     db_ready = db_configured and (
-        validation_state in {"valid_echochat", "empty"}
+        validation_state in {"valid_hui", "empty"}
         and (validation_valid or validation_state == "empty")
     )
     if validation_state == "not_checked":
         db_detail = "not checked yet; use Step 1 to validate before saving"
     elif validation_state == "foreign_schema":
-        db_detail = "wrong database; choose/create/recreate a proper Echo-Chat database"
-    elif validation_state == "partial_echochat":
-        db_detail = "partial Echo-Chat schema; setup will ask before repair/save"
+        db_detail = "wrong database; choose/create/recreate a proper Hui Chat database"
+    elif validation_state == "partial_hui":
+        db_detail = "partial Hui Chat schema; setup will ask before repair/save"
     elif validation_state == "empty":
         db_detail = "empty database; setup can prepare the schema during save"
-    elif validation_state == "valid_echochat" and validation_valid:
-        db_detail = "valid Echo-Chat database"
-    elif validation_state == "valid_echochat":
-        db_detail = "Echo-Chat tables found, but permissions need review"
+    elif validation_state == "valid_hui" and validation_valid:
+        db_detail = "valid Hui Chat database"
+    elif validation_state == "valid_hui":
+        db_detail = "Hui Chat tables found, but permissions need review"
     else:
         db_detail = validation_state.replace("_", " ")
 
@@ -2751,14 +2763,14 @@ def _collect_setup_readiness_lines(merged: Dict[str, Any], runtime: Dict[str, An
 
     ddns_errors = dynamic_dns_setup_errors(merged)
     ddns_ready = not ddns_errors
-    ddns_detail = "disabled or handled outside Echo-Chat" if not bool(merged.get("dynamic_dns_enabled")) else ("configured; use --dynamic-dns-check before updating" if ddns_ready else ddns_errors[0])
+    ddns_detail = "disabled or handled outside Hui Chat" if not bool(merged.get("dynamic_dns_enabled")) else ("configured; use --dynamic-dns-check before updating" if ddns_ready else ddns_errors[0])
 
     giphy_enabled = bool(merged.get("giphy_enabled"))
-    giphy_key_available = bool(str(merged.get("giphy_api_key") or "").strip() or os.getenv("ECHOCHAT_GIPHY_API_KEY") or os.getenv("GIPHY_API_KEY") or Path(".giphy_api_key").exists() or Path("giphy_api_key.txt").exists())
+    giphy_key_available = bool(str(merged.get("giphy_api_key") or "").strip() or os.getenv("HUI_GIPHY_API_KEY") or os.getenv("GIPHY_API_KEY") or Path(".giphy_api_key").exists() or Path("giphy_api_key.txt").exists())
     giphy_ok = (not giphy_enabled) or giphy_key_available or not bool(merged.get("__store_giphy_in_config"))
-    giphy_detail = "disabled" if not giphy_enabled else ("API key available/configured" if giphy_key_available else "enabled; set ECHOCHAT_GIPHY_API_KEY or .giphy_api_key before production")
+    giphy_detail = "disabled" if not giphy_enabled else ("API key available/configured" if giphy_key_available else "enabled; set HUI_GIPHY_API_KEY or .giphy_api_key before production")
 
-    webcam_enabled = str(merged.get("av_mode") or "echo").strip().lower() == "echo" and bool(merged.get("webcam_enabled", True))
+    webcam_enabled = str(merged.get("av_mode") or "hui").strip().lower() == "hui" and bool(merged.get("webcam_enabled", True))
     media_ready = bool(merged.get("voice_enabled", True)) or webcam_enabled
     media_detail = "built-in webcam controls enabled" if webcam_enabled else "voice-only mode"
 
@@ -2776,7 +2788,7 @@ def _collect_setup_readiness_lines(merged: Dict[str, Any], runtime: Dict[str, An
         f"  [{_readiness_marker(smtp_ready)}] Password recovery email: {smtp_detail}",
         f"  [{_readiness_marker(ddns_ready)}] Dynamic DNS helper: {ddns_detail}",
         f"  [{_readiness_marker(giphy_ok)}] GIF search key: {giphy_detail}",
-        f"  [{_readiness_marker(media_ready)}] Echo media: {media_detail}",
+        f"  [{_readiness_marker(media_ready)}] Hui media: {media_detail}",
         f"  [{_readiness_marker(rate_storage_ok)}] Rate-limit storage: {rate_detail}",
     ]
     return checklist
@@ -2802,14 +2814,14 @@ def _current_setup_step_checks(merged: Dict[str, Any], runtime: Dict[str, Any] |
     validation_state = str(validation_report.get("state") or "not_checked") if isinstance(validation_report, dict) else "not_checked"
     validation_valid = bool(validation_report.get("valid")) if isinstance(validation_report, dict) else False
     db_configured = bool(str(merged.get("database_url") or "").strip())
-    db_ok = db_configured and validation_state in {"valid_echochat", "empty"} and (validation_valid or validation_state == "empty")
+    db_ok = db_configured and validation_state in {"valid_hui", "empty"} and (validation_valid or validation_state == "empty")
     if not db_configured:
         db_detail = "choose or create the PostgreSQL database"
     elif validation_state == "not_checked":
         db_detail = "validate the selected database before saving"
     elif validation_state == "foreign_schema":
         db_detail = "wrong database selected; choose another database or create a fresh one"
-    elif validation_state == "partial_echochat":
+    elif validation_state == "partial_hui":
         db_detail = "partial schema found; review repair/save prompt"
     elif db_ok:
         db_detail = "database target is ready for setup"
@@ -2841,16 +2853,16 @@ def _current_setup_step_checks(merged: Dict[str, Any], runtime: Dict[str, Any] |
     abuse_ok = bool(rate_storage) and bool(str(merged.get("room_msg_rate_limit") or "").strip()) and bool(str(merged.get("dm_msg_rate_limit") or "").strip())
 
     giphy_enabled = bool(merged.get("giphy_enabled"))
-    giphy_key_available = bool(str(merged.get("giphy_api_key") or "").strip() or os.getenv("ECHOCHAT_GIPHY_API_KEY") or os.getenv("GIPHY_API_KEY") or Path(".giphy_api_key").exists() or Path("giphy_api_key.txt").exists())
+    giphy_key_available = bool(str(merged.get("giphy_api_key") or "").strip() or os.getenv("HUI_GIPHY_API_KEY") or os.getenv("GIPHY_API_KEY") or Path(".giphy_api_key").exists() or Path("giphy_api_key.txt").exists())
     media_ok = (not giphy_enabled) or giphy_key_available or not bool(merged.get("__store_giphy_in_config"))
 
     voice_ok = ((not bool(merged.get("voice_enabled", True))) or _setup_safe_int(merged.get("voice_max_room_peers"), 0) >= 0) and _ice_ready_for_setup(merged)
     dynamic_dns_ok = _dynamic_dns_ready_for_setup(merged)
 
-    media_mode = str(merged.get("av_mode") or "echo").strip().lower()
-    media_mode_ok = media_mode in {"echo", "standard"}
+    media_mode = str(merged.get("av_mode") or "hui").strip().lower()
+    media_mode_ok = media_mode in {"hui", "standard"}
     webcam_limit_ok = _setup_safe_int(merged.get("webcam_max_viewers"), 0) >= 0
-    echo_media_ok = media_mode_ok and webcam_limit_ok
+    hui_media_ok = media_mode_ok and webcam_limit_ok
 
     public_url = str(merged.get("public_base_url") or "").strip().lower()
     cookie_secure = bool(merged.get("cookie_secure"))
@@ -2873,7 +2885,7 @@ def _current_setup_step_checks(merged: Dict[str, Any], runtime: Dict[str, Any] |
         {"step": "Step 8", "title": "Protection and anti-abuse", "ok": abuse_ok, "detail": "rate-limit storage and core message limits are set" if abuse_ok else "set rate-limit storage and room/DM limits", "action": "open Step 8 and configure abuse protection"},
         {"step": "Step 9", "title": "Media, GIFs, and uploads", "ok": media_ok, "detail": "media/GIF settings are usable" if media_ok else "add GIF key or disable storing it in config", "action": "open Step 9 and finish media/GIF settings"},
         {"step": "Step 10", "title": "Voice and WebRTC", "ok": voice_ok, "detail": "voice settings and STUN/TURN are usable" if voice_ok else "set voice capacity and complete any TURN credentials", "action": "open Step 10 and verify voice capacity plus STUN/TURN settings"},
-        {"step": "Step 11", "title": "Echo media / webcam", "ok": echo_media_ok, "detail": "Echo media settings are usable" if echo_media_ok else "set A/V mode to echo or standard and verify viewer limit", "action": "open Step 11 and complete Echo media settings"},
+        {"step": "Step 11", "title": "Hui media / webcam", "ok": hui_media_ok, "detail": "Hui media settings are usable" if hui_media_ok else "set A/V mode to hui or standard and verify viewer limit", "action": "open Step 11 and complete Hui media settings"},
         {"step": "Step 12", "title": "Hosting, proxy, HTTPS, and public beta readiness", "ok": hosting_ok and dynamic_dns_ok, "detail": "hosting mode, Dynamic DNS, and public-beta basics are usable" if hosting_ok and dynamic_dns_ok else "fix public URL, cookies, origins, Dynamic DNS, or production topology", "action": "open Step 12 and run the public beta readiness report / DDNS helper"},
         {"step": "Step 13", "title": "Logs and health checks", "ok": logs_ok, "detail": "log level and health endpoint are set" if logs_ok else "set log level and health endpoint", "action": "open Step 13 and verify logs/health settings"},
     ]
@@ -2949,7 +2961,7 @@ def _collect_setup_summary_lines(merged: Dict[str, Any], runtime: Dict[str, Any]
         f"  Database name: {str(parts.get('db') or '(not set)')}",
         f"  Bootstrap/admin DSN saved: {'yes' if str(merged.get('database_bootstrap_url') or '').strip() else 'no'}",
         f"  Configured target database status: {target_status_text}",
-        f"  Auto-detected Echo-Chat database: {detected_text or '(none found)'}",
+        f"  Auto-detected Hui Chat database: {detected_text or '(none found)'}",
         f"  Current database validation: {validation_text}",
         '',
         'Owner accounts',
@@ -3023,13 +3035,13 @@ def _collect_setup_summary_lines(merged: Dict[str, Any], runtime: Dict[str, Any]
         f"  Max group upload bytes: {int(merged.get('max_group_upload_bytes') or merged.get('max_group_file_bytes') or 0)}",
         '',
         'Voice and WebRTC',
-        f"  A/V mode: {str(merged.get('av_mode') or 'echo')}",
+        f"  A/V mode: {str(merged.get('av_mode') or 'hui')}",
         f"  Voice enabled: {'yes' if bool(merged.get('voice_enabled', True)) else 'no'}",
         f"  Voice max room peers: {int(merged.get('voice_max_room_peers') or 100)}",
         f"  Voice invite cooldown seconds: {int(merged.get('voice_invite_cooldown_seconds') or 0)}",
         '',
-        'Echo media / webcam',
-        f"  Webcam controls enabled: {'yes' if bool(merged.get('webcam_enabled', True)) and str(merged.get('av_mode') or 'echo') == 'echo' else 'no'}",
+        'Hui media / webcam',
+        f"  Webcam controls enabled: {'yes' if bool(merged.get('webcam_enabled', True)) and str(merged.get('av_mode') or 'hui') == 'hui' else 'no'}",
         f"  Webcam approval mode: {str(merged.get('webcam_approval_mode') or 'owner_approval')}",
         f"  Max webcam viewers: {int(merged.get('webcam_max_viewers') or 0)}",
         f"  Default media policy: {str(merged.get('default_media_policy') or 'user_choice')}",
@@ -3190,22 +3202,22 @@ def _db_summary_lines(merged: Dict[str, Any], detected_dsn: str | None, status: 
         lines.append(f"Configured target database status: {t_exists}; {t_state}; {t_conn}")
     candidates = list(candidates or [])
     if candidates:
-        lines.append(f"Detected Echo-Chat databases: {len(candidates)}")
+        lines.append(f"Detected Hui Chat databases: {len(candidates)}")
         for candidate in candidates[:5]:
             lines.append(f"  - {_database_candidate_label(candidate)}")
         if len(candidates) > 5:
             lines.append(f"  - ... {len(candidates) - 5} more")
         if len(candidates) > 1:
-            lines.append("Multiple databases were found. Use 'Select detected Echo-Chat database' before saving.")
+            lines.append("Multiple databases were found. Use 'Select detected Hui Chat database' before saving.")
     elif detected_dsn:
         try:
             dparts = dsn_parts(detected_dsn)
             detected_db = str(dparts.get("db") or "")
-            lines.append(f"Auto-detected Echo-Chat database: {detected_db}")
+            lines.append(f"Auto-detected Hui Chat database: {detected_db}")
         except Exception:
-            lines.append(f"Auto-detected Echo-Chat database: {detected_dsn}")
+            lines.append(f"Auto-detected Hui Chat database: {detected_dsn}")
     else:
-        lines.append("Auto-detected Echo-Chat database: none found yet")
+        lines.append("Auto-detected Hui Chat database: none found yet")
     if validation_report:
         state = str(validation_report.get("state") or "unknown").replace("_", " ")
         valid_text = "valid" if bool(validation_report.get("valid")) else "needs review"
@@ -3213,7 +3225,7 @@ def _db_summary_lines(merged: Dict[str, Any], detected_dsn: str | None, status: 
     if configured_db and detected_db and configured_db != detected_db:
         lines.append("")
         lines.append(
-            f"The configured target database ({configured_db}) is different from the detected Echo-Chat database ({detected_db}). Save will use the configured target unless you explicitly choose the detected one."
+            f"The configured target database ({configured_db}) is different from the detected Hui Chat database ({detected_db}). Save will use the configured target unless you explicitly choose the detected one."
         )
     env_db = os.getenv("DB_CONNECTION_STRING") or os.getenv("DATABASE_URL")
     if env_db:
@@ -3234,7 +3246,7 @@ def _db_summary_lines(merged: Dict[str, Any], detected_dsn: str | None, status: 
 
 
 
-def _default_local_postgres_parts(db_name: str = "echochat") -> Dict[str, Any]:
+def _default_local_postgres_parts(db_name: str = "hui") -> Dict[str, Any]:
     return {
         "scheme": "postgresql",
         "user": getpass.getuser(),
@@ -3259,7 +3271,7 @@ def _validate_setup_database_name(name: str) -> tuple[bool, str]:
     if not value:
         return False, "Database name cannot be empty."
     if is_protected_database_name(value):
-        return False, f"'{value}' is a protected PostgreSQL maintenance database. Choose a dedicated Echo-Chat database name."
+        return False, f"'{value}' is a protected PostgreSQL maintenance database. Choose a dedicated Hui Chat database name."
     if not _SETUP_DATABASE_NAME_RE.match(value):
         return False, "Use 1-63 characters: letters, numbers, underscore, or hyphen. Do not use spaces, slashes, ?, or #."
     return True, ""
@@ -3294,7 +3306,7 @@ def _ensure_first_run_local_database_defaults(merged: Dict[str, Any], runtime: D
     """
     changed = False
     if not str(merged.get("database_url") or "").strip():
-        merged["database_url"] = build_postgres_dsn(_default_local_postgres_parts("echochat"))
+        merged["database_url"] = build_postgres_dsn(_default_local_postgres_parts("hui"))
         changed = True
     if not str(merged.get("database_bootstrap_url") or "").strip():
         merged["database_bootstrap_url"] = build_postgres_dsn(_default_local_postgres_parts("postgres"))
@@ -3314,11 +3326,11 @@ def _edit_database_connection(stdscr, merged: Dict[str, Any]) -> None:
     else:
         parts = _default_local_postgres_parts()
     fields = [
-        {"label": "Database user", "value": parts.get("user", ""), "help": "This is the PostgreSQL role/user, not the Echo-Chat owner login."},
+        {"label": "Database user", "value": parts.get("user", ""), "help": "This is the PostgreSQL role/user, not the Hui Chat owner login."},
         {"label": "Database password", "value": parts.get("password", ""), "type": "secret", "help": "Password for the PostgreSQL role, if your local database requires one."},
         {"label": "Database host", "value": parts.get("host", "localhost"), "help": "Use localhost for a local PostgreSQL server."},
         {"label": "Database port", "value": int(parts.get("port", 5432)), "type": "int", "min": 1, "max": 65535, "help": "PostgreSQL usually runs on port 5432."},
-        {"label": "Database name", "value": parts.get("db", "echochat"), "help": "Name of the PostgreSQL database EchoChat should use."},
+        {"label": "Database name", "value": parts.get("db", "hui"), "help": "Name of the PostgreSQL database HuiChat should use."},
     ]
     _edit_form(
         stdscr,
@@ -3327,7 +3339,7 @@ def _edit_database_connection(stdscr, merged: Dict[str, Any]) -> None:
         intro_lines=[
             "Use existing database or create a new one by changing the database name here and then returning to the Database menu.",
             "Name of new PostgreSQL database: use the Database name field below when you want a fresh database.",
-            "Delete that old database after switching: use the replace-detected-database flow when you want EchoChat to remove the old target after the new one is ready.",
+            "Delete that old database after switching: use the replace-detected-database flow when you want HuiChat to remove the old target after the new one is ready.",
         ],
     )
     merged["database_url"] = build_postgres_dsn({
@@ -3336,7 +3348,7 @@ def _edit_database_connection(stdscr, merged: Dict[str, Any]) -> None:
         "password": str(fields[1]["value"]),
         "host": str(fields[2]["value"]).strip() or "localhost",
         "port": int(fields[3]["value"]),
-        "db": str(fields[4]["value"]).strip() or "echochat",
+        "db": str(fields[4]["value"]).strip() or "hui",
     })
 
 
@@ -3372,10 +3384,10 @@ def _edit_server_identity_section(stdscr, merged: Dict[str, Any], base: Dict[str
     fields = [
         {"label": "Server name", "value": str(merged.get("server_name") or base["server_name"]), "help": "The public display name shown across the chat UI and used for friendly defaults like the no-reply email name."},
         {"label": "Bind host", "value": str(merged.get("server_host") or base["server_host"]), "help": "Use 0.0.0.0 to listen on all local network interfaces, or 127.0.0.1 for localhost-only testing."},
-        {"label": "Bind port", "value": int(merged.get("server_port") or base["server_port"]), "type": "int", "min": 1, "max": 65535, "help": "Pick a free TCP port. Use a different port if another EchoChat server is already running on this machine."},
-        {"label": "Startup mode", "value": str(merged.get("run_mode") or base.get("run_mode") or "development"), "type": "choice", "options": ["development", "production"], "help": "Development uses the built-in local/LAN runner. Production makes plain `python main.py` start one Gunicorn-backed Echo-Chat instance."},
+        {"label": "Bind port", "value": int(merged.get("server_port") or base["server_port"]), "type": "int", "min": 1, "max": 65535, "help": "Pick a free TCP port. Use a different port if another HuiChat server is already running on this machine."},
+        {"label": "Startup mode", "value": str(merged.get("run_mode") or base.get("run_mode") or "development"), "type": "choice", "options": ["development", "production"], "help": "Development uses the built-in local/LAN runner. Production makes plain `python main.py` start one Gunicorn-backed Hui Chat instance."},
         {"label": "Gunicorn workers per instance", "value": 1, "type": "int", "min": 1, "max": 1, "help": "Keep this locked at 1. Flask-SocketIO is safe with one Gunicorn worker per process; do not put 10 workers inside one Gunicorn server."},
-        {"label": "Echo-Chat instances", "value": int(merged.get("production_instance_count") or base.get("production_instance_count") or 1), "type": "int", "min": 1, "max": 10, "help": "Horizontal scale target. 10 means ten separate Echo-Chat processes, each with one worker, behind sticky reverse-proxy routing plus Redis Socket.IO queue."},
+        {"label": "Hui Chat instances", "value": int(merged.get("production_instance_count") or base.get("production_instance_count") or 1), "type": "int", "min": 1, "max": 10, "help": "Horizontal scale target. 10 means ten separate Hui Chat processes, each with one worker, behind sticky reverse-proxy routing plus Redis Socket.IO queue."},
         {"label": "First instance port", "value": int(merged.get("production_instance_base_port") or merged.get("server_port") or base.get("server_port") or 5000), "type": "int", "min": 1, "max": 65535, "help": "First backend port for multi-instance deployment. Example: 5000 with 10 instances uses 5000-5009."},
         {"label": "Public base URL", "value": str(merged.get("public_base_url") or ""), "help": "Optional public URL such as https://chat.example.com. Leave blank for local-only testing."},
     ]
@@ -3386,7 +3398,7 @@ def _edit_server_identity_section(stdscr, merged: Dict[str, Any], base: Dict[str
         intro_lines=[
             "Start here for the basics people usually expect to see in setup.",
             "These values control the chat server name, local bind address, port, and optional public URL.",
-            "Scaling rule: use 1 worker per Echo-Chat instance. If you choose more than 1 instance, setup auto-fills the Redis DB split for rate limits, Socket.IO, and shared realtime state.",
+            "Scaling rule: use 1 worker per Hui Chat instance. If you choose more than 1 instance, setup auto-fills the Redis DB split for rate limits, Socket.IO, and shared realtime state.",
         ],
     )
     merged["server_name"] = str(fields[0]["value"]).strip() or base["server_name"]
@@ -3398,7 +3410,7 @@ def _edit_server_identity_section(stdscr, merged: Dict[str, Any], base: Dict[str
     merged["production_mode"] = merged["run_mode"] == "production"
     # Flask-SocketIO's official Gunicorn path is one worker per process.
     # Keep each process at one worker; scale by running multiple one-worker
-    # Echo-Chat instances behind sticky routing plus Redis Socket.IO queue.
+    # Hui Chat instances behind sticky routing plus Redis Socket.IO queue.
     merged["production_workers"] = 1
     merged["production_instance_count"] = max(1, min(10, int(fields[5]["value"] or 1)))
     merged["production_instance_base_port"] = int(fields[6]["value"] or merged["server_port"])
@@ -3436,23 +3448,23 @@ def _edit_owner_accounts_section(stdscr, merged: Dict[str, Any], base: Dict[str,
         "Done",
     ]
     help_map = {
-        0: "This is the main Echo-Chat owner login inside the app. It is not the PostgreSQL role or Linux account name.",
+        0: "This is the main Hui Chat owner login inside the app. It is not the PostgreSQL role or Linux account name.",
         1: "Optional email for admin notices and future password-recovery flows.",
         2: "Sets the owner password for this setup run and stores its secure hash in config.",
         3: "Sets the owner's 4-8 digit Recovery PIN for password resets.",
         4: "Turn this on if you want setup to create a second app-level admin account right away.",
-        5: "Optional second admin login name inside Echo-Chat.",
+        5: "Optional second admin login name inside Hui Chat.",
         6: "Optional contact email for the second admin account.",
         7: "Sets the second admin password for this setup run.",
         8: "Sets the second admin's 4-8 digit Recovery PIN for password resets.",
         9: "Return to the main menu.",
     }
     while True:
-        h, w = _draw_box(stdscr, "Owner accounts", "These are Echo-Chat login accounts, not PostgreSQL users")
+        h, w = _draw_box(stdscr, "Owner accounts", "These are Hui Chat login accounts, not PostgreSQL users")
         intro = [
             "Use this section to create the server owner's login and an optional second admin.",
-            "PostgreSQL user names and Echo-Chat admin usernames are separate things.",
-            "The database user can be named one thing while the Echo-Chat owner account is named something else.",
+            "PostgreSQL user names and Hui Chat admin usernames are separate things.",
+            "The database user can be named one thing while the Hui Chat owner account is named something else.",
         ]
         y = 3
         for raw in intro:
@@ -3500,7 +3512,7 @@ def _edit_owner_accounts_section(stdscr, merged: Dict[str, Any], base: Dict[str,
         if idx == len(rows) - 1:
             return
         if idx == 0:
-            new_owner = normalize_registration_username(_tui_input(stdscr, "Owner login username", "Enter the main Echo-Chat owner username", str(merged.get("admin_user") or base["admin_user"])))
+            new_owner = normalize_registration_username(_tui_input(stdscr, "Owner login username", "Enter the main Hui Chat owner username", str(merged.get("admin_user") or base["admin_user"])))
             normalized_owner, username_err = _validate_setup_admin_username(new_owner, settings=merged, account_label="owner")
             if username_err:
                 _tui_message(stdscr, "Owner login username", [username_err], error=True)
@@ -3547,7 +3559,7 @@ def _edit_owner_accounts_section(stdscr, merged: Dict[str, Any], base: Dict[str,
 
 def _edit_login_security_section(stdscr, merged: Dict[str, Any], base: Dict[str, Any]) -> None:
     fields = [
-        {"label": "Use HTTPS / secure cookies", "value": bool(merged.get("cookie_secure", False)), "type": "bool", "help": "Turn this on when you serve EchoChat over HTTPS directly or behind an HTTPS reverse proxy."},
+        {"label": "Use HTTPS / secure cookies", "value": bool(merged.get("cookie_secure", False)), "type": "bool", "help": "Turn this on when you serve HuiChat over HTTPS directly or behind an HTTPS reverse proxy."},
         {"label": "Cookie sharing policy", "value": str(merged.get("cookie_samesite") or "Lax"), "type": "choice", "options": ["Lax", "Strict", "None"], "help": "Lax is the normal default. None is only appropriate when you understand the cross-site cookie implications and are using HTTPS."},
         {"label": "Access token minutes", "value": int(merged.get("access_token_minutes") or base["access_token_minutes"]), "type": "int", "min": 1, "max": 1440, "help": "How long short-lived login tokens stay valid before a refresh is needed."},
         {"label": "Refresh token days", "value": int(merged.get("refresh_token_days") or base["refresh_token_days"]), "type": "int", "min": 1, "max": 365, "help": "How long longer-lived login sessions remain refreshable before a full login is required."},
@@ -3558,9 +3570,9 @@ def _edit_login_security_section(stdscr, merged: Dict[str, Any], base: Dict[str,
         {"label": "Generate stable core/crypto secrets now", "value": (not is_strong_secret(resolve_secret(merged, "jwt_secret")) or not is_strong_secret(resolve_secret(merged, "secret_key"))), "type": "bool", "help": "Setup can generate stable Flask/JWT/crypto secrets and save them safely so restarts do not break login or encrypted data."},
         {"label": "Enable SMS 2FA", "value": bool(merged.get("enable_two_factor_beta", False) and merged.get("enable_sms_two_factor", False)), "type": "bool", "help": "Optional Twilio Verify login codes. Keep this off unless Twilio is configured."},
         {"label": "Twilio Verify channel", "value": str(merged.get("two_factor_sms_channel") or "sms"), "type": "choice", "options": ["sms", "whatsapp"], "help": "Phone-based verification channel. sms is the normal choice."},
-        {"label": "Twilio Account SID", "value": str(merged.get("twilio_account_sid") or ""), "help": "Starts with AC. You may store this non-password identifier here or provide ECHOCHAT_TWILIO_ACCOUNT_SID."},
-        {"label": "Twilio Auth Token", "value": str(merged.get("twilio_auth_token") or ""), "type": "secret", "help": "Twilio secret token. You may leave blank only if ECHOCHAT_TWILIO_AUTH_TOKEN / TWILIO_AUTH_TOKEN is set."},
-        {"label": "Twilio Verify Service SID", "value": str(merged.get("twilio_verify_service_sid") or ""), "help": "Starts with VA. You may store it here or provide ECHOCHAT_TWILIO_VERIFY_SERVICE_SID."},
+        {"label": "Twilio Account SID", "value": str(merged.get("twilio_account_sid") or ""), "help": "Starts with AC. You may store this non-password identifier here or provide HUI_TWILIO_ACCOUNT_SID."},
+        {"label": "Twilio Auth Token", "value": str(merged.get("twilio_auth_token") or ""), "type": "secret", "help": "Twilio secret token. You may leave blank only if HUI_TWILIO_AUTH_TOKEN / TWILIO_AUTH_TOKEN is set."},
+        {"label": "Twilio Verify Service SID", "value": str(merged.get("twilio_verify_service_sid") or ""), "help": "Starts with VA. You may store it here or provide HUI_TWILIO_VERIFY_SERVICE_SID."},
         {"label": "2FA login timeout seconds", "value": int(merged.get("two_factor_login_timeout_seconds") or 600), "type": "int", "min": 60, "max": 3600, "help": "How long a pending login SMS challenge stays valid before the user must start login again."},
     ]
     _edit_form(
@@ -3608,16 +3620,16 @@ def _edit_login_security_section(stdscr, merged: Dict[str, Any], base: Dict[str,
 
 def _edit_password_recovery_email_section(stdscr, merged: Dict[str, Any], base: Dict[str, Any]) -> None:
     fields = [
-        {"label": "Enable password reset emails", "value": bool(merged.get("smtp_enabled", False)), "type": "bool", "help": "Turn this on only if you want EchoChat to send password reset emails through your SMTP provider."},
+        {"label": "Enable password reset emails", "value": bool(merged.get("smtp_enabled", False)), "type": "bool", "help": "Turn this on only if you want HuiChat to send password reset emails through your SMTP provider."},
         {"label": "SMTP provider", "value": str(merged.get("smtp_provider") or "brevo").strip().lower(), "type": "choice", "options": _SMTP_PROVIDER_OPTIONS, "help": "Provider presets keep host/port/TLS guidance aligned with the runtime sender."},
         {"label": "SMTP host", "value": str(merged.get("smtp_host") or ""), "help": "Example: smtp-relay.example.com"},
         {"label": "SMTP port", "value": int(merged.get("smtp_port") or base["smtp_port"]), "type": "int", "min": 1, "max": 65535, "help": "Port 587 is common for STARTTLS. Port 465 is common for implicit SSL."},
         {"label": "SMTP username", "value": str(merged.get("smtp_username") or ""), "help": "The login name used for your outgoing mail server. Password-reset email requires authenticated SMTP."},
-        {"label": "SMTP password", "value": str(merged.get("smtp_password") or ""), "type": "secret", "help": "The secret or app password for the SMTP account. You may leave this blank only if ECHOCHAT_SMTP_PASSWORD / SMTP_PASSWORD is set."},
+        {"label": "SMTP password", "value": str(merged.get("smtp_password") or ""), "type": "secret", "help": "The secret or app password for the SMTP account. You may leave this blank only if HUI_SMTP_PASSWORD / SMTP_PASSWORD is set."},
         {"label": "Use STARTTLS", "value": bool(merged.get("smtp_use_starttls", True)), "type": "bool", "help": "Normal choice for port 587."},
         {"label": "Use SSL", "value": bool(merged.get("smtp_use_ssl", False)), "type": "bool", "help": "Normal choice for port 465. Runtime uses SSL instead of STARTTLS when this is enabled."},
         {"label": "From address", "value": str(merged.get("smtp_from") or base["smtp_from"]), "help": "Use a real verified sender address for Brevo/Gmail delivery; localhost will not deliver reliably."},
-        {"label": "SMTP timeout seconds", "value": int(merged.get("smtp_timeout_seconds") or base.get("smtp_timeout_seconds") or 20), "type": "int", "min": 3, "max": 120, "help": "How long Echo-Chat waits for SMTP connect/TLS/login before failing visibly."},
+        {"label": "SMTP timeout seconds", "value": int(merged.get("smtp_timeout_seconds") or base.get("smtp_timeout_seconds") or 20), "type": "int", "min": 3, "max": 120, "help": "How long Hui Chat waits for SMTP connect/TLS/login before failing visibly."},
         {"label": "Password reset token minutes", "value": int(merged.get("password_reset_token_minutes") or base["password_reset_token_minutes"]), "type": "int", "min": 1, "max": 1440, "help": "How long a password reset link stays valid."},
         {"label": "Password reset daily limit", "value": int(merged.get("password_reset_daily_limit") or base.get("password_reset_daily_limit") or 3), "type": "int", "min": 1, "max": 25, "help": "How many reset links one verified account can receive in 24 hours."},
         {"label": "Recovery PIN max attempts", "value": int(merged.get("recovery_pin_max_attempts") or base["recovery_pin_max_attempts"]), "type": "int", "min": 1, "max": 50, "help": "How many wrong recovery PIN attempts are allowed before temporary lockout."},
@@ -3758,7 +3770,7 @@ def _edit_protection_and_abuse_section(stdscr, merged: Dict[str, Any], base: Dic
         fields,
         intro_lines=[
             "These are the moderation and flood-control settings that server owners usually want to see up front.",
-            "Rate-limit fields accept Echo-Chat's normal formats like 20@10.",
+            "Rate-limit fields accept Hui Chat's normal formats like 20@10.",
         ],
     )
     merged["room_msg_rate_limit"] = str(fields[0]["value"] or "").strip() or str(base["room_msg_rate_limit"])
@@ -3853,7 +3865,7 @@ def _edit_media_uploads_section(stdscr, merged: Dict[str, Any], base: Dict[str, 
 
 def _edit_voice_and_webrtc_section(stdscr, merged: Dict[str, Any], base: Dict[str, Any]) -> None:
     fields = [
-        {"label": "Enable voice chat", "value": bool(merged.get("voice_enabled", True)), "type": "bool", "help": "Turns Echo-Chat's voice features on or off."},
+        {"label": "Enable voice chat", "value": bool(merged.get("voice_enabled", True)), "type": "bool", "help": "Turns Hui Chat's voice features on or off."},
         {"label": "Max voice peers per room", "value": int(merged.get("voice_max_room_peers") or 100), "type": "int", "min": 0, "max": 10000, "help": "Default is 100. Set 0 for unlimited or use a lower cap such as 30."},
         {"label": "Voice invite cooldown seconds", "value": int(merged.get("voice_invite_cooldown_seconds") or base["voice_invite_cooldown_seconds"]), "type": "int", "min": 0, "max": 3600, "help": "Minimum delay between sending repeated voice invites."},
         {"label": "Voice DM invite TTL seconds", "value": int(merged.get("voice_dm_invite_ttl_seconds") or base["voice_dm_invite_ttl_seconds"]), "type": "int", "min": 1, "max": 3600, "help": "How long a direct voice invite remains valid."},
@@ -3902,12 +3914,12 @@ def _edit_voice_and_webrtc_section(stdscr, merged: Dict[str, Any], base: Dict[st
 
 
 def _edit_media_setup_section(stdscr, merged: Dict[str, Any], base: Dict[str, Any]) -> None:
-    """Guided Echo built-in media and webcam setup."""
+    """Guided Hui built-in media and webcam setup."""
     fields = [
         {
             "label": "A/V mode",
-            "value": str(merged.get("av_mode") or base.get("av_mode") or "echo"),
-            "help": "Use echo for built-in voice/webcam controls, or standard for voice-only mode.",
+            "value": str(merged.get("av_mode") or base.get("av_mode") or "hui"),
+            "help": "Use hui for built-in voice/webcam controls, or standard for voice-only mode.",
         },
         {
             "label": "Enable webcam controls",
@@ -3951,24 +3963,24 @@ def _edit_media_setup_section(stdscr, merged: Dict[str, Any], base: Dict[str, An
     ]
     _edit_form(
         stdscr,
-        "Echo media / webcam",
+        "Hui media / webcam",
         fields,
         intro_lines=[
-            "Echo-Chat now uses its built-in browser media path for room voice and webcam controls.",
+            "Hui Chat now uses its built-in browser media path for room voice and webcam controls.",
             "This section controls camera policy and browser capture defaults without requiring an external media server.",
         ],
     )
-    mode = str(fields[0]["value"] or "echo").strip().lower().replace("-", "_")
+    mode = str(fields[0]["value"] or "hui").strip().lower().replace("-", "_")
     if mode in {"webrtc", "built_in", "builtin"}:
-        mode = "echo"
-    if mode not in {"echo", "standard"}:
-        mode = "echo"
-    webcam_enabled = bool(fields[1]["value"]) and mode == "echo"
+        mode = "hui"
+    if mode not in {"hui", "standard"}:
+        mode = "hui"
+    webcam_enabled = bool(fields[1]["value"]) and mode == "hui"
     merged["av_mode"] = mode
     merged["webcam_enabled"] = webcam_enabled
-    merged["echo_webcam_enabled"] = webcam_enabled
+    merged["hui_webcam_enabled"] = webcam_enabled
     merged["webcam_quality"] = str(fields[2]["value"] or "balanced").strip() or "balanced"
-    merged["echo_webcam_quality"] = merged["webcam_quality"]
+    merged["hui_webcam_quality"] = merged["webcam_quality"]
     merged["webcam_codec_strategy"] = str(fields[3]["value"] or "prefer-compatible").strip() or "prefer-compatible"
     merged["webcam_approval_mode"] = str(fields[4]["value"] or "owner_approval").strip() or "owner_approval"
     merged["webcam_max_viewers"] = max(0, int(fields[5]["value"] or 0))
@@ -4002,7 +4014,7 @@ def _edit_public_beta_readiness_section(stdscr, merged: Dict[str, Any], base: Di
         "Public beta readiness wizard",
         fields,
         intro_lines=[
-            "This screen chooses whether Echo-Chat is being prepared for LAN testing, no-domain-yet staging, or real public beta hosting.",
+            "This screen chooses whether Hui Chat is being prepared for LAN testing, no-domain-yet staging, or real public beta hosting.",
             "Choose no_domain_yet if you do not own a domain yet. Public beta mode expects a real domain, HTTPS through a reverse proxy, secure cookies, exact allowed origins, and Redis-backed production services.",
             "Nothing saves until Step 17 - Save and finish.",
         ],
@@ -4040,9 +4052,9 @@ def _edit_hosting_network_section(stdscr, merged: Dict[str, Any], base: Dict[str
         {"label": "Public base URL", "value": str(merged.get("public_base_url") or ""), "help": "Leave blank if you do not have a domain. Public beta should use the exact HTTPS address testers open, such as https://chat.yourdomain.com."},
         {"label": "Allowed web origins", "value": _csv_text(merged.get("cors_allowed_origins") or merged.get("allowed_origins") or []), "help": "Comma-separated list of allowed browser origins. Public beta should contain only the exact HTTPS public origin."},
         {"label": "Auto-allow LAN same-host origins", "value": bool(merged.get("auto_allow_lan_origins", True)), "type": "bool", "help": "Recommended for LAN/mobile testing. Public beta should usually turn this off."},
-        {"label": "Trust proxy headers", "value": bool(merged.get("trust_proxy_headers", False)), "type": "bool", "help": "Turn this on when Echo-Chat sits behind Nginx, Caddy, Traefik, or another reverse proxy that forwards X-Forwarded-* headers."},
-        {"label": "Proxy hop count", "value": int(merged.get("proxy_fix_hops") or base["proxy_fix_hops"]), "type": "int", "min": 0, "max": 10, "help": "How many reverse-proxy layers sit in front of EchoChat. One local proxy usually means 1."},
-        {"label": "Use built-in HTTPS listener", "value": bool(merged.get("https", False)), "type": "bool", "help": "Usually leave off behind Caddy/Nginx. Turn on only if EchoChat itself should load TLS certificates directly."},
+        {"label": "Trust proxy headers", "value": bool(merged.get("trust_proxy_headers", False)), "type": "bool", "help": "Turn this on when Hui Chat sits behind Nginx, Caddy, Traefik, or another reverse proxy that forwards X-Forwarded-* headers."},
+        {"label": "Proxy hop count", "value": int(merged.get("proxy_fix_hops") or base["proxy_fix_hops"]), "type": "int", "min": 0, "max": 10, "help": "How many reverse-proxy layers sit in front of HuiChat. One local proxy usually means 1."},
+        {"label": "Use built-in HTTPS listener", "value": bool(merged.get("https", False)), "type": "bool", "help": "Usually leave off behind Caddy/Nginx. Turn on only if HuiChat itself should load TLS certificates directly."},
         {"label": "TLS certificate file", "value": str(merged.get("ssl_cert_file") or ssl_defaults.get("certificate_path") or ""), "help": "Path to the certificate file when built-in HTTPS is enabled."},
         {"label": "TLS key file", "value": str(merged.get("ssl_key_file") or ssl_defaults.get("key_path") or ""), "help": "Path to the private key file when built-in HTTPS is enabled."},
         {"label": "Enable health endpoint", "value": bool(merged.get("enable_health_check_endpoint", False)), "type": "bool", "help": "Useful for load balancers, reverse proxies, and uptime monitors."},
@@ -4050,9 +4062,9 @@ def _edit_hosting_network_section(stdscr, merged: Dict[str, Any], base: Dict[str
         {"label": "Enable Dynamic DNS helper", "value": bool(merged.get("dynamic_dns_enabled", False)), "type": "bool", "help": "Optional. Use when your home/public IP changes and your DDNS provider supports username/password update URLs."},
         {"label": "DDNS provider", "value": str(merged.get("dynamic_dns_provider") or "No-IP"), "type": "choice", "options": ["No-IP", "Dynu", "DNS-O-Matic", "Custom"], "help": "No-IP uses https://dynupdate.no-ip.com/nic/update. Custom lets you paste your provider update URL."},
         {"label": "DDNS hostname", "value": str(merged.get("dynamic_dns_domain") or ""), "help": "The public hostname your DDNS provider should update, such as yourname.ddns.net. Do not enter a full URL."},
-        {"label": "DDNS username", "value": str(merged.get("dynamic_dns_username") or ""), "help": "Provider login/update username. Can also come from ECHOCHAT_DYNAMIC_DNS_USERNAME / DDNS_USERNAME."},
-        {"label": "DDNS password/token", "value": "", "type": "secret", "help": "Optional to save for LAN testing. Blank means read ECHOCHAT_DYNAMIC_DNS_PASSWORD / DDNS_PASSWORD from env."},
-        {"label": "DDNS update URL", "value": str(merged.get("dynamic_dns_update_url") or base.get("dynamic_dns_update_url") or "https://dynupdate.no-ip.com/nic/update"), "help": "Provider HTTP(S) update endpoint. Echo-Chat appends hostname and myip parameters."},
+        {"label": "DDNS username", "value": str(merged.get("dynamic_dns_username") or ""), "help": "Provider login/update username. Can also come from HUI_DYNAMIC_DNS_USERNAME / DDNS_USERNAME."},
+        {"label": "DDNS password/token", "value": "", "type": "secret", "help": "Optional to save for LAN testing. Blank means read HUI_DYNAMIC_DNS_PASSWORD / DDNS_PASSWORD from env."},
+        {"label": "DDNS update URL", "value": str(merged.get("dynamic_dns_update_url") or base.get("dynamic_dns_update_url") or "https://dynupdate.no-ip.com/nic/update"), "help": "Provider HTTP(S) update endpoint. Hui Chat appends hostname and myip parameters."},
         {"label": "Rate-limit storage URI", "value": str(merged.get("rate_limit_storage_uri") or merged.get("rate_limit_storage") or base["rate_limit_storage_uri"]), "help": "Use memory:// for local testing. Use Redis for public beta and multiple workers."},
         {"label": "Socket.IO message queue", "value": str(merged.get("socketio_message_queue") or ""), "help": "Redis URL used by Socket.IO when scaling workers, such as redis://127.0.0.1:6379/1. Recommended for public beta readiness."},
         {"label": "Apply hosting-mode preset", "value": False, "type": "bool", "help": "Apply safe defaults for LAN or public beta mode after this form. Public beta preset sets production mode, secure cookies, exact origins, proxy headers, Redis defaults, and health checks."},
@@ -4111,7 +4123,7 @@ def _edit_hosting_network_section(stdscr, merged: Dict[str, Any], base: Dict[str
     if _tui_yes_no(
         stdscr,
         "Generate reverse proxy configs?",
-        "Create Caddy/Nginx config files from these hosting settings now? If you do not have a domain, Echo-Chat writes LAN-only helper configs instead of fake public-beta configs.",
+        "Create Caddy/Nginx config files from these hosting settings now? If you do not have a domain, Hui Chat writes LAN-only helper configs instead of fake public-beta configs.",
         default=False,
     ):
         proxy_choice = _tui_menu(
@@ -4129,7 +4141,7 @@ def _edit_hosting_network_section(stdscr, merged: Dict[str, Any], base: Dict[str
             out_dir = _tui_input(
                 stdscr,
                 "Reverse proxy output folder",
-                "Where should Echo-Chat write the generated proxy files?",
+                "Where should Hui Chat write the generated proxy files?",
                 "deploy/generated-proxy",
             )
             if str(out_dir).strip():
@@ -4171,7 +4183,7 @@ def _edit_hosting_network_section(stdscr, merged: Dict[str, Any], base: Dict[str
         out_dir = _tui_input(
             stdscr,
             "Deployment kit output folder",
-            "Where should Echo-Chat write the generated deployment kit?",
+            "Where should Hui Chat write the generated deployment kit?",
             str(merged.get("deployment_kit_output_dir") or "deploy/generated-deployment"),
         )
         if str(out_dir).strip():
@@ -4258,7 +4270,7 @@ def _edit_all_settings(stdscr, merged: Dict[str, Any]) -> None:
     while True:
         h, w = _draw_box(stdscr, "Advanced and all settings", "Enter edits a setting as text/JSON, Space toggles booleans, Esc on Done")
         intro = [
-            "This screen exposes every saved EchoChat setting from get_default_settings().",
+            "This screen exposes every saved HuiChat setting from get_default_settings().",
             "Only true runtime settings stay visible here; legacy compatibility keys are intentionally hidden.",
             "For lists and dictionaries, enter valid JSON. Example: [\"https://example.com\"]",
             "Strings are saved as typed.",
@@ -4386,7 +4398,7 @@ def _test_smtp_connection(merged: Dict[str, Any]) -> tuple[bool, str]:
 def _test_redis_connection(storage_uri: str) -> tuple[bool, str]:
     uri = str(storage_uri or '').strip()
     if not uri:
-        return True, 'No rate-limit storage URI is set, so Echo-Chat will use its normal default behavior.'
+        return True, 'No rate-limit storage URI is set, so Hui Chat will use its normal default behavior.'
     if uri == 'memory://':
         return True, 'Rate-limit storage is set to memory://, which is fine for one local process but not for scaled multi-instance limits.'
     if not (uri.startswith('redis://') or uri.startswith('rediss://')):
@@ -4515,22 +4527,22 @@ def _refresh_database_discovery(merged: Dict[str, Any], runtime: Dict[str, Any])
     runtime["detected_candidates"] = candidates
     if len(candidates) == 1:
         runtime["detected_dsn"] = str(candidates[0].get("dsn") or "") or None
-        runtime["db_status"] = f"One Echo-Chat database was detected: {candidates[0].get('database')}."
+        runtime["db_status"] = f"One Hui Chat database was detected: {candidates[0].get('database')}."
     elif len(candidates) > 1:
-        runtime["db_status"] = f"Multiple Echo-Chat databases were detected ({len(candidates)}). Open 'Select detected Echo-Chat database' and choose the one this server should use."
+        runtime["db_status"] = f"Multiple Hui Chat databases were detected ({len(candidates)}). Open 'Select detected Hui Chat database' and choose the one this server should use."
     else:
         target_db = str(target_status.get("database") or "configured target")
         target_state = str(target_status.get("state") or "unknown")
         if bool(target_status.get("exists")) and target_state == "empty":
-            runtime["db_status"] = f"Configured target database '{target_db}' already exists and is empty. No Echo-Chat tables were found yet; setup/runtime migrations can initialize it."
+            runtime["db_status"] = f"Configured target database '{target_db}' already exists and is empty. No Hui Chat tables were found yet; setup/runtime migrations can initialize it."
         elif bool(target_status.get("exists")) and target_state == "foreign_schema":
-            runtime["db_status"] = f"Configured target database '{target_db}' exists, but it does not look like an Echo-Chat database. Validate it before saving or choose/create another database."
+            runtime["db_status"] = f"Configured target database '{target_db}' exists, but it does not look like an Hui Chat database. Validate it before saving or choose/create another database."
         elif bool(target_status.get("exists")) and target_state == "exists_inaccessible":
             runtime["db_status"] = f"Configured target database '{target_db}' exists, but the configured PostgreSQL role cannot inspect it yet. Use 'Create current target database if needed' or local postgres admin repair to grant access."
         elif bool(target_status.get("exists")):
-            runtime["db_status"] = f"Configured target database '{target_db}' exists, but no complete Echo-Chat database was auto-detected yet. Validate or initialize the target database."
+            runtime["db_status"] = f"Configured target database '{target_db}' exists, but no complete Hui Chat database was auto-detected yet. Validate or initialize the target database."
         else:
-            runtime["db_status"] = "No existing Echo-Chat database was found with the current connection details, and the configured target database does not appear to exist yet."
+            runtime["db_status"] = "No existing Hui Chat database was found with the current connection details, and the configured target database does not appear to exist yet."
 
 
 
@@ -4541,7 +4553,7 @@ def _format_database_validation_lines(report: dict[str, Any]) -> list[str]:
         f"Database: {report.get('database') or '(unknown)'}",
         f"PostgreSQL role: {report.get('user') or '(unknown)'}",
         f"Validation state: {state.replace('_', ' ')}",
-        f"Echo-Chat marker tables found: {int(report.get('marker_count') or 0)}",
+        f"Hui Chat marker tables found: {int(report.get('marker_count') or 0)}",
         f"Public tables found: {int(report.get('public_table_count') or 0)}",
         f"Applied tracked migrations: {int(report.get('applied_migration_count') or 0)}",
         f"Latest migration: {report.get('latest_migration') or '(none found)'}",
@@ -4552,21 +4564,21 @@ def _format_database_validation_lines(report: dict[str, Any]) -> list[str]:
     missing_columns = list(report.get("missing_user_columns") or [])
     markers = list(report.get("present_markers") or [])
     if markers:
-        lines.append(f"Detected Echo-Chat tables: {', '.join(markers[:10])}" + (" ..." if len(markers) > 10 else ""))
+        lines.append(f"Detected Hui Chat tables: {', '.join(markers[:10])}" + (" ..." if len(markers) > 10 else ""))
     if missing_tables:
         lines.append(f"Missing core tables: {', '.join(missing_tables)}")
     if missing_columns:
         lines.append(f"Missing users columns: {', '.join(missing_columns)}")
-    if state == "valid_echochat" and bool(report.get("valid")):
-        lines.append("Result: valid Echo-Chat database for this server.")
+    if state == "valid_hui" and bool(report.get("valid")):
+        lines.append("Result: valid Hui Chat database for this server.")
     elif state == "empty":
-        lines.append("Result: empty database. Setup can prepare it, but it is not a finished Echo-Chat database yet.")
+        lines.append("Result: empty database. Setup can prepare it, but it is not a finished Hui Chat database yet.")
     elif state == "foreign_schema":
-        lines.append("Result: this does not look like an Echo-Chat database. Choose another database or create a new one.")
-    elif state == "partial_echochat":
-        lines.append("Result: partial Echo-Chat schema. Setup may repair it, but review before saving.")
+        lines.append("Result: this does not look like an Hui Chat database. Choose another database or create a new one.")
+    elif state == "partial_hui":
+        lines.append("Result: partial Hui Chat schema. Setup may repair it, but review before saving.")
     else:
-        lines.append("Result: database requires review before it is used for Echo-Chat.")
+        lines.append("Result: database requires review before it is used for Hui Chat.")
     return lines
 
 
@@ -4575,20 +4587,20 @@ def _validate_current_database_for_chat(dsn: str) -> tuple[bool, str, dict[str, 
     if not str(dsn or "").strip():
         return False, "Database connection is not configured yet.", {"state": "missing"}
     try:
-        report = _validate_echochat_database(str(dsn))
+        report = _validate_hui_database(str(dsn))
     except Exception as exc:
-        return False, f"Echo-Chat database validation failed: {exc}", {"state": "error"}
+        return False, f"Hui Chat database validation failed: {exc}", {"state": "error"}
     state = str(report.get("state") or "unknown")
     db = str(report.get("database") or "current database")
     if bool(report.get("valid")):
-        return True, f"Database {db} is a valid Echo-Chat database.", report
+        return True, f"Database {db} is a valid Hui Chat database.", report
     if state == "empty":
         return False, f"Database {db} is empty. Setup can prepare it before first use.", report
     if state == "foreign_schema":
-        return False, f"Database {db} has tables but no Echo-Chat markers. It is probably the wrong database.", report
-    if state == "partial_echochat":
-        return False, f"Database {db} has a partial Echo-Chat schema and should be repaired before use.", report
-    return False, f"Database {db} could not be confirmed as valid for Echo-Chat.", report
+        return False, f"Database {db} has tables but no Hui Chat markers. It is probably the wrong database.", report
+    if state == "partial_hui":
+        return False, f"Database {db} has a partial Hui Chat schema and should be repaired before use.", report
+    return False, f"Database {db} could not be confirmed as valid for Hui Chat.", report
 
 
 
@@ -4602,13 +4614,13 @@ def _select_detected_database(stdscr, merged: Dict[str, Any], runtime: Dict[str,
             return
         candidates = list(runtime.get("detected_candidates") or [])
     if not candidates:
-        runtime["db_status"] = "No detected Echo-Chat database is available to select."
+        runtime["db_status"] = "No detected Hui Chat database is available to select."
         return
     labels = [_database_candidate_label(candidate) for candidate in candidates] + ["Back"]
     intro = [
-        "More than one Echo-Chat database can exist on the same PostgreSQL server.",
+        "More than one Hui Chat database can exist on the same PostgreSQL server.",
         "Choose the database this server should use instead of letting setup guess.",
-        "The score is based on Echo-Chat marker tables and tracked migration metadata.",
+        "The score is based on Hui Chat marker tables and tracked migration metadata.",
     ]
     current_dsn = str(merged.get("database_url") or runtime.get("detected_dsn") or "")
     selected_index = 0
@@ -4616,7 +4628,7 @@ def _select_detected_database(stdscr, merged: Dict[str, Any], runtime: Dict[str,
         if str(candidate.get("dsn") or "") == current_dsn:
             selected_index = idx
             break
-    choice = _tui_menu(stdscr, "Select Echo-Chat database", intro, labels, selected=selected_index)
+    choice = _tui_menu(stdscr, "Select Hui Chat database", intro, labels, selected=selected_index)
     if choice in (-1, len(labels) - 1):
         runtime["db_status"] = "Database selection was cancelled."
         return
@@ -4624,8 +4636,8 @@ def _select_detected_database(stdscr, merged: Dict[str, Any], runtime: Dict[str,
     merged["database_url"] = str(selected.get("dsn") or "")
     runtime["detected_dsn"] = str(selected.get("dsn") or "")
     runtime["db_validation_report"] = selected
-    runtime["db_validation_status"] = f"Selected detected Echo-Chat database: {selected.get('database')}."
-    runtime["db_status"] = f"Using detected Echo-Chat database: {selected.get('database')}."
+    runtime["db_validation_status"] = f"Selected detected Hui Chat database: {selected.get('database')}."
+    runtime["db_status"] = f"Using detected Hui Chat database: {selected.get('database')}."
 
 
 
@@ -4671,10 +4683,10 @@ def _prepare_database_with_guidance(stdscr, merged: Dict[str, Any], recreate: bo
         host_text = str(parts.get("host") or "").strip()
         local_target = host_text.lower() in ("", "localhost", "127.0.0.1", "::1") or host_text.startswith("/")
         if local_target:
-            use_local = _tui_yes_no(stdscr, "Database admin help", "The runtime PostgreSQL user could not create or repair this database. Use local postgres admin tools now? Echo-Chat will run createdb/psql through sudo, and your system may ask for the admin password.", default=True)
+            use_local = _tui_yes_no(stdscr, "Database admin help", "The runtime PostgreSQL user could not create or repair this database. Use local postgres admin tools now? Hui Chat will run createdb/psql through sudo, and your system may ask for the admin password.", default=True)
             if use_local:
                 def _run_local():
-                    print("\nEcho-Chat setup is using local postgres admin tools.")
+                    print("\nHui Chat setup is using local postgres admin tools.")
                     print("You may be prompted for your system password so sudo can run createdb/psql as postgres.\n")
                     result_local = _ensure_database_ready_via_local_admin_impl(target_dsn, recreate=recreate)
                     print("\nDatabase bootstrap finished.")
@@ -4724,7 +4736,7 @@ def _delete_database_with_guidance(stdscr, target_dsn: str, dbname: str, merged:
                 if not shutil.which("sudo"):
                     raise RuntimeError("sudo is required to delete the detected database with the local postgres admin flow.")
                 prefix = ["sudo", "-u", "postgres"]
-            print(f"\nEcho-Chat setup is deleting the old detected database '{dbname}'.")
+            print(f"\nHui Chat setup is deleting the old detected database '{dbname}'.")
             print("Your system may ask for the admin password so sudo can run dropdb as postgres.\n")
             subprocess.run(prefix + ["dropdb", "--if-exists", dbname], check=True, env=env, text=True)
             print("\nOld detected database delete finished.")
@@ -4752,7 +4764,7 @@ def _delete_database_with_guidance(stdscr, target_dsn: str, dbname: str, merged:
 
 
 def _delete_all_detected_databases_with_guidance(stdscr, merged: Dict[str, Any], runtime: Dict[str, Any]) -> tuple[bool, str]:
-    """Let the setup admin delete every detected Echo-Chat database, and only those databases.
+    """Let the setup admin delete every detected Hui Chat database, and only those databases.
 
     This is intentionally scoped to the discovery results instead of all PostgreSQL
     databases on the server. The setup admin must confirm an exact destructive
@@ -4780,24 +4792,24 @@ def _delete_all_detected_databases_with_guidance(stdscr, merged: Dict[str, Any],
         unique.setdefault(dbname, candidate)
 
     if not unique:
-        return False, "No detected Echo-Chat databases are available for the admin to delete."
+        return False, "No detected Hui Chat databases are available for the admin to delete."
 
     names = sorted(unique.keys())
     lines = [
         "Admin destructive database action",
         "",
-        "This deletes every detected Echo-Chat database listed below.",
-        "It does not delete unrelated PostgreSQL databases that were not detected as Echo-Chat.",
+        "This deletes every detected Hui Chat database listed below.",
+        "It does not delete unrelated PostgreSQL databases that were not detected as Hui Chat.",
         "Back up anything important before continuing.",
         "",
     ] + [f"  - {name}" for name in names] + [
         "",
         "To continue, type exactly:",
-        "DELETE ALL ECHO-CHAT DATABASES",
+        "DELETE ALL HUI CHAT DATABASES",
     ]
     _tui_scroll_text(
         stdscr,
-        "Delete all detected Echo-Chat databases",
+        "Delete all detected Hui Chat databases",
         lines,
         footer="Read this warning, then press Enter/Esc to continue to the confirmation prompt.",
         allow_save=False,
@@ -4805,16 +4817,16 @@ def _delete_all_detected_databases_with_guidance(stdscr, merged: Dict[str, Any],
     phrase = _tui_input(
         stdscr,
         "Confirm delete all detected databases",
-        "Type DELETE ALL ECHO-CHAT DATABASES",
+        "Type DELETE ALL HUI CHAT DATABASES",
         "",
         secret=False,
     ).strip()
-    if phrase != "DELETE ALL ECHO-CHAT DATABASES":
+    if phrase != "DELETE ALL HUI CHAT DATABASES":
         return False, "Delete-all-databases action was cancelled because the confirmation phrase did not match."
     if not _tui_yes_no(
         stdscr,
         "Final confirmation",
-        f"Admin confirmed deletion of {len(names)} detected Echo-Chat database(s). Permanently delete them now?",
+        f"Admin confirmed deletion of {len(names)} detected Hui Chat database(s). Permanently delete them now?",
         default=False,
     ):
         return False, "Delete-all-databases action was cancelled at final confirmation."
@@ -4841,7 +4853,7 @@ def _delete_all_detected_databases_with_guidance(stdscr, merged: Dict[str, Any],
                 if not shutil.which("sudo"):
                     raise RuntimeError("sudo is required to delete all detected databases with the local postgres admin flow.")
                 prefix = ["sudo", "-u", "postgres"]
-            print("\nEcho-Chat setup is deleting all detected Echo-Chat databases.")
+            print("\nHui Chat setup is deleting all detected Hui Chat databases.")
             print("Your system may ask for the admin password so sudo can run dropdb as postgres.\n")
             for name in names:
                 print(f"Dropping {name} ...")
@@ -4852,16 +4864,16 @@ def _delete_all_detected_databases_with_guidance(stdscr, merged: Dict[str, Any],
             _suspend_curses_for_command(stdscr, _run_local_delete_all)
             deleted = names[:]
         except Exception as exc:
-            return False, f"Could not delete all detected Echo-Chat databases: {exc}"
+            return False, f"Could not delete all detected Hui Chat databases: {exc}"
     else:
         bootstrap_dsn = _prompt_bootstrap_dsn_tui(
             stdscr,
             merged,
             first_dsn,
-            "Enter an owner or superuser PostgreSQL DSN to delete all detected Echo-Chat databases.",
+            "Enter an owner or superuser PostgreSQL DSN to delete all detected Hui Chat databases.",
         )
         if not bootstrap_dsn:
-            return False, "Skipped deleting all detected Echo-Chat databases because no bootstrap/admin DSN was provided."
+            return False, "Skipped deleting all detected Hui Chat databases because no bootstrap/admin DSN was provided."
         for name in names:
             try:
                 candidate_dsn = str(unique[name].get("dsn") or first_dsn)
@@ -4883,9 +4895,9 @@ def _delete_all_detected_databases_with_guidance(stdscr, merged: Dict[str, Any],
     runtime["db_validation_report"] = None
     runtime["db_validation_status"] = None
     if current_db in names:
-        runtime["db_status"] = f"Deleted detected Echo-Chat databases: {', '.join(deleted or names)}. The configured target database name is now empty/missing until the admin creates it again."
+        runtime["db_status"] = f"Deleted detected Hui Chat databases: {', '.join(deleted or names)}. The configured target database name is now empty/missing until the admin creates it again."
     else:
-        runtime["db_status"] = f"Deleted detected Echo-Chat databases: {', '.join(deleted or names)}."
+        runtime["db_status"] = f"Deleted detected Hui Chat databases: {', '.join(deleted or names)}."
     if failed:
         return False, runtime["db_status"] + " Failed: " + "; ".join(failed)
     return True, runtime["db_status"]
@@ -4897,7 +4909,7 @@ class _CursesSetupUI:
 
     Legacy guard phrases kept for setup-regression tests:
     Choose a section, edit it, and then review the plain-English summary before saving.
-    Full EchoChat schema prepared.
+    Full HuiChat schema prepared.
     """
     pass
 
@@ -4908,7 +4920,7 @@ def _setup_env_truthy(name: str) -> bool:
 
 
 def _setup_env_loaded_from_dotenv(name: str) -> bool:
-    keys = {part.strip() for part in os.getenv("ECHOCHAT_DOTENV_KEYS", "").split(",") if part.strip()}
+    keys = {part.strip() for part in os.getenv("HUI_DOTENV_KEYS", "").split(",") if part.strip()}
     return name in keys
 
 
@@ -4934,17 +4946,17 @@ def _format_setup_tui_failure(reason: str, notes: list[str] | None = None) -> st
         f"TERM={os.getenv('TERM', '') or '(empty)'}",
         f"stdin_tty={os.isatty(0)} stdout_tty={os.isatty(1)}",
     ]
-    if os.getenv("ECHOCHAT_DOTENV_FILE"):
-        detail.append(f"dotenv={os.getenv('ECHOCHAT_DOTENV_FILE')}")
+    if os.getenv("HUI_DOTENV_FILE"):
+        detail.append(f"dotenv={os.getenv('HUI_DOTENV_FILE')}")
     for note in notes:
         detail.append(note)
     detail.extend([
         "Run this doctor command for details:",
         "  python main.py --setup-doctor",
         "To intentionally use the old prompt setup:",
-        "  ECHOCHAT_SETUP_LEGACY=1 python main.py --setup",
+        "  HUI_SETUP_LEGACY=1 python main.py --setup",
         "To allow the old prompt setup only as an emergency fallback:",
-        "  ECHOCHAT_SETUP_ALLOW_PLAIN_FALLBACK=1 python main.py --setup",
+        "  HUI_SETUP_ALLOW_PLAIN_FALLBACK=1 python main.py --setup",
     ])
     return "\n".join(detail)
 
@@ -4976,7 +4988,7 @@ def _run_setup_tui(settings: Dict[str, Any]) -> Dict[str, Any]:
         "Step 8  - Protection and anti-abuse",
         "Step 9  - Media, GIFs, and uploads",
         "Step 10 - Voice and WebRTC",
-        "Step 11 - Echo media / webcam",
+        "Step 11 - Hui media / webcam",
         "Step 12 - Hosting, proxy, and HTTPS",
         "Step 13 - Logs and health checks",
         "Step 14 - Advanced and all settings",
@@ -5048,7 +5060,7 @@ def _run_setup_tui(settings: Dict[str, Any]) -> Dict[str, Any]:
                 while True:
                     db_intro = _db_summary_lines(merged, runtime.get("detected_dsn"), runtime.get("db_status"), runtime.get("detected_candidates"), runtime.get("db_validation_report"), runtime.get("target_database_status")) + [
                         "",
-                        "This menu separates the PostgreSQL connection from the Echo-Chat owner account so they are easier to understand.",
+                        "This menu separates the PostgreSQL connection from the Hui Chat owner account so they are easier to understand.",
                         "Edit database connection lets you choose the PostgreSQL role, password, host, port, and database name directly.",
                     ]
                     db_choice = _tui_menu(
@@ -5056,11 +5068,11 @@ def _run_setup_tui(settings: Dict[str, Any]) -> Dict[str, Any]:
                         "Database",
                         db_intro,
                         [
-                            "Rescan for existing Echo-Chat databases",
-                            "Select detected Echo-Chat database",
-                            "Validate current database for Echo-Chat",
+                            "Rescan for existing Hui Chat databases",
+                            "Select detected Hui Chat database",
+                            "Validate current database for Hui Chat",
                             "Delete detected database and create a new one",
-                            "Admin: delete all detected Echo-Chat databases",
+                            "Admin: delete all detected Hui Chat databases",
                             "Edit database connection",
                             "Create the current target database if needed",
                             "Create a brand new database with a new name",
@@ -5069,7 +5081,7 @@ def _run_setup_tui(settings: Dict[str, Any]) -> Dict[str, Any]:
                             "Back",
                         ],
                         selected=db_menu_selected,
-                        footer="When local postgres admin help is needed, Echo-Chat can use sudo -u postgres and your system may ask for the admin password.",
+                        footer="When local postgres admin help is needed, Hui Chat can use sudo -u postgres and your system may ask for the admin password.",
                     )
                     if db_choice >= 0:
                         db_menu_selected = db_choice
@@ -5091,7 +5103,7 @@ def _run_setup_tui(settings: Dict[str, Any]) -> Dict[str, Any]:
                         runtime["db_status"] = msg
                         _tui_scroll_text(
                             stdscr,
-                            "Echo-Chat database validation",
+                            "Hui Chat database validation",
                             _format_database_validation_lines(report),
                             footer="Enter/Esc returns to the Database menu.",
                             allow_save=False,
@@ -5105,10 +5117,10 @@ def _run_setup_tui(settings: Dict[str, Any]) -> Dict[str, Any]:
                             elif len(candidates) > 1:
                                 _select_detected_database(stdscr, merged, runtime)
                         if not runtime.get("detected_dsn"):
-                            runtime["db_status"] = "No detected Echo-Chat database is available to replace yet."
+                            runtime["db_status"] = "No detected Hui Chat database is available to replace yet."
                             continue
                         detected_parts = dsn_parts(str(runtime["detected_dsn"]))
-                        detected_name = str(detected_parts.get("db") or "echochat")
+                        detected_name = str(detected_parts.get("db") or "hui")
                         new_name = _tui_input(stdscr, "Replace detected database", "Enter the name for the fresh PostgreSQL database", detected_name)
                         if not str(new_name).strip():
                             runtime["db_status"] = "Database replacement was cancelled."
@@ -5151,7 +5163,7 @@ def _run_setup_tui(settings: Dict[str, Any]) -> Dict[str, Any]:
                                 parts = _default_local_postgres_parts()
                         else:
                             parts = _default_local_postgres_parts()
-                        current_name = str(parts.get("db") or "echochat")
+                        current_name = str(parts.get("db") or "hui")
                         new_name = _tui_input(stdscr, "New database", "Enter the new PostgreSQL database name", str(current_name))
                         if str(new_name).strip():
                             new_name = str(new_name).strip()
@@ -5252,15 +5264,15 @@ def _run_setup_tui(settings: Dict[str, Any]) -> Dict[str, Any]:
                         stdscr,
                         "Protected database",
                         [
-                            f"'{save_target_db}' is a PostgreSQL maintenance database and cannot be used as the Echo-Chat application database.",
-                            "Choose or create a dedicated Echo-Chat database such as echochat.",
+                            f"'{save_target_db}' is a PostgreSQL maintenance database and cannot be used as the Hui Chat application database.",
+                            "Choose or create a dedicated Hui Chat database such as hui.",
                         ],
                         error=True,
                     )
                     continue
                 ok, msg = _test_database_connection(str(merged.get("database_url") or ""))
                 if not ok:
-                    want_help = _tui_yes_no(stdscr, "Database not ready", msg + "\n\nDo you want EchoChat to try to create or repair the database now?", default=True)
+                    want_help = _tui_yes_no(stdscr, "Database not ready", msg + "\n\nDo you want HuiChat to try to create or repair the database now?", default=True)
                     if want_help:
                         ok2, msg2 = _prepare_database_with_guidance(stdscr, merged, recreate=False)
                         runtime["db_status"] = msg2
@@ -5280,30 +5292,30 @@ def _run_setup_tui(settings: Dict[str, Any]) -> Dict[str, Any]:
                         "Wrong database warning",
                         _format_database_validation_lines(validation_report) + [
                             "",
-                            "Setup will not save into this database because it contains non-Echo-Chat tables and no Echo-Chat markers.",
-                            "Choose a detected Echo-Chat database, create a new database, or recreate this target if you intentionally want to erase it.",
+                            "Setup will not save into this database because it contains non-Hui Chat tables and no Hui Chat markers.",
+                            "Choose a detected Hui Chat database, create a new database, or recreate this target if you intentionally want to erase it.",
                         ],
                         footer="Enter/Esc returns to setup.",
                         allow_save=False,
                     )
                     continue
-                if validation_state == "partial_echochat":
+                if validation_state == "partial_hui":
                     repair = _tui_yes_no(
                         stdscr,
-                        "Partial Echo-Chat database",
+                        "Partial Hui Chat database",
                         validation_msg + "\n\nSetup can try to repair the schema before saving. Continue?",
                         default=True,
                     )
                     if not repair:
-                        runtime["db_status"] = "Save paused because the selected database has only a partial Echo-Chat schema."
+                        runtime["db_status"] = "Save paused because the selected database has only a partial Hui Chat schema."
                         continue
-                if validation_state == "valid_echochat" and not valid_db:
+                if validation_state == "valid_hui" and not valid_db:
                     _tui_scroll_text(
                         stdscr,
                         "Database permission warning",
                         _format_database_validation_lines(validation_report) + [
                             "",
-                            "This looks like an Echo-Chat database, but the configured PostgreSQL role cannot fully use/create objects in the public schema.",
+                            "This looks like an Hui Chat database, but the configured PostgreSQL role cannot fully use/create objects in the public schema.",
                             "Use the database repair option or a bootstrap/admin DSN before saving.",
                         ],
                         footer="Enter/Esc returns to setup.",
@@ -5311,7 +5323,7 @@ def _run_setup_tui(settings: Dict[str, Any]) -> Dict[str, Any]:
                     )
                     continue
                 if validation_state == "empty":
-                    runtime["db_status"] = validation_msg + " Setup will prepare the Echo-Chat schema during save."
+                    runtime["db_status"] = validation_msg + " Setup will prepare the Hui Chat schema during save."
 
                 owner_valid, owner_msg = _validate_owner_admin_setup_fields(merged, base)
                 if not owner_valid:
@@ -5356,7 +5368,7 @@ def _run_setup_tui(settings: Dict[str, Any]) -> Dict[str, Any]:
                         go_on = _tui_yes_no(
                             stdscr,
                             "Database target confirmation",
-                            f"You are about to save setup into database '{target_db_name}', but the auto-detected Echo-Chat database is '{detected_db_name}'. Continue with '{target_db_name}'?",
+                            f"You are about to save setup into database '{target_db_name}', but the auto-detected Hui Chat database is '{detected_db_name}'. Continue with '{target_db_name}'?",
                             default=False,
                         )
                         if not go_on:
@@ -5418,34 +5430,34 @@ def _run_setup_tui(settings: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def interactive_setup(settings: Dict[str, Any]) -> Dict[str, Any]:
-    """Run the Echo-Chat setup wizard.
+    """Run the Hui Chat setup wizard.
 
     Default behavior is the blue full-screen terminal UI. The old plain prompt
     wizard is now opt-in only, because silently falling back made setup look
     broken and hid the real terminal/curses reason.
     """
     notes = _prepare_setup_tui_environment()
-    use_legacy = _setup_env_truthy("ECHOCHAT_SETUP_LEGACY")
-    force_tui = _setup_env_truthy("ECHOCHAT_SETUP_TUI")
-    allow_plain_fallback = _setup_env_truthy("ECHOCHAT_SETUP_ALLOW_PLAIN_FALLBACK")
+    use_legacy = _setup_env_truthy("HUI_SETUP_LEGACY")
+    force_tui = _setup_env_truthy("HUI_SETUP_TUI")
+    allow_plain_fallback = _setup_env_truthy("HUI_SETUP_ALLOW_PLAIN_FALLBACK")
 
     # Do not let a stale project .env pin every future setup run to the old
-    # prompt UI. A shell-exported ECHOCHAT_SETUP_LEGACY still works.
-    if use_legacy and _setup_env_loaded_from_dotenv("ECHOCHAT_SETUP_LEGACY") and not force_tui:
-        notes.append("Ignored ECHOCHAT_SETUP_LEGACY from the project .env; use a shell variable for one-off legacy setup.")
+    # prompt UI. A shell-exported HUI_SETUP_LEGACY still works.
+    if use_legacy and _setup_env_loaded_from_dotenv("HUI_SETUP_LEGACY") and not force_tui:
+        notes.append("Ignored HUI_SETUP_LEGACY from the project .env; use a shell variable for one-off legacy setup.")
         use_legacy = False
 
     curses_unavailable = curses is None
     not_tty = not os.isatty(0) or not os.isatty(1)
 
     if use_legacy and not force_tui:
-        print("⚠️  Using old plain setup because ECHOCHAT_SETUP_LEGACY=1 was set in the shell.")
+        print("⚠️  Using old plain setup because HUI_SETUP_LEGACY=1 was set in the shell.")
         return _interactive_setup_legacy(settings)
 
     if curses_unavailable or (not_tty and not force_tui):
         reason = "curses is unavailable" if curses_unavailable else "stdin/stdout is not a terminal"
         if allow_plain_fallback:
-            print(f"⚠️  Blue setup UI unavailable ({reason}); using the plain setup prompts because ECHOCHAT_SETUP_ALLOW_PLAIN_FALLBACK=1.")
+            print(f"⚠️  Blue setup UI unavailable ({reason}); using the plain setup prompts because HUI_SETUP_ALLOW_PLAIN_FALLBACK=1.")
             return _interactive_setup_legacy(settings)
         raise SystemExit(_format_setup_tui_failure(reason, notes))
 
@@ -5455,7 +5467,7 @@ def interactive_setup(settings: Dict[str, Any]) -> Dict[str, Any]:
         raise SystemExit(1)
     except Exception as exc:
         if allow_plain_fallback:
-            print(f"⚠️  Blue setup UI failed ({exc}); using the plain setup prompts because ECHOCHAT_SETUP_ALLOW_PLAIN_FALLBACK=1.")
+            print(f"⚠️  Blue setup UI failed ({exc}); using the plain setup prompts because HUI_SETUP_ALLOW_PLAIN_FALLBACK=1.")
             return _interactive_setup_legacy(settings)
         raise SystemExit(_format_setup_tui_failure(str(exc), notes)) from exc
 

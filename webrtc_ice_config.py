@@ -1,4 +1,4 @@
-"""WebRTC ICE server configuration helpers for Echo-Chat.
+"""WebRTC ICE server configuration helpers for Hui Chat.
 
 The browser WebRTC path needs ICE servers for P2P file transfers, voice, and
 webcam.  STUN can discover peer-reflexive/public candidates; TURN relays media
@@ -18,11 +18,11 @@ DEFAULT_ICE_SERVERS: list[dict[str, Any]] = [
 
 _ALLOWED_ICE_SCHEMES = ("stun:", "stuns:", "turn:", "turns:")
 _STANDARD_ICE_KEYS = {"urls", "username", "credential", "credentialType"}
-_P2P_ICE_ENV_NAMES = ("ECHOCHAT_P2P_ICE_SERVERS_JSON", "ECHOCHAT_WEBRTC_ICE_SERVERS_JSON", "WEBRTC_ICE_SERVERS_JSON")
-_VOICE_ICE_ENV_NAMES = ("ECHOCHAT_VOICE_ICE_SERVERS_JSON", "ECHOCHAT_WEBCAM_ICE_SERVERS_JSON")
-_TURN_URL_ENV_NAMES = ("ECHOCHAT_TURN_URLS", "TURN_URLS")
-_TURN_USERNAME_ENV_NAMES = ("ECHOCHAT_TURN_USERNAME", "TURN_USERNAME")
-_TURN_CREDENTIAL_ENV_NAMES = ("ECHOCHAT_TURN_CREDENTIAL", "ECHOCHAT_TURN_PASSWORD", "TURN_CREDENTIAL", "TURN_PASSWORD")
+_P2P_ICE_ENV_NAMES = ("HUI_P2P_ICE_SERVERS_JSON", "HUI_WEBRTC_ICE_SERVERS_JSON", "WEBRTC_ICE_SERVERS_JSON")
+_VOICE_ICE_ENV_NAMES = ("HUI_VOICE_ICE_SERVERS_JSON", "HUI_WEBCAM_ICE_SERVERS_JSON")
+_TURN_URL_ENV_NAMES = ("HUI_TURN_URLS", "TURN_URLS")
+_TURN_USERNAME_ENV_NAMES = ("HUI_TURN_USERNAME", "TURN_USERNAME")
+_TURN_CREDENTIAL_ENV_NAMES = ("HUI_TURN_CREDENTIAL", "HUI_TURN_PASSWORD", "TURN_CREDENTIAL", "TURN_PASSWORD")
 
 
 def _env_str(*names: str) -> str:
@@ -197,10 +197,10 @@ def effective_ice_settings(settings: Mapping[str, Any] | None) -> dict[str, Any]
     """Return runtime-effective ICE settings, honoring env secrets.
 
     Specific JSON/list environment variables win first. The simpler
-    ECHOCHAT_TURN_URLS form is used for both P2P and voice/webcam unless a more
+    HUI_TURN_URLS form is used for both P2P and voice/webcam unless a more
     specific env value is present. If setup saved TURN URLs but intentionally
-    left credentials out of JSON, ECHOCHAT_TURN_USERNAME and
-    ECHOCHAT_TURN_CREDENTIAL/PASSWORD are applied to those saved TURN entries.
+    left credentials out of JSON, HUI_TURN_USERNAME and
+    HUI_TURN_CREDENTIAL/PASSWORD are applied to those saved TURN entries.
     """
 
     settings = settings or {}
@@ -327,7 +327,7 @@ def turn_credential_errors(settings: Mapping[str, Any] | None) -> list[str]:
             if not str(server.get("username") or "").strip() or not str(server.get("credential") or "").strip():
                 errors.append(
                     f"{label} TURN server {server.get('urls')} is missing username or credential. "
-                    "Store them in the ICE JSON or set ECHOCHAT_TURN_USERNAME and ECHOCHAT_TURN_CREDENTIAL/TURN_PASSWORD."
+                    "Store them in the ICE JSON or set HUI_TURN_USERNAME and HUI_TURN_CREDENTIAL/TURN_PASSWORD."
                 )
     # Avoid duplicate messages when voice falls back to the same P2P list.
     unique: list[str] = []

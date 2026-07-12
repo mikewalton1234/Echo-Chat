@@ -1,4 +1,4 @@
-"""Central secret resolution/generation helpers for Echo-Chat.
+"""Central secret resolution/generation helpers for Hui Chat.
 
 The important rule: runtime-only one-off secrets must never be used for
 session/JWT stability or at-rest encryption. Missing secrets are generated as
@@ -22,13 +22,13 @@ PLACEHOLDER_RE = re.compile(
     re.I,
 )
 
-SECRET_KEY_ENV_ALIASES = ("SECRET_KEY", "ECHOCHAT_SECRET_KEY", "ECHOCHAT_FLASK_SECRET_KEY")
-JWT_SECRET_ENV_ALIASES = ("JWT_SECRET_KEY", "ECHOCHAT_JWT_SECRET", "ECHOCHAT_JWT_SECRET_KEY")
-PROFILE_KEY_ENV_ALIASES = ("ECHOCHAT_PROFILE_FIELD_KEY", "PROFILE_FIELD_ENCRYPTION_KEY")
-EMAIL_FIELD_KEY_ENV_ALIASES = ("ECHOCHAT_EMAIL_FIELD_KEY", "EMAIL_FIELD_ENCRYPTION_KEY")
-EMAIL_HASH_KEY_ENV_ALIASES = ("ECHOCHAT_EMAIL_HASH_KEY", "EMAIL_HASH_KEY")
-BACKUP_KEY_ENV_ALIASES = ("ECHOCHAT_SECURITY_BACKUP_KEY", "SECURITY_BACKUP_ENCRYPTION_KEY")
-PRIVACY_HASH_KEY_ENV_ALIASES = ("ECHOCHAT_PRIVACY_HASH_KEY", "PRIVACY_RETENTION_HASH_KEY")
+SECRET_KEY_ENV_ALIASES = ("SECRET_KEY", "HUI_SECRET_KEY", "HUI_FLASK_SECRET_KEY")
+JWT_SECRET_ENV_ALIASES = ("JWT_SECRET_KEY", "HUI_JWT_SECRET", "HUI_JWT_SECRET_KEY")
+PROFILE_KEY_ENV_ALIASES = ("HUI_PROFILE_FIELD_KEY", "PROFILE_FIELD_ENCRYPTION_KEY")
+EMAIL_FIELD_KEY_ENV_ALIASES = ("HUI_EMAIL_FIELD_KEY", "EMAIL_FIELD_ENCRYPTION_KEY")
+EMAIL_HASH_KEY_ENV_ALIASES = ("HUI_EMAIL_HASH_KEY", "EMAIL_HASH_KEY")
+BACKUP_KEY_ENV_ALIASES = ("HUI_SECURITY_BACKUP_KEY", "SECURITY_BACKUP_ENCRYPTION_KEY")
+PRIVACY_HASH_KEY_ENV_ALIASES = ("HUI_PRIVACY_HASH_KEY", "PRIVACY_RETENTION_HASH_KEY")
 
 SETTING_ALIASES = {
     "secret_key": ("secret_key", "flask_secret_key", "session_secret", "session_secret_key"),
@@ -53,21 +53,21 @@ ENV_ALIASES = {
 PRIMARY_ENV = {
     "secret_key": "SECRET_KEY",
     "jwt_secret": "JWT_SECRET_KEY",
-    "profile_field_encryption_key": "ECHOCHAT_PROFILE_FIELD_KEY",
-    "email_field_encryption_key": "ECHOCHAT_EMAIL_FIELD_KEY",
-    "email_hash_key": "ECHOCHAT_EMAIL_HASH_KEY",
-    "security_backup_encryption_key": "ECHOCHAT_SECURITY_BACKUP_KEY",
-    "privacy_retention_hash_key": "ECHOCHAT_PRIVACY_HASH_KEY",
+    "profile_field_encryption_key": "HUI_PROFILE_FIELD_KEY",
+    "email_field_encryption_key": "HUI_EMAIL_FIELD_KEY",
+    "email_hash_key": "HUI_EMAIL_HASH_KEY",
+    "security_backup_encryption_key": "HUI_SECURITY_BACKUP_KEY",
+    "privacy_retention_hash_key": "HUI_PRIVACY_HASH_KEY",
 }
 
 GENERATED_ENV_ORDER = (
     "SECRET_KEY",
     "JWT_SECRET_KEY",
-    "ECHOCHAT_PROFILE_FIELD_KEY",
-    "ECHOCHAT_EMAIL_FIELD_KEY",
-    "ECHOCHAT_EMAIL_HASH_KEY",
-    "ECHOCHAT_SECURITY_BACKUP_KEY",
-    "ECHOCHAT_PRIVACY_HASH_KEY",
+    "HUI_PROFILE_FIELD_KEY",
+    "HUI_EMAIL_FIELD_KEY",
+    "HUI_EMAIL_HASH_KEY",
+    "HUI_SECURITY_BACKUP_KEY",
+    "HUI_PRIVACY_HASH_KEY",
 )
 
 
@@ -137,7 +137,7 @@ def generate_secret_value() -> str:
 
 
 def default_env_path(settings_file: Path | None = None) -> Path:
-    override = os.getenv("ECHOCHAT_ENV_FILE") or os.getenv("ENV_FILE")
+    override = os.getenv("HUI_ENV_FILE") or os.getenv("ENV_FILE")
     if override:
         return Path(override)
     base = Path(settings_file).resolve().parent if settings_file else Path.cwd()
@@ -226,7 +226,7 @@ def ensure_secret(settings: dict, canonical: str, *, settings_file: Path | None 
     primary = PRIMARY_ENV.get(canonical, canonical.upper())
     os.environ[primary] = value
     written: Path | None = None
-    if not persist_secrets_enabled(settings) or os.getenv("ECHOCHAT_AUTO_WRITE_ENV_SECRETS", "1").strip().lower() not in {"0", "false", "no", "off"}:
+    if not persist_secrets_enabled(settings) or os.getenv("HUI_AUTO_WRITE_ENV_SECRETS", "1").strip().lower() not in {"0", "false", "no", "off"}:
         written = write_env_secrets({primary: value}, path=default_env_path(settings_file))
     return value, True, written
 
@@ -250,11 +250,11 @@ def generate_secret_bundle(*, include_crypto: bool = True) -> dict[str, str]:
     if include_crypto:
         bundle.update(
             {
-                "ECHOCHAT_PROFILE_FIELD_KEY": generate_secret_value(),
-                "ECHOCHAT_EMAIL_FIELD_KEY": generate_secret_value(),
-                "ECHOCHAT_EMAIL_HASH_KEY": generate_secret_value(),
-                "ECHOCHAT_SECURITY_BACKUP_KEY": generate_secret_value(),
-                "ECHOCHAT_PRIVACY_HASH_KEY": generate_secret_value(),
+                "HUI_PROFILE_FIELD_KEY": generate_secret_value(),
+                "HUI_EMAIL_FIELD_KEY": generate_secret_value(),
+                "HUI_EMAIL_HASH_KEY": generate_secret_value(),
+                "HUI_SECURITY_BACKUP_KEY": generate_secret_value(),
+                "HUI_PRIVACY_HASH_KEY": generate_secret_value(),
             }
         )
     return bundle
@@ -273,11 +273,11 @@ def missing_core_or_crypto(settings: dict | None = None, *, include_crypto: bool
     if include_crypto:
         checks.extend(
             [
-                ("ECHOCHAT_PROFILE_FIELD_KEY or stable SECRET_KEY", stable_profile_field_key_material(settings)),
-                ("ECHOCHAT_EMAIL_FIELD_KEY", resolve_secret(settings, "email_field_encryption_key")),
-                ("ECHOCHAT_EMAIL_HASH_KEY", resolve_secret(settings, "email_hash_key")),
-                ("ECHOCHAT_SECURITY_BACKUP_KEY", resolve_secret(settings, "security_backup_encryption_key")),
-                ("ECHOCHAT_PRIVACY_HASH_KEY", resolve_secret(settings, "privacy_retention_hash_key")),
+                ("HUI_PROFILE_FIELD_KEY or stable SECRET_KEY", stable_profile_field_key_material(settings)),
+                ("HUI_EMAIL_FIELD_KEY", resolve_secret(settings, "email_field_encryption_key")),
+                ("HUI_EMAIL_HASH_KEY", resolve_secret(settings, "email_hash_key")),
+                ("HUI_SECURITY_BACKUP_KEY", resolve_secret(settings, "security_backup_encryption_key")),
+                ("HUI_PRIVACY_HASH_KEY", resolve_secret(settings, "privacy_retention_hash_key")),
             ]
         )
     for label, value in checks:

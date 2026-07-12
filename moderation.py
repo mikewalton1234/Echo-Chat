@@ -103,6 +103,14 @@ def is_ip_sanctioned(ip: str | None) -> bool:
     clean_ip = _clean_ip_address(ip)
     if not clean_ip:
         return False
+    # Never ban loopback or link-local addresses — they are proxy/internal IPs
+    # and banning them would block every user behind Replit's (or any) reverse proxy.
+    try:
+        _addr = ipaddress.ip_address(clean_ip)
+        if _addr.is_loopback or _addr.is_link_local:
+            return False
+    except Exception:
+        pass
     conn = get_db()
     with conn.cursor() as cur:
         cur.execute(

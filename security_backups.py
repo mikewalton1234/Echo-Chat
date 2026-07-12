@@ -29,11 +29,11 @@ from secret_manager import resolve_secret, stable_email_field_key_material, stab
 BACKUP_ROOT = Path("backups/security")
 BACKUP_VERSION = 1
 ENCRYPTED_BACKUP_VERSION = 2
-ENCRYPTED_BACKUP_PREFIX = "ecsecbackup:v1:"
+ENCRYPTED_BACKUP_PREFIX = "huisecbackup:v1:"
 _BACKUP_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
-_BACKUP_KEY_ENV = "ECHOCHAT_SECURITY_BACKUP_KEY"
-_AAD = b"EchoChat encrypted security backup v1"
-_KEY_DERIVE_PREFIX = b"EchoChat security backup encryption key v1\n"
+_BACKUP_KEY_ENV = "HUI_SECURITY_BACKUP_KEY"
+_AAD = b"Hui Chat encrypted security backup v1"
+_KEY_DERIVE_PREFIX = b"Hui Chat security backup encryption key v1\n"
 
 USER_BACKUP_COLUMNS = (
     "email",
@@ -96,7 +96,7 @@ def _safe_label(label: str) -> str:
 
 def _backup_dir(settings: dict | None = None) -> Path:
     settings = settings or {}
-    root = str(settings.get("security_backup_dir") or os.getenv("ECHOCHAT_SECURITY_BACKUP_DIR") or BACKUP_ROOT)
+    root = str(settings.get("security_backup_dir") or os.getenv("HUI_SECURITY_BACKUP_DIR") or BACKUP_ROOT)
     return Path(root)
 
 
@@ -127,7 +127,7 @@ def _build_plain_payload(label: str, rows: list) -> dict:
 def _encrypt_payload(payload: dict, settings: dict | None = None) -> dict:
     key = _derive_key(settings)
     if not key:
-        raise RuntimeError("Missing ECHOCHAT_SECURITY_BACKUP_KEY, ECHOCHAT_PROFILE_FIELD_KEY, ECHOCHAT_EMAIL_FIELD_KEY, or stable SECRET_KEY")
+        raise RuntimeError("Missing HUI_SECURITY_BACKUP_KEY, HUI_PROFILE_FIELD_KEY, HUI_EMAIL_FIELD_KEY, or stable SECRET_KEY")
     nonce = os.urandom(12)
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ciphertext = AESGCM(key).encrypt(nonce, raw, _AAD)
@@ -190,7 +190,7 @@ def create_security_backup(label: str = "manual", settings: dict | None = None, 
     encrypt = security_backup_encryption_enabled(settings)
     if encrypt and not security_backup_key_available(settings):
         return {"ok": False, "error": "Security backup encryption is enabled, but no backup key is available", "encrypted": False, "label": str(label or "manual")}
-    filename = f"echochat-security-{ts}-{_safe_label(label)}.json" + (".enc" if encrypt else "")
+    filename = f"hui-security-{ts}-{_safe_label(label)}.json" + (".enc" if encrypt else "")
     path = root / filename
     conn = get_db()
     with conn.cursor() as cur:
@@ -216,7 +216,7 @@ def create_security_backup(label: str = "manual", settings: dict | None = None, 
 def _backup_files(root: Path) -> list[Path]:
     if not root.exists():
         return []
-    files = list(root.glob("echochat-security-*.json.enc")) + list(root.glob("echochat-security-*.json"))
+    files = list(root.glob("hui-security-*.json.enc")) + list(root.glob("hui-security-*.json"))
     return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
 
 

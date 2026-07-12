@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Dynamic DNS helpers for Echo-Chat.
+"""Dynamic DNS helpers for Hui Chat.
 
-This module is intentionally explicit: Echo-Chat never updates an external DNS
+This module is intentionally explicit: Hui Chat never updates an external DNS
 provider unless the admin enables DDNS and runs the helper/update path.  Runtime
 validation rejects private/loopback provider endpoints so a malicious or
 mistyped update URL cannot turn this helper into a local-network request tool.
@@ -162,23 +162,23 @@ def effective_dynamic_dns_settings(settings: dict[str, Any] | None) -> dict[str,
 
     Environment variables are deliberately supported so production installs can
     keep provider passwords out of server_config.json:
-      - ECHOCHAT_DYNAMIC_DNS_PASSWORD / ECHOCHAT_DDNS_PASSWORD / DDNS_PASSWORD
+      - HUI_DYNAMIC_DNS_PASSWORD / HUI_DDNS_PASSWORD / DDNS_PASSWORD
       - matching *_USERNAME, *_DOMAIN, *_UPDATE_URL, and *_ENABLED names.
     """
     settings = dict(settings or {})
-    provider = _env_first("ECHOCHAT_DYNAMIC_DNS_PROVIDER", "ECHOCHAT_DDNS_PROVIDER", "DDNS_PROVIDER") or str(settings.get("dynamic_dns_provider") or "No-IP").strip() or "No-IP"
+    provider = _env_first("HUI_DYNAMIC_DNS_PROVIDER", "HUI_DDNS_PROVIDER", "DDNS_PROVIDER") or str(settings.get("dynamic_dns_provider") or "No-IP").strip() or "No-IP"
     provider_key = provider.strip().lower().replace(" ", "-")
     default_url = _PROVIDER_DEFAULT_UPDATE_URLS.get(provider_key, "")
-    enabled_env = _env_bool("ECHOCHAT_DYNAMIC_DNS_ENABLED", "ECHOCHAT_DDNS_ENABLED", "DDNS_ENABLED")
+    enabled_env = _env_bool("HUI_DYNAMIC_DNS_ENABLED", "HUI_DDNS_ENABLED", "DDNS_ENABLED")
 
     return {
         "enabled": bool(enabled_env if enabled_env is not None else _truthy(settings.get("dynamic_dns_enabled"))),
         "provider": provider,
-        "username": _env_first("ECHOCHAT_DYNAMIC_DNS_USERNAME", "ECHOCHAT_DDNS_USERNAME", "DDNS_USERNAME") or str(settings.get("dynamic_dns_username") or "").strip(),
-        "password": _env_first("ECHOCHAT_DYNAMIC_DNS_PASSWORD", "ECHOCHAT_DDNS_PASSWORD", "DDNS_PASSWORD") or str(settings.get("dynamic_dns_password") or ""),
-        "domain": _env_first("ECHOCHAT_DYNAMIC_DNS_DOMAIN", "ECHOCHAT_DDNS_DOMAIN", "DDNS_DOMAIN") or str(settings.get("dynamic_dns_domain") or "").strip(),
-        "update_url": _env_first("ECHOCHAT_DYNAMIC_DNS_UPDATE_URL", "ECHOCHAT_DDNS_UPDATE_URL", "DDNS_UPDATE_URL") or str(settings.get("dynamic_dns_update_url") or default_url).strip(),
-        "public_ip_url": _env_first("ECHOCHAT_DYNAMIC_DNS_PUBLIC_IP_URL", "ECHOCHAT_DDNS_PUBLIC_IP_URL", "DDNS_PUBLIC_IP_URL") or str(settings.get("dynamic_dns_public_ip_url") or "https://api.ipify.org").strip(),
+        "username": _env_first("HUI_DYNAMIC_DNS_USERNAME", "HUI_DDNS_USERNAME", "DDNS_USERNAME") or str(settings.get("dynamic_dns_username") or "").strip(),
+        "password": _env_first("HUI_DYNAMIC_DNS_PASSWORD", "HUI_DDNS_PASSWORD", "DDNS_PASSWORD") or str(settings.get("dynamic_dns_password") or ""),
+        "domain": _env_first("HUI_DYNAMIC_DNS_DOMAIN", "HUI_DDNS_DOMAIN", "DDNS_DOMAIN") or str(settings.get("dynamic_dns_domain") or "").strip(),
+        "update_url": _env_first("HUI_DYNAMIC_DNS_UPDATE_URL", "HUI_DDNS_UPDATE_URL", "DDNS_UPDATE_URL") or str(settings.get("dynamic_dns_update_url") or default_url).strip(),
+        "public_ip_url": _env_first("HUI_DYNAMIC_DNS_PUBLIC_IP_URL", "HUI_DDNS_PUBLIC_IP_URL", "DDNS_PUBLIC_IP_URL") or str(settings.get("dynamic_dns_public_ip_url") or "https://api.ipify.org").strip(),
     }
 
 
@@ -191,7 +191,7 @@ def dynamic_dns_setup_errors(settings: dict[str, Any] | None) -> list[str]:
     if not cfg["username"]:
         errors.append("Dynamic DNS is enabled, but the provider username is missing.")
     if not cfg["password"]:
-        errors.append("Dynamic DNS is enabled, but the provider password/token is missing. Store it in config for LAN testing or set ECHOCHAT_DYNAMIC_DNS_PASSWORD / DDNS_PASSWORD in production.")
+        errors.append("Dynamic DNS is enabled, but the provider password/token is missing. Store it in config for LAN testing or set HUI_DYNAMIC_DNS_PASSWORD / DDNS_PASSWORD in production.")
     if not _valid_dynamic_dns_domain(cfg["domain"]):
         errors.append("Dynamic DNS is enabled, but the hostname/domain is missing, invalid, local-only, or still a placeholder.")
     if not _valid_dynamic_dns_update_url_syntax(cfg["update_url"]):
@@ -236,7 +236,7 @@ def build_dynamic_dns_report(settings: dict[str, Any] | None, *, live_check: boo
 
 def format_dynamic_dns_report(report: dict[str, Any]) -> str:
     lines = [
-        "Echo-Chat Dynamic DNS Helper",
+        "Hui Chat Dynamic DNS Helper",
         "",
         f"Status: {str(report.get('overall') or 'warn').upper()}",
         f"Enabled: {'yes' if report.get('enabled') else 'no'}",

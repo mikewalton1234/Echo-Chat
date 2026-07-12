@@ -1,4 +1,4 @@
-"""Encrypted-at-rest email helpers for EchoChat users.
+"""Encrypted-at-rest email helpers for HuiChat users.
 
 New writes store email lookup material as:
   - users.email_hash: deterministic keyed HMAC over normalized email
@@ -20,13 +20,13 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from secret_manager import resolve_secret, stable_profile_field_key_material, stable_secret_key_material
 
-EMAIL_ENCRYPTED_PREFIX = "ecemail:v1:"
-_EMAIL_FIELD_KEY_ENV = "ECHOCHAT_EMAIL_FIELD_KEY"
-_EMAIL_HASH_KEY_ENV = "ECHOCHAT_EMAIL_HASH_KEY"
-_AAD = b"EchoChat user email encrypted at rest v1"
-_ENC_DERIVE_PREFIX = b"EchoChat email encryption key v1\n"
-_HASH_DERIVE_PREFIX = b"EchoChat email lookup hash key v1\n"
-_HASH_MSG_PREFIX = b"EchoChat normalized email v1\n"
+EMAIL_ENCRYPTED_PREFIX = "huiemail:v1:"
+_EMAIL_FIELD_KEY_ENV = "HUI_EMAIL_FIELD_KEY"
+_EMAIL_HASH_KEY_ENV = "HUI_EMAIL_HASH_KEY"
+_AAD = b"Hui Chat user email encrypted at rest v1"
+_ENC_DERIVE_PREFIX = b"Hui Chat email encryption key v1\n"
+_HASH_DERIVE_PREFIX = b"Hui Chat email lookup hash key v1\n"
+_HASH_MSG_PREFIX = b"Hui Chat normalized email v1\n"
 
 
 def _truthy(value: Any, default: bool = True) -> bool:
@@ -101,7 +101,7 @@ def is_encrypted_email(value: Any) -> bool:
 def hash_email(value: Any, settings: dict | None = None) -> str:
     """Return a stable lookup hash for a normalized email.
 
-    Prefer keyed HMAC when ECHOCHAT_EMAIL_HASH_KEY / ECHOCHAT_EMAIL_FIELD_KEY /
+    Prefer keyed HMAC when HUI_EMAIL_HASH_KEY / HUI_EMAIL_FIELD_KEY /
     SECRET_KEY exists. A deterministic SHA-256 fallback keeps dev databases usable
     but production should provide a stable key and keep it backed up.
     """

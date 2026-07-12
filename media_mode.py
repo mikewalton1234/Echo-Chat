@@ -1,6 +1,6 @@
-"""Echo built-in media mode helpers.
+"""Hui built-in media mode helpers.
 
-This module owns the non-secret browser/admin configuration for Echo-Chat's
+This module owns the non-secret browser/admin configuration for Hui Chat's
 built-in WebRTC voice and webcam controls. It has no external media-server
 integration.
 """
@@ -9,11 +9,11 @@ from __future__ import annotations
 import os
 from typing import Any, Dict
 
-from echo_voice_protocol import echo_voice_bool
+from hui_voice_protocol import hui_voice_bool
 
 
 def media_permissions_policy(settings: Dict[str, Any]) -> str:
-    """Return the effective Permissions-Policy needed for Echo voice/webcam.
+    """Return the effective Permissions-Policy needed for Hui voice/webcam.
 
     Browsers require both a secure context and a Permissions-Policy that does
     not deny camera/microphone. Keep this default explicit so diagnostics, the
@@ -41,14 +41,14 @@ def _truthy_env(name: str) -> bool | None:
 
 
 def requested_av_mode(settings: Dict[str, Any]) -> str:
-    """Return the admin-selected media mode: echo or standard."""
-    env_mode = str(os.getenv("ECHOCHAT_AV_MODE") or os.getenv("AV_MODE") or "").strip().lower().replace("-", "_")
-    if env_mode in {"echo", "standard", "webrtc", "built_in", "builtin"}:
-        return "echo" if env_mode in {"webrtc", "built_in", "builtin"} else env_mode
+    """Return the admin-selected media mode: hui or standard."""
+    env_mode = str(os.getenv("HUI_AV_MODE") or os.getenv("AV_MODE") or "").strip().lower().replace("-", "_")
+    if env_mode in {"hui", "standard", "webrtc", "built_in", "builtin"}:
+        return "hui" if env_mode in {"webrtc", "built_in", "builtin"} else env_mode
     raw = str(settings.get("av_mode") or settings.get("voice_mode") or "").strip().lower().replace("-", "_")
-    if raw in {"echo", "standard", "webrtc", "built_in", "builtin"}:
-        return "echo" if raw in {"webrtc", "built_in", "builtin"} else raw
-    return "echo" if echo_voice_bool(settings, "webcam_enabled", True) else "standard"
+    if raw in {"hui", "standard", "webrtc", "built_in", "builtin"}:
+        return "hui" if raw in {"webrtc", "built_in", "builtin"} else raw
+    return "hui" if hui_voice_bool(settings, "webcam_enabled", True) else "standard"
 
 
 def webcam_policy(settings: Dict[str, Any]) -> Dict[str, Any]:
@@ -104,8 +104,8 @@ def webcam_policy(settings: Dict[str, Any]) -> Dict[str, Any]:
 def resolve_av_mode(settings: Dict[str, Any]) -> Dict[str, Any]:
     """Server-owned decision for the browser media controls."""
     requested = requested_av_mode(settings)
-    voice_enabled = echo_voice_bool(settings, "voice_enabled", True)
-    webcam_enabled = echo_voice_bool(settings, "webcam_enabled", echo_voice_bool(settings, "echo_webcam_enabled", True))
+    voice_enabled = hui_voice_bool(settings, "voice_enabled", True)
+    webcam_enabled = hui_voice_bool(settings, "webcam_enabled", hui_voice_bool(settings, "hui_webcam_enabled", True))
     policy = webcam_policy(settings)
 
     if not voice_enabled:
@@ -115,18 +115,18 @@ def resolve_av_mode(settings: Dict[str, Any]) -> Dict[str, Any]:
     elif requested == "standard" and not webcam_enabled:
         mode = "standard"
         reason = "voice_only_mode"
-        label = "Echo voice only"
+        label = "Hui voice only"
     else:
-        mode = "echo"
+        mode = "hui"
         reason = "webcam_enabled_overrides_voice_only" if requested == "standard" else "builtin_webrtc_media"
-        label = "Echo built-in WebRTC voice/webcam"
+        label = "Hui built-in WebRTC voice/webcam"
 
     features = {
         "microphone": bool(voice_enabled),
-        "webcam": bool(mode == "echo" and voice_enabled and webcam_enabled and policy.get("webcam_approval_mode") != "disabled"),
+        "webcam": bool(mode == "hui" and voice_enabled and webcam_enabled and policy.get("webcam_approval_mode") != "disabled"),
         "screen_share": False,
         "uses_standard_voice": bool(mode == "standard" and voice_enabled),
-        "uses_echo_webrtc": bool(mode == "echo"),
+        "uses_hui_webrtc": bool(mode == "hui"),
         "server_enforced_webcam_permissions": False,
     }
     return {
@@ -152,5 +152,5 @@ def client_av_config(settings: Dict[str, Any]) -> Dict[str, Any]:
         "features": dict(decision.get("features") or {}),
         "secure_context": media_secure_context_policy(settings),
         "webcam_enabled": bool((decision.get("features") or {}).get("webcam", False)),
-        "echo_webcam_enabled": bool((decision.get("features") or {}).get("webcam", False)),
+        "hui_webcam_enabled": bool((decision.get("features") or {}).get("webcam", False)),
     }

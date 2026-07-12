@@ -1,5 +1,5 @@
 # rate_limiter_unavailable
-"""HTTP routes for Echo built-in media configuration."""
+"""HTTP routes for Hui built-in media configuration."""
 from __future__ import annotations
 
 from typing import Any, Dict
@@ -8,7 +8,7 @@ from flask import jsonify, make_response, render_template
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from constants import APP_VERSION
-from echo_voice_protocol import echo_voice_client_config
+from hui_voice_protocol import hui_voice_client_config
 from media_mode import client_av_config, media_permissions_policy, media_secure_context_policy
 from webrtc_ice_config import ice_server_summary, p2p_ice_servers, redact_ice_servers, voice_ice_servers
 
@@ -50,7 +50,7 @@ def register_media_routes(app, settings: Dict[str, Any], limiter=None) -> None:
         user = str(get_jwt_identity() or "")
         p2p_servers = p2p_ice_servers(settings)
         voice_servers = voice_ice_servers(settings)
-        media_cfg = {**echo_voice_client_config(settings), **client_av_config(settings)}
+        media_cfg = {**hui_voice_client_config(settings), **client_av_config(settings)}
         safe_cfg = {
             **media_cfg,
             "p2p_ice_servers": redact_ice_servers(p2p_servers),
@@ -97,5 +97,5 @@ def register_media_routes(app, settings: Dict[str, Any], limiter=None) -> None:
     def av_mode():
         decision = client_av_config(settings)
         secure_context = media_secure_context_policy(settings)
-        client_config = {**echo_voice_client_config(settings), **decision, "secure_context": secure_context}
+        client_config = {**hui_voice_client_config(settings), **decision, "secure_context": secure_context}
         return _no_store(jsonify({"ok": True, **decision, "secure_context": secure_context, "permissions_policy": media_permissions_policy(settings), "client_config": client_config}))

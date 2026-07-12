@@ -27,7 +27,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
 
     css = r"""
 
-/* Echo-Chat Admin Panel — injected (admin only) */
+/* Hui Chat Admin Panel — injected (admin only) */
 /* v6: UI08 deep recheck — CSRF retry freshness, modal accessibility, keyboard tabs, and broader duplicate-action guards */
 /* v8: UI08 admin reauth deep recheck — session confirmation race guard loaded */
 
@@ -763,22 +763,22 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
   if (!window || !document) return;
   if (!window.IS_ADMIN) return;
 
-  const SERVER_NAME = String((window.ECHOCHAT_CFG && window.ECHOCHAT_CFG.server_name) || 'Echo-Chat').trim() || 'Echo-Chat';
+  const SERVER_NAME = String((window.HUI_CFG && window.HUI_CFG.server_name) || 'Hui Chat').trim() || 'Hui Chat';
   const SERVER_ADMIN_NAME = `${SERVER_NAME} Admin`;
-  const ECAP_USERNAME_MIN = __ECHOCHAT_USERNAME_MIN__;
-  const ECAP_USERNAME_MAX = __ECHOCHAT_USERNAME_MAX__;
-  const ECAP_USERNAME_PATTERN = __ECHOCHAT_USERNAME_PATTERN__;
-  const ECAP_USERNAME_TITLE = __ECHOCHAT_USERNAME_TITLE__;
-  const ECAP_PASSWORD_MIN = __ECHOCHAT_PASSWORD_MIN__;
-  const ECAP_PASSWORD_MAX = __ECHOCHAT_PASSWORD_MAX__;
-  const ECAP_PASSWORD_RECOMMENDED = __ECHOCHAT_PASSWORD_RECOMMENDED__;
-  const ECAP_PASSWORD_SUMMARY = __ECHOCHAT_PASSWORD_SUMMARY__;
-  const ECAP_PASSWORD_COMMON_WEAK = new Set(__ECHOCHAT_PASSWORD_COMMON_WEAK__);
+  const ECAP_USERNAME_MIN = __HUI_USERNAME_MIN__;
+  const ECAP_USERNAME_MAX = __HUI_USERNAME_MAX__;
+  const ECAP_USERNAME_PATTERN = __HUI_USERNAME_PATTERN__;
+  const ECAP_USERNAME_TITLE = __HUI_USERNAME_TITLE__;
+  const ECAP_PASSWORD_MIN = __HUI_PASSWORD_MIN__;
+  const ECAP_PASSWORD_MAX = __HUI_PASSWORD_MAX__;
+  const ECAP_PASSWORD_RECOMMENDED = __HUI_PASSWORD_RECOMMENDED__;
+  const ECAP_PASSWORD_SUMMARY = __HUI_PASSWORD_SUMMARY__;
+  const ECAP_PASSWORD_COMMON_WEAK = new Set(__HUI_PASSWORD_COMMON_WEAK__);
 
   function ecapStoragePart(v, fallback){
     return String(v || fallback || 'default').trim().toLowerCase().replace(/[^a-z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) || String(fallback || 'default');
   }
-  const ECAP_STATE_SCOPE = `${ecapStoragePart(SERVER_NAME, 'echo-chat')}:${ecapStoragePart(window.USERNAME || window.CURRENT_USER || 'admin', 'admin')}`;
+  const ECAP_STATE_SCOPE = `${ecapStoragePart(SERVER_NAME, 'hui-chat')}:${ecapStoragePart(window.USERNAME || window.CURRENT_USER || 'admin', 'admin')}`;
   const STATE_KEY = `ecap_state_v4:${ECAP_STATE_SCOPE}`;
   const LEGACY_STATE_KEYS = ['ecap_state_v3'];
   const state = (()=>{
@@ -1835,13 +1835,13 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
   function buildVoiceSection(host){
     clearNode(host);
     appendChildren(host, [
-      sectionHeroNode('Echo Voice', 'Voice settings', 'Control custom Echo Voice quality, mic processing, push-to-talk defaults, and room voice limits from one place.'),
+      sectionHeroNode('Hui Voice', 'Voice settings', 'Control custom Hui Voice quality, mic processing, push-to-talk defaults, and room voice limits from one place.'),
       cardNode([
-        rowNode([appendChildren(el('div'), [h4Node('Voice service', 'margin:0'), mutedNode('These settings affect the custom Echo Voice API/client. Users may need to reload or reconnect voice for changes to fully apply.')]), buttonNode('ecapVoiceSettingsReload', 'Reload')], 'justify-content:space-between;align-items:center'),
+        rowNode([appendChildren(el('div'), [h4Node('Voice service', 'margin:0'), mutedNode('These settings affect the custom Hui Voice API/client. Users may need to reload or reconnect voice for changes to fully apply.')]), buttonNode('ecapVoiceSettingsReload', 'Reload')], 'justify-content:space-between;align-items:center'),
         el('div', {id:'ecapVoiceSummary', class:'ecap-muted', text:'Loading current voice settings…'}),
         gridNode('ecap-grid2', [
           titledInputCard('Room voice cap', inputNode('ecapVoiceMax', '100 default, 30 smaller, 0 unlimited', {inputmode:'numeric'})),
-          cardNode([mutedNode('Voice enabled'), checkLabelNode('ecapVoiceEnabled', 'allow Echo Voice features', 'ecap-pill tight')], {style:'margin:0'}),
+          cardNode([mutedNode('Voice enabled'), checkLabelNode('ecapVoiceEnabled', 'allow Hui Voice features', 'ecap-pill tight')], {style:'margin:0'}),
           cardNode([mutedNode('Voice quality'), selectNode('ecapVoiceQuality', [['low','Low - lower bandwidth'], ['balanced','Balanced - recommended'], ['high','High - best quality']])], {style:'margin:0'}),
           cardNode([mutedNode('Automatic quality'), checkLabelNode('ecapVoiceAutoQuality', 'auto-adjust quality during rough connections', 'ecap-pill tight')], {style:'margin:0'})
         ], 'margin-top:10px')
@@ -1883,11 +1883,11 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
   function buildAvSection(host){
     clearNode(host);
     appendChildren(host, [
-      sectionHeroNode('Echo Media', 'Webcam and built-in WebRTC', 'Manage the built-in Echo webcam layer. This controls browser capture quality, codec preference, and camera policy.'),
+      sectionHeroNode('Hui Media', 'Webcam and built-in WebRTC', 'Manage the built-in Hui webcam layer. This controls browser capture quality, codec preference, and camera policy.'),
       cardNode([
-        rowNode([appendChildren(el('div'), [h4Node('Room media mode', 'margin:0'), mutedNode('Echo mode enables webcam controls over the built-in WebRTC mesh. Standard mode keeps room voice available but disables webcam controls.')]), buttonNode('ecapMediaRefresh', 'Refresh')], 'justify-content:space-between;align-items:center'),
+        rowNode([appendChildren(el('div'), [h4Node('Room media mode', 'margin:0'), mutedNode('Hui mode enables webcam controls over the built-in WebRTC mesh. Standard mode keeps room voice available but disables webcam controls.')]), buttonNode('ecapMediaRefresh', 'Refresh')], 'justify-content:space-between;align-items:center'),
         gridNode('ecap-statGrid', [statNode('Requested', 'ecapAvRequested'), statNode('Active', 'ecapAvActive'), statNode('Webcam', 'ecapAvWebcam'), statNode('Transport', 'ecapMediaTransport')], 'margin-top:10px'),
-        rowNode([selectNode('ecapAvModeSelect', [['echo','Echo built-in voice + webcam'], ['standard','Standard voice only']]), buttonNode('ecapMediaApply', 'Apply media settings', 'ecap-btn primary tight')], 'margin-top:10px'),
+        rowNode([selectNode('ecapAvModeSelect', [['hui','Hui built-in voice + webcam'], ['standard','Standard voice only']]), buttonNode('ecapMediaApply', 'Apply media settings', 'ecap-btn primary tight')], 'margin-top:10px'),
         mutedNode('Clients should reload after server-wide media changes so their startup config and GUI match the latest policy.')
       ]),
       cardNode([
@@ -1902,7 +1902,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       ], {style:'margin-top:10px'}),
       cardNode([
         h4Node('Webcam policy'),
-        mutedNode('Controls camera privacy and viewer limits at the Echo app layer. Owner approval is safest for public rooms.'),
+        mutedNode('Controls camera privacy and viewer limits at the Hui app layer. Owner approval is safest for public rooms.'),
         gridNode('ecap-grid3', [
           titledInputCard('Approval mode', selectNode('ecapWebcamPolicy', [['owner_approval','Owner approval'], ['open','Open to room'], ['disabled','Disable webcam']])),
           titledInputCard('Max viewers per webcam', inputNode('ecapWebcamMaxViewers', '0 = unlimited', {inputmode:'numeric'})),
@@ -3069,7 +3069,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       });
     }
     function isDigitPaddedWeakPassSeed(compacted){
-      const seeds = ['administrator','defaultpassword','mikeschatserver','changeme','mikeserver','echochat','iloveyou','letmein','welcome','qwerty','admin'];
+      const seeds = ['administrator','defaultpassword','mikeschatserver','changeme','mikeserver','hui','iloveyou','letmein','welcome','qwerty','admin'];
       return seeds.some(seed => {
         if (compacted.startsWith(seed)){
           const rest = compacted.slice(seed.length);
@@ -3962,7 +3962,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
     // VOICE
     buildVoiceSection(secVoice);
 
-    // ECHO MEDIA / A-V
+    // HUI MEDIA / A-V
     buildAvSection(secAv);
 
     // SETTINGS
@@ -4016,7 +4016,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
           window.ecPopulateSoundPackSelect(inp, '');
         } else {
           [
-            ['echo_modern_generated', 'Echo modern generated — 0001_echo_modern_generated.js'],
+            ['hui_modern_generated', 'Hui modern generated — 0001_hui_modern_generated.js'],
             ['classic_messenger_generated', 'Classic messenger generated — 0002_classic_messenger_generated.js']
           ].forEach(([value, text]) => inp.appendChild(el('option', {value, text})));
         }
@@ -4165,7 +4165,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
             ['Max advertised torrent payload bytes','set_max_torrent_total_size_bytes','int','Rejects .torrent metadata claiming an oversized total payload.'],
             ['Enable torrent uploads','set_torrent_upload_enabled','bool','Allows room users to attach server-stored .torrent files.'],
             ['Enable tracker scrape','set_torrent_scrape_enabled','bool','Allows arbitrary user-supplied tracker URLs after SSRF validation. Takes effect immediately; use caution for public beta.'],
-            ['Enable public fallback scrape','set_torrent_public_fallback_scrape_enabled','bool',"Allows Echo-Chat's configured public fallback trackers for trackerless torrents/magnets even when arbitrary tracker scrape is off."],
+            ['Enable public fallback scrape','set_torrent_public_fallback_scrape_enabled','bool',"Allows Hui Chat's configured public fallback trackers for trackerless torrents/magnets even when arbitrary tracker scrape is off."],
             ['Enable DHT swarm lookup','set_torrent_dht_scrape_enabled','bool','Allows bounded best-effort DHT peer/seed lookup when tracker scrape returns no numbers.'],
             ['DHT timeout seconds','set_torrent_dht_scrape_timeout_sec','float','Bounded per-query timeout; runtime clamps to a small safe range.'],
             ['DHT max queries','set_torrent_dht_scrape_max_queries','int','Maximum DHT nodes queried during a best-effort swarm lookup.'],
@@ -4250,8 +4250,8 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
           else if (typ === 'animation') inp.value = String(v || (realKey === 'chat_text_animation' ? 'none' : 'rise'));
           else if (typ === 'textarea') inp.value = Array.isArray(v) ? v.join('\n') : ((v === null || v === undefined) ? '' : String(v));
           else if (typ === 'soundpack') {
-            if (window.ecPopulateSoundPackSelect) window.ecPopulateSoundPackSelect(inp, String(v || 'echo_modern_generated'));
-            inp.value = String(v || 'echo_modern_generated');
+            if (window.ecPopulateSoundPackSelect) window.ecPopulateSoundPackSelect(inp, String(v || 'hui_modern_generated'));
+            inp.value = String(v || 'hui_modern_generated');
           }
           else if (typ === 'sound') {
             if (window.ecPopulateSoundSelect) window.ecPopulateSoundSelect(inp, String(v || 'soft_chime'), {showFiles: true});
@@ -5013,24 +5013,24 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
     }
 
     function mediaModeLabel(mode){
-      const m = String(mode || 'echo').toLowerCase();
-      if (m === 'echo' || m === 'webrtc' || m === 'built_in' || m === 'builtin') return 'echo';
+      const m = String(mode || 'hui').toLowerCase();
+      if (m === 'hui' || m === 'webrtc' || m === 'built_in' || m === 'builtin') return 'hui';
       return 'standard';
     }
 
     function renderMediaStatus(j){
       const decision = (j && j.decision) || {};
       const settings = (j && j.settings) || j || {};
-      const requested = String(settings.av_mode || decision.requested_mode || 'echo');
-      const active = String(settings.active_mode || decision.mode || 'echo');
+      const requested = String(settings.av_mode || decision.requested_mode || 'hui');
+      const active = String(settings.active_mode || decision.mode || 'hui');
       const features = decision.features || {};
       const setText = (id, txt)=>{ const n = document.getElementById(id); if (n) n.textContent = txt; };
       setText('ecapAvRequested', mediaModeLabel(requested));
       setText('ecapAvActive', mediaModeLabel(active));
       setText('ecapAvWebcam', settings.webcam_enabled || features.webcam ? 'yes' : 'no');
-      setText('ecapMediaTransport', settings.webcam_transport || 'echo-webrtc-mesh');
+      setText('ecapMediaTransport', settings.webcam_transport || 'hui-webrtc-mesh');
       const modeSel = document.getElementById('ecapAvModeSelect');
-      if (modeSel && !modeSel.matches(':focus')) modeSel.value = mediaModeLabel(requested) === 'echo' ? 'echo' : 'standard';
+      if (modeSel && !modeSel.matches(':focus')) modeSel.value = mediaModeLabel(requested) === 'hui' ? 'hui' : 'standard';
       const webcamEnabled = document.getElementById('ecapWebcamEnabled');
       if (webcamEnabled) webcamEnabled.checked = !!(settings.webcam_enabled || features.webcam);
       const q = document.getElementById('ecapWebcamQuality');
@@ -5047,13 +5047,13 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       const pills = document.getElementById('ecapMediaPills');
       if (pills){
         clearNode(pills);
-        const activeEcho = mediaModeLabel(active) === 'echo';
-        pills.appendChild(pillNode(`active: ${mediaModeLabel(active)}`, activeEcho?'ok':'warn'));
+        const activeHui = mediaModeLabel(active) === 'hui';
+        pills.appendChild(pillNode(`active: ${mediaModeLabel(active)}`, activeHui?'ok':'warn'));
         pills.appendChild(pillNode(`webcam: ${settings.webcam_enabled || features.webcam ? 'enabled' : 'disabled'}`, settings.webcam_enabled || features.webcam ? 'ok' : 'warn'));
         pills.appendChild(pillNode(`quality: ${settings.webcam_quality || 'balanced'}`, ''));
         pills.appendChild(pillNode(`codec: ${settings.webcam_codec_strategy || 'prefer-compatible'}`, ''));
         pills.appendChild(pillNode(`cam policy: ${settings.webcam_approval_mode || policy.webcam_approval_mode || 'owner_approval'}`, (settings.webcam_approval_mode || policy.webcam_approval_mode) === 'disabled' ? 'bad' : 'ok'));
-        pills.appendChild(pillNode(`transport: ${settings.webcam_transport || 'echo-webrtc-mesh'}`, 'warn'));
+        pills.appendChild(pillNode(`transport: ${settings.webcam_transport || 'hui-webrtc-mesh'}`, 'warn'));
       }
       const list = document.getElementById('ecapMediaChecks');
       if (list){
@@ -5091,7 +5091,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
 
     async function applyMediaSettings(){
       const payload = {
-        av_mode: (document.getElementById('ecapAvModeSelect')?.value || 'echo').trim(),
+        av_mode: (document.getElementById('ecapAvModeSelect')?.value || 'hui').trim(),
         webcam_enabled: !!document.getElementById('ecapWebcamEnabled')?.checked,
         webcam_quality: (document.getElementById('ecapWebcamQuality')?.value || 'balanced').trim(),
         webcam_codec_strategy: (document.getElementById('ecapWebcamCodecStrategy')?.value || 'prefer-compatible').trim(),
@@ -5101,7 +5101,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
       };
       const j = await postJSON('/admin/settings/media', payload);
       if (j && j.ok){
-        toast('ok', 'Echo media saved', `mode=${mediaModeLabel(j.av_mode)} • webcam=${j.webcam_enabled ? 'on' : 'off'} • quality=${j.webcam_quality || 'balanced'}`);
+        toast('ok', 'Hui media saved', `mode=${mediaModeLabel(j.av_mode)} • webcam=${j.webcam_enabled ? 'on' : 'off'} • quality=${j.webcam_quality || 'balanced'}`);
         renderMediaStatus(j);
         refreshMediaStatus();
       } else {
@@ -5247,11 +5247,11 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
 
     async function runProfileSecurityAction(action, title){
       if (action === 'rotate_profile_field_key'){
-        const ok = await adminConfirm('Rotate profile field encryption', 'Set ECHOCHAT_PROFILE_FIELD_KEY to the new key and ECHOCHAT_PROFILE_FIELD_PREVIOUS_KEYS to old key(s) before running. A security backup will be created first.', {danger:true, confirmText:'Rotate fields'});
+        const ok = await adminConfirm('Rotate profile field encryption', 'Set HUI_PROFILE_FIELD_KEY to the new key and HUI_PROFILE_FIELD_PREVIOUS_KEYS to old key(s) before running. A security backup will be created first.', {danger:true, confirmText:'Rotate fields'});
         if (!ok) return;
       }
       if (action === 'encrypt_plaintext_profile_fields' || action === 'encrypt_plaintext_emails'){
-        const ok = await adminConfirm('Encrypt stored user data', 'EchoChat will create a security backup first, then rewrite legacy plaintext fields in place.', {danger:true, confirmText:'Create backup and encrypt'});
+        const ok = await adminConfirm('Encrypt stored user data', 'HuiChat will create a security backup first, then rewrite legacy plaintext fields in place.', {danger:true, confirmText:'Create backup and encrypt'});
         if (!ok) return;
       }
       if (action === 'restore_latest_security_backup'){
@@ -5259,7 +5259,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
         if (!ok) return;
       }
       if (action === 'finish_security_setup'){
-        const ok = await adminConfirm('Finish Security Setup', 'EchoChat will create an encrypted security backup, encrypt old phone/address/location rows, encrypt old email rows, and run privacy retention. Make sure your encryption keys are backed up first.', {danger:true, confirmText:'Create backup and finish setup'});
+        const ok = await adminConfirm('Finish Security Setup', 'HuiChat will create an encrypted security backup, encrypt old phone/address/location rows, encrypt old email rows, and run privacy retention. Make sure your encryption keys are backed up first.', {danger:true, confirmText:'Create backup and finish setup'});
         if (!ok) return;
       }
       const payload = {action};
@@ -5371,7 +5371,7 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
     const webcamEnabledToggle = secAv.querySelector('#ecapWebcamEnabled');
     if (webcamEnabledToggle) webcamEnabledToggle.addEventListener('change', () => {
       const modeSel = secAv.querySelector('#ecapAvModeSelect');
-      if (webcamEnabledToggle.checked && modeSel && modeSel.value !== 'echo') modeSel.value = 'echo';
+      if (webcamEnabledToggle.checked && modeSel && modeSel.value !== 'hui') modeSel.value = 'hui';
     });
     const mediaApplyBtn = secAv.querySelector('#ecapMediaApply');
     if (mediaApplyBtn) mediaApplyBtn.addEventListener('click', (e)=> withAdminAction(e.currentTarget, 'media:apply', 'Saving', applyMediaSettings));
@@ -5505,15 +5505,15 @@ def build_admin_injection_snippet(csp_nonce: str | None = None) -> str:
 
     password_policy = password_policy_metadata()
     js = (
-        js.replace("__ECHOCHAT_USERNAME_MIN__", str(USERNAME_MIN_LENGTH))
-        .replace("__ECHOCHAT_USERNAME_MAX__", str(USERNAME_MAX_LENGTH))
-        .replace("__ECHOCHAT_USERNAME_PATTERN__", json.dumps(USERNAME_HTML_PATTERN))
-        .replace("__ECHOCHAT_USERNAME_TITLE__", json.dumps(username_policy_title()))
-        .replace("__ECHOCHAT_PASSWORD_MIN__", str(password_policy.get("min_length")))
-        .replace("__ECHOCHAT_PASSWORD_MAX__", str(password_policy.get("max_length")))
-        .replace("__ECHOCHAT_PASSWORD_RECOMMENDED__", str(password_policy.get("recommended_length")))
-        .replace("__ECHOCHAT_PASSWORD_SUMMARY__", json.dumps(password_policy.get("summary")))
-        .replace("__ECHOCHAT_PASSWORD_COMMON_WEAK__", json.dumps(password_policy.get("common_weak") or []))
+        js.replace("__HUI_USERNAME_MIN__", str(USERNAME_MIN_LENGTH))
+        .replace("__HUI_USERNAME_MAX__", str(USERNAME_MAX_LENGTH))
+        .replace("__HUI_USERNAME_PATTERN__", json.dumps(USERNAME_HTML_PATTERN))
+        .replace("__HUI_USERNAME_TITLE__", json.dumps(username_policy_title()))
+        .replace("__HUI_PASSWORD_MIN__", str(password_policy.get("min_length")))
+        .replace("__HUI_PASSWORD_MAX__", str(password_policy.get("max_length")))
+        .replace("__HUI_PASSWORD_RECOMMENDED__", str(password_policy.get("recommended_length")))
+        .replace("__HUI_PASSWORD_SUMMARY__", json.dumps(password_policy.get("summary")))
+        .replace("__HUI_PASSWORD_COMMON_WEAK__", json.dumps(password_policy.get("common_weak") or []))
     )
 
     nonce_attr = f' nonce="{escape(csp_nonce, quote=True)}"' if csp_nonce else ""

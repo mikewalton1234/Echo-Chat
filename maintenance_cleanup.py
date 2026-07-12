@@ -1,4 +1,4 @@
-"""Background retention and cleanup helpers for Echo-Chat.
+"""Background retention and cleanup helpers for Hui Chat.
 
 These helpers are intentionally import-safe for the standalone janitor process:
 they only depend on the low-level DB connection facade and do not require a

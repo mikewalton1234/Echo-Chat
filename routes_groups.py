@@ -362,7 +362,7 @@ def register_group_routes(app, settings: dict[str, Any], limiter=None) -> None:
         if not username:
             return False
         try:
-            socketio = app.config.get("ECHOCHAT_SOCKETIO")
+            socketio = app.config.get("HUI_SOCKETIO")
             if not socketio:
                 return False
             from realtime.state import user_sids
@@ -421,7 +421,7 @@ def register_group_routes(app, settings: dict[str, Any], limiter=None) -> None:
     def _emit_group_members_changed(group_id: int, reason: str, **extra: Any) -> bool:
         """Notify open group chat windows that their roster should refresh."""
         try:
-            socketio = app.config.get("ECHOCHAT_SOCKETIO")
+            socketio = app.config.get("HUI_SOCKETIO")
             if not socketio:
                 return False
             payload: dict[str, Any] = {"group_id": int(group_id), "reason": str(reason or "changed")}
@@ -452,7 +452,7 @@ def register_group_routes(app, settings: dict[str, Any], limiter=None) -> None:
         if not username:
             return False
         try:
-            socketio = app.config.get("ECHOCHAT_SOCKETIO")
+            socketio = app.config.get("HUI_SOCKETIO")
             if not socketio:
                 return False
             from realtime.state import user_sids
@@ -515,7 +515,7 @@ def register_group_routes(app, settings: dict[str, Any], limiter=None) -> None:
                 media_status_update(room, username, voice_on=False)
             except Exception:
                 pass
-            socketio = app.config.get("ECHOCHAT_SOCKETIO")
+            socketio = app.config.get("HUI_SOCKETIO")
             if socketio:
                 payload: dict[str, Any] = {"room": room, "reason": str(reason or "group_voice_kick"), "limit": None}
                 if by:
@@ -1872,8 +1872,8 @@ def register_group_routes(app, settings: dict[str, Any], limiter=None) -> None:
 
         _audit(actor, "group_file_upload", target=f"{group_id}:{attachment_id}", details=f"{safe_name} ({fsize})")
         resp = jsonify({"status": "uploaded", "attachment_id": attachment_id, "name": safe_name, "size": fsize, "deprecated": True, "replacement": "/api/group_files/*"})
-        resp.headers["X-EchoChat-Deprecated"] = "true"
-        resp.headers["X-EchoChat-Replacement"] = "/api/group_files/*"
+        resp.headers["X-HuiChat-Deprecated"] = "true"
+        resp.headers["X-HuiChat-Replacement"] = "/api/group_files/*"
         return resp, 200
 
     def _load_attachment_for_group(group_id: int, attachment_id: int, actor: str, actor_id: int):
@@ -1938,8 +1938,8 @@ def register_group_routes(app, settings: dict[str, Any], limiter=None) -> None:
                 "replacement": "/api/group_files/*",
             }
         )
-        resp.headers["X-EchoChat-Deprecated"] = "true"
-        resp.headers["X-EchoChat-Replacement"] = "/api/group_files/*"
+        resp.headers["X-HuiChat-Deprecated"] = "true"
+        resp.headers["X-HuiChat-Replacement"] = "/api/group_files/*"
         return resp, 200
 
     @app.route(
@@ -1964,6 +1964,6 @@ def register_group_routes(app, settings: dict[str, Any], limiter=None) -> None:
             download_name=os.path.basename(att["download_name"]) or "download.bin",
             conditional=True,
         )
-        resp.headers["X-EchoChat-Deprecated"] = "true"
-        resp.headers["X-EchoChat-Replacement"] = "/api/group_files/*"
+        resp.headers["X-HuiChat-Deprecated"] = "true"
+        resp.headers["X-HuiChat-Replacement"] = "/api/group_files/*"
         return apply_safe_download_headers(resp, csp="sandbox; default-src 'none';", private=True)

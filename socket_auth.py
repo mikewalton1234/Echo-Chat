@@ -6,10 +6,10 @@ keep the cookies from the original handshake, so re-validating a short-lived
 access cookie on every Socket.IO event can disconnect an otherwise valid live
 realtime session after the browser has already refreshed its HTTP access token.
 
-For same-origin EchoChat Socket.IO events we therefore:
+For same-origin HuiChat Socket.IO events we therefore:
 
   1) verify the normal Flask-JWT-Extended access cookie during connect;
-  2) bind the Socket.IO sid to the authenticated EchoChat auth session;
+  2) bind the Socket.IO sid to the authenticated HuiChat auth session;
   3) trust that established sid for later Socket.IO events while still checking
      the auth session row for revocation/idle timeout in the event handlers.
 
@@ -32,16 +32,16 @@ from database import close_db
 
 def _set_socket_identity(value, source: str) -> None:
     try:
-        request._echochat_socket_identity = value
-        request._echochat_socket_identity_source = source
+        request._hui_socket_identity = value
+        request._hui_socket_identity_source = source
     except Exception:
         pass
 
 
 def _set_socket_claims(claims: dict | None, source: str) -> None:
     try:
-        request._echochat_socket_claims = dict(claims or {})
-        request._echochat_socket_claims_source = source
+        request._hui_socket_claims = dict(claims or {})
+        request._hui_socket_claims_source = source
     except Exception:
         pass
 
@@ -89,7 +89,7 @@ def _claims_from_established_socket_session() -> dict | None:
     if not username:
         return None
     sid = str(sess.get("auth_session_id") or "").strip()
-    claims = {"sub": username, "type": "access", "fresh": False, "echo_socket_session": True}
+    claims = {"sub": username, "type": "access", "fresh": False, "hui_socket_session": True}
     if sid:
         claims["sid"] = sid
     return claims
@@ -103,7 +103,7 @@ def get_jwt_identity():
     for same-origin socket traffic.
     """
     try:
-        cached = getattr(request, "_echochat_socket_identity", None)
+        cached = getattr(request, "_hui_socket_identity", None)
         if cached:
             return cached
     except Exception:
@@ -139,11 +139,11 @@ def get_jwt() -> dict:
     """Return JWT-like claims for Socket.IO handlers.
 
     After connect, browser WebSocket packets may not carry the rotated HTTP
-    access cookie. Event handlers only need the EchoChat auth session id (sid)
+    access cookie. Event handlers only need the HuiChat auth session id (sid)
     and identity, so synthesize those from the established Socket.IO session.
     """
     try:
-        cached = getattr(request, "_echochat_socket_claims", None)
+        cached = getattr(request, "_hui_socket_claims", None)
         if isinstance(cached, dict) and cached:
             return dict(cached)
     except Exception:
@@ -166,7 +166,7 @@ def get_jwt() -> dict:
 
 def get_socket_identity_source() -> str | None:
     try:
-        src = getattr(request, "_echochat_socket_identity_source", None)
+        src = getattr(request, "_hui_socket_identity_source", None)
         if src:
             return str(src)
     except Exception:
@@ -255,6 +255,17 @@ def jwt_required(optional: bool = False, **kwargs):
                 if optional:
                     _set_socket_identity(None, "optional")
                     return fn(*args, **kw)
-                raise
+                # For the Socket.IO `connect` event Flask-SocketIO requires False (or
+                # ConnectionRefusedError) to reject the connection.  For all other
+                # events returning a dict is safe and ensures the ack callback fires
+                # (avoiding the 15-second "Room join did not finish" timeout).
+                try:
+                    _event_name = str((getattr(request, "event", None) or {}).get("message") or "")
+                except Exception:
+                    _event_name = ""
+                logging.warning("[socket-auth] auth failed (%s) on event=%r; rejecting", exc.__class__.__name__, _event_name)
+                if _event_name == "connect":
+                    return False
+                return {"success": False, "error": "auth_required"}
         return wrapper
     return decorator

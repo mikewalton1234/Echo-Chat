@@ -78,7 +78,7 @@ def encrypt_plaintext_emails(settings: dict | None = None, *, limit: int = 2500,
     if email_encryption_enabled(settings) and not email_field_key_available(settings):
         result["ok"] = False
         result["skipped_no_key"] = True
-        result["error"] = "Missing ECHOCHAT_EMAIL_FIELD_KEY, ECHOCHAT_PROFILE_FIELD_KEY, or stable SECRET_KEY"
+        result["error"] = "Missing HUI_EMAIL_FIELD_KEY, HUI_PROFILE_FIELD_KEY, or stable SECRET_KEY"
         return result
     limit = max(1, min(int(limit or 2500), 100000))
     conn = get_db()

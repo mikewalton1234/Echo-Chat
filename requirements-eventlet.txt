@@ -1,5 +1,5 @@
 # Optional Eventlet runtime for advanced deployments only.
-# Echo-Chat defaults to Gunicorn gthread + threading mode.
+# Hui Chat defaults to Gunicorn gthread + threading mode.
 -r requirements.txt
 eventlet>=0.41.0
 gunicorn[eventlet]>=23.0

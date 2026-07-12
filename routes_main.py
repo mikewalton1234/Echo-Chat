@@ -750,7 +750,7 @@ def register_main_routes(app, settings, socketio):
         return _as_bool_setting(settings.get("torrent_scrape_enabled", False), False)
 
     def _torrent_public_fallback_scrape_enabled() -> bool:
-        # Safe-by-default path: scrape only Echo-Chat's built-in public tracker
+        # Safe-by-default path: scrape only Hui Chat's built-in public tracker
         # list when a .torrent has no announce URLs.  This avoids arbitrary
         # user-supplied outbound URLs while still letting trackerless torrents
         # show seed/leecher counts when public trackers know the swarm.
@@ -1430,7 +1430,7 @@ def register_main_routes(app, settings, socketio):
 
     def _render_avatar_preset_svg(style: str, seed: str) -> str:
         style = str(style or "").strip().lower()
-        seed = str(seed or "").strip()[:128] or "echo"
+        seed = str(seed or "").strip()[:128] or "hui"
         nums = _avatar_ints(style, seed, 48)
         hue = nums[0] * 360 // 255
         bg1 = _avatar_color(hue, 58 + (nums[1] % 20), 62 + (nums[2] % 12))
@@ -1728,7 +1728,7 @@ def register_main_routes(app, settings, socketio):
     def _get_giphy_key() -> str | None:
         # Prefer env var; optionally allow config file value or a local key file.
         return (
-            os.getenv("ECHOCHAT_GIPHY_API_KEY")
+            os.getenv("HUI_GIPHY_API_KEY")
             or os.getenv("GIPHY_API_KEY")
             or settings.get("giphy_api_key")
             or _read_giphy_key_file()
@@ -1955,8 +1955,8 @@ def register_main_routes(app, settings, socketio):
         username_hint = _avatar_fallback_username_from_filename(filename)
         svg = _render_avatar_preset_svg("initials", username_hint)
         resp = app.response_class(svg, mimetype="image/svg+xml")
-        resp.headers["X-EchoChat-Avatar-Fallback"] = "missing-local-avatar"
-        resp.headers["X-EchoChat-Missing-Avatar"] = secure_filename(filename or "")[:160]
+        resp.headers["X-HuiChat-Avatar-Fallback"] = "missing-local-avatar"
+        resp.headers["X-HuiChat-Missing-Avatar"] = secure_filename(filename or "")[:160]
         _apply_avatar_response_headers(resp, cache_seconds=300)
         return resp
 
@@ -3510,7 +3510,7 @@ def register_main_routes(app, settings, socketio):
     @app.get("/avatar-preset.svg")
     def avatar_preset_svg():
         style = str(request.args.get("style") or "persona").strip().lower()
-        seed = str(request.args.get("seed") or "echo").strip()
+        seed = str(request.args.get("seed") or "hui").strip()
         if style not in _AVATAR_PRESET_STYLES:
             return jsonify({"error": "invalid_style"}), 404
         if not seed or len(seed) > 128:
@@ -4673,7 +4673,7 @@ def register_main_routes(app, settings, socketio):
 
         If the uploaded torrent is trackerless, restore the old practical
         behavior by attaching a bounded built-in public tracker list for scrape
-        and magnet sharing.  This gives Echo-Chat another way to show the
+        and magnet sharing.  This gives Hui Chat another way to show the
         familiar Seeds/Leechers fields instead of hiding them behind a
         trackerless warning.
         """
@@ -5094,7 +5094,7 @@ def register_main_routes(app, settings, socketio):
             req = (
                 f"GET {target} HTTP/1.1\r\n"
                 f"Host: {host_header}\r\n"
-                "User-Agent: Echo-Chat/1.0\r\n"
+                "User-Agent: Hui-Chat/1.0\r\n"
                 "Accept: application/octet-stream,*/*;q=0.8\r\n"
                 "Connection: close\r\n"
                 "\r\n"
@@ -5443,7 +5443,7 @@ def register_main_routes(app, settings, socketio):
             or request.form.get("fast_room_post"),
             False,
         )
-        # Public fallback trackers are controlled by Echo-Chat's bounded built-in
+        # Public fallback trackers are controlled by Hui Chat's bounded built-in
         # list, so allow those lookups even when arbitrary user-supplied tracker
         # scraping is off.  Room posting can explicitly defer lookup so the card
         # appears immediately and then refreshes seeds/leechers asynchronously.

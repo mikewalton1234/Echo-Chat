@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
 server_init.py
-Initialises and runs the Echo-Chat Flask application.
+Initialises and runs the Hui Chat Flask application.
 Ensures init_database() is called within an application context
 and registers teardown properly without causing context errors.
 """
 
 from __future__ import annotations
 
-from socketio_async_bootstrap import ECHOCHAT_SOCKETIO_ASYNC, EVENTLET_AVAILABLE
-from echochat_wsgi_guard import EchoChatStartResponseGuard
+from socketio_async_bootstrap import HUI_SOCKETIO_ASYNC, EVENTLET_AVAILABLE
+from hui_chat_wsgi_guard import HuiChatStartResponseGuard
 
 import json
 import os
@@ -35,7 +35,7 @@ from flask_socketio import SocketIO, emit, disconnect
 # In threading mode the client uses HTTP long-polling. During initial connect or
 # reconnect the browser can legally batch many queued Socket.IO packets into a
 # single POST. Python-EngineIO protects itself with a max_decode_packets limit,
-# but EchoChat can briefly exceed that limit during bootstrap and trigger:
+# but HuiChat can briefly exceed that limit during bootstrap and trigger:
 #   ValueError: Too many packets in payload
 # Raise the ceiling defensively so one queued bootstrap burst does not wedge the
 # session. Keep the known-good client missed-message bootstrap flow intact.
@@ -98,7 +98,7 @@ except ImportError:
 
 
 def _wrap_wsgi_start_response_guard(app: Flask, settings: Dict[str, Any], *, layer: str) -> None:
-    """Wrap the current WSGI stack with EchoChatStartResponseGuard when enabled.
+    """Wrap the current WSGI stack with HuiChatStartResponseGuard when enabled.
 
     Flask-SocketIO installs an Engine.IO WSGI middleware around the Flask app.
     A guard applied before Socket.IO only protects Flask routes; Engine.IO
@@ -109,16 +109,16 @@ def _wrap_wsgi_start_response_guard(app: Flask, settings: Dict[str, Any], *, lay
     """
 
     if not bool(settings.get("wsgi_start_response_guard", True)):
-        app.config[f"ECHOCHAT_WSGI_START_RESPONSE_GUARD_{layer.upper()}"] = False
+        app.config[f"HUI_WSGI_START_RESPONSE_GUARD_{layer.upper()}"] = False
         return
 
     current = app.wsgi_app
-    if isinstance(current, EchoChatStartResponseGuard):
-        app.config[f"ECHOCHAT_WSGI_START_RESPONSE_GUARD_{layer.upper()}"] = "already_wrapped"
+    if isinstance(current, HuiChatStartResponseGuard):
+        app.config[f"HUI_WSGI_START_RESPONSE_GUARD_{layer.upper()}"] = "already_wrapped"
         return
 
-    app.wsgi_app = EchoChatStartResponseGuard(current)
-    app.config[f"ECHOCHAT_WSGI_START_RESPONSE_GUARD_{layer.upper()}"] = True
+    app.wsgi_app = HuiChatStartResponseGuard(current)
+    app.config[f"HUI_WSGI_START_RESPONSE_GUARD_{layer.upper()}"] = True
 
 
 def _truthy_runtime_flag(value: Any) -> bool:
@@ -132,7 +132,7 @@ def _safe_positive_int(value: Any, default: int, *, name: str, minimum: int | No
 
     Socket.IO topology settings are often edited by hand or supplied through
     environment variables.  A bad value should fall back to a safe default and
-    log a warning instead of preventing Echo-Chat from booting.
+    log a warning instead of preventing Hui Chat from booting.
     """
     try:
         parsed = int(value)
@@ -171,7 +171,7 @@ def _safe_int(value: Any, default: int, *, name: str, minimum: int | None = None
 
 def _socketio_redis_queue_forced(settings: Dict[str, Any]) -> bool:
     return (
-        _truthy_runtime_flag(os.environ.get("ECHOCHAT_FORCE_SOCKETIO_REDIS_QUEUE"))
+        _truthy_runtime_flag(os.environ.get("HUI_FORCE_SOCKETIO_REDIS_QUEUE"))
         or _truthy_runtime_flag(os.environ.get("FORCE_SOCKETIO_REDIS_QUEUE"))
         or _truthy_runtime_flag(settings.get("force_socketio_redis_queue"))
         or _truthy_runtime_flag(settings.get("socketio_force_message_queue"))
@@ -179,7 +179,7 @@ def _socketio_redis_queue_forced(settings: Dict[str, Any]) -> bool:
 
 
 def _runtime_worker_count(settings: Dict[str, Any]) -> int:
-    for name in ("ECHOCHAT_WORKERS", "ECHOCHAT_PRODUCTION_WORKERS", "WEB_CONCURRENCY", "PRODUCTION_WORKERS"):
+    for name in ("HUI_WORKERS", "HUI_PRODUCTION_WORKERS", "WEB_CONCURRENCY", "PRODUCTION_WORKERS"):
         raw = os.environ.get(name)
         if raw:
             return _safe_positive_int(raw, 1, name=name, minimum=1)
@@ -191,7 +191,7 @@ def _runtime_worker_count(settings: Dict[str, Any]) -> int:
 
 
 def _production_instance_count(settings: Dict[str, Any]) -> int:
-    for name in ("ECHOCHAT_PRODUCTION_INSTANCES", "ECHOCHAT_INSTANCE_COUNT", "PRODUCTION_INSTANCES"):
+    for name in ("HUI_PRODUCTION_INSTANCES", "HUI_INSTANCE_COUNT", "PRODUCTION_INSTANCES"):
         raw = os.environ.get(name)
         if raw:
             return _safe_positive_int(raw, 1, name=name, minimum=1, maximum=10)
@@ -247,7 +247,7 @@ def _get_socketio_message_queue(settings: Dict[str, Any], *, worker_count: int =
     pub/sub is unhealthy.
 
     Force queue attachment for a single worker with:
-      ECHOCHAT_FORCE_SOCKETIO_REDIS_QUEUE=1
+      HUI_FORCE_SOCKETIO_REDIS_QUEUE=1
 
     Explicit env URLs still win for scaled/runtime deployments.
     """
@@ -256,7 +256,7 @@ def _get_socketio_message_queue(settings: Dict[str, Any], *, worker_count: int =
     # Runtime env vars are treated as an intentional operator choice and attach
     # immediately even for a single process. They are used by external emitters,
     # containers, and scaled deployments.
-    for key in ("ECHOCHAT_SOCKETIO_MESSAGE_QUEUE", "SOCKETIO_MESSAGE_QUEUE"):
+    for key in ("HUI_SOCKETIO_MESSAGE_QUEUE", "SOCKETIO_MESSAGE_QUEUE"):
         v = (os.environ.get(key) or "").strip()
         if v:
             return v
@@ -264,14 +264,14 @@ def _get_socketio_message_queue(settings: Dict[str, Any], *, worker_count: int =
     candidate = _explicit_socketio_queue_from_settings(settings)
     if not candidate:
         if os.environ.get("REDIS_URL"):
-            logging.info("[socketio] REDIS_URL is ignored for Socket.IO. Set ECHOCHAT_SOCKETIO_MESSAGE_QUEUE explicitly when scaling.")
+            logging.info("[socketio] REDIS_URL is ignored for Socket.IO. Set HUI_SOCKETIO_MESSAGE_QUEUE explicitly when scaling.")
         return None
 
     instances = _production_instance_count(settings)
     if int(worker_count or 1) <= 1 and instances <= 1 and not force_queue:
         logging.info(
             "[socketio] Single-worker/single-instance runtime: Socket.IO message queue is disabled for this process. "
-            "Set ECHOCHAT_FORCE_SOCKETIO_REDIS_QUEUE=1 only if you intentionally use external Socket.IO emitters."
+            "Set HUI_FORCE_SOCKETIO_REDIS_QUEUE=1 only if you intentionally use external Socket.IO emitters."
         )
         return None
 
@@ -345,14 +345,14 @@ def _resolve_socketio_runtime_profile(settings: Dict[str, Any], async_mode: str 
     message_queue = _get_socketio_message_queue(settings, worker_count=worker_count)
     forced_websocket_only = bool(worker_count > 1)
     if worker_count > 1 and not message_queue:
-        logging.warning('Multi-worker mode requires explicit ECHOCHAT_SOCKETIO_MESSAGE_QUEUE/socketio_message_queue')
+        logging.warning('Multi-worker mode requires explicit HUI_SOCKETIO_MESSAGE_QUEUE/socketio_message_queue')
     if production_instances > 1 and not message_queue:
-        logging.warning('Multiple Echo-Chat instances require explicit ECHOCHAT_SOCKETIO_MESSAGE_QUEUE/socketio_message_queue')
+        logging.warning('Multiple Hui Chat instances require explicit HUI_SOCKETIO_MESSAGE_QUEUE/socketio_message_queue')
     if worker_count > 1 and async_mode == 'threading':
         logging.warning('Multi-worker mode requires eventlet/WebSocket support; threading + polling is not supported')
 
     explicit_transports = _parse_socketio_transport_setting(
-        os.getenv("ECHOCHAT_SOCKETIO_TRANSPORTS")
+        os.getenv("HUI_SOCKETIO_TRANSPORTS")
         or socketio_profile.get("transports")
         or settings.get("socketio_transports")
     )
@@ -547,8 +547,8 @@ def _validate_public_beta_startup_settings(settings: Dict[str, Any], settings_fi
     if not _is_public_beta_startup(settings):
         return
     allow_unsafe = bool(settings.get("allow_insecure_production_start", False))
-    if allow_unsafe and os.getenv("ECHOCHAT_FORCE_UNSAFE_PUBLIC_START") != "1":
-        logging.critical("allow_insecure_production_start=true ignored without ECHOCHAT_FORCE_UNSAFE_PUBLIC_START=1")
+    if allow_unsafe and os.getenv("HUI_FORCE_UNSAFE_PUBLIC_START") != "1":
+        logging.critical("allow_insecure_production_start=true ignored without HUI_FORCE_UNSAFE_PUBLIC_START=1")
         allow_unsafe = False
 
     errors: list[str] = []
@@ -561,7 +561,7 @@ def _validate_public_beta_startup_settings(settings: Dict[str, Any], settings_fi
             errors.append("JWT_SECRET_KEY must be a stable strong secret even when unsafe bypass is requested")
         if errors:
             raise RuntimeError("Public beta startup blocked: " + "; ".join(errors))
-        logging.critical("ECHOCHAT_FORCE_UNSAFE_PUBLIC_START=1; public beta readiness guards bypassed after core-secret check")
+        logging.critical("HUI_FORCE_UNSAFE_PUBLIC_START=1; public beta readiness guards bypassed after core-secret check")
         return
 
 
@@ -591,7 +591,7 @@ def _validate_public_beta_startup_settings(settings: Dict[str, Any], settings_fi
     if (workers > 1 or instances > 1) and not _explicit_socketio_queue_from_settings(settings):
         errors.append("scaled Socket.IO topology requires explicit socketio_message_queue")
     if (workers > 1 or instances > 1) and not str(
-        os.environ.get("ECHOCHAT_SHARED_STATE_REDIS_URL")
+        os.environ.get("HUI_SHARED_STATE_REDIS_URL")
         or os.environ.get("SHARED_STATE_REDIS_URL")
         or settings.get("shared_state_redis_url")
         or ""
@@ -635,9 +635,9 @@ def _validate_public_beta_startup_settings(settings: Dict[str, Any], settings_fi
 
 def _determine_socketio_async_mode() -> str:
     async_mode = "threading"
-    if ECHOCHAT_SOCKETIO_ASYNC == "eventlet" and not EVENTLET_AVAILABLE:
-        print("[socketio] ECHOCHAT_SOCKETIO_ASYNC=eventlet but eventlet is not installed; falling back to threading")
-    if ECHOCHAT_SOCKETIO_ASYNC == "eventlet" and EVENTLET_AVAILABLE:
+    if HUI_SOCKETIO_ASYNC == "eventlet" and not EVENTLET_AVAILABLE:
+        print("[socketio] HUI_SOCKETIO_ASYNC=eventlet but eventlet is not installed; falling back to threading")
+    if HUI_SOCKETIO_ASYNC == "eventlet" and EVENTLET_AVAILABLE:
         async_mode = "eventlet"
     return async_mode
 
@@ -762,8 +762,8 @@ def _configure_realtime_shared_state(app: Flask, settings: Dict[str, Any], runti
         "error": error,
         "summary": summary,
     }
-    app.config["ECHOCHAT_SHARED_STATE_ENABLED"] = enabled
-    app.config["ECHOCHAT_SHARED_STATE_STATUS"] = status
+    app.config["HUI_SHARED_STATE_ENABLED"] = enabled
+    app.config["HUI_SHARED_STATE_STATUS"] = status
     runtime_context["shared_state_enabled"] = enabled
 
     if enabled:
@@ -773,7 +773,7 @@ def _configure_realtime_shared_state(app: Flask, settings: Dict[str, Any], runti
     if scaled:
         msg = (
             "Scaled realtime mode requires explicit reachable shared-state Redis. "
-            "Set ECHOCHAT_SHARED_STATE_REDIS_URL=redis://127.0.0.1:6379/2."
+            "Set HUI_SHARED_STATE_REDIS_URL=redis://127.0.0.1:6379/2."
         )
         if error:
             msg += f" Last error: {error}"
@@ -826,22 +826,22 @@ def _initialize_database_stack(app: Flask, settings: Dict[str, Any]) -> None:
 
 def _create_socketio_instance(app: Flask, settings: Dict[str, Any], cors_origins: Any) -> tuple[SocketIO, Dict[str, Any]]:
     async_mode = _determine_socketio_async_mode()
-    app.config["ECHOCHAT_SOCKETIO_ASYNC_MODE"] = async_mode
+    app.config["HUI_SOCKETIO_ASYNC_MODE"] = async_mode
 
     socketio_profile = _resolve_socketio_runtime_profile(settings, async_mode=async_mode)
     transports = list(socketio_profile.get("transports") or ["polling"])
-    app.config["ECHOCHAT_SOCKETIO_TRANSPORTS"] = transports
-    app.config["ECHOCHAT_SOCKETIO_WEBSOCKET_ONLY"] = bool(socketio_profile.get("websocket_only"))
-    app.config["ECHOCHAT_WS_ENABLED"] = "websocket" in transports
-    app.config["ECHOCHAT_START_JANITOR_INPROCESS"] = bool(
+    app.config["HUI_SOCKETIO_TRANSPORTS"] = transports
+    app.config["HUI_SOCKETIO_WEBSOCKET_ONLY"] = bool(socketio_profile.get("websocket_only"))
+    app.config["HUI_WS_ENABLED"] = "websocket" in transports
+    app.config["HUI_START_JANITOR_INPROCESS"] = bool(
         socketio_profile.get("worker_count", 1) <= 1
         and socketio_profile.get("production_instance_count", 1) <= 1
         and not os.environ.get("GUNICORN_CMD_ARGS")
     )
 
     # Cross-process broadcast (required for scale): configure an explicit Redis
-    # Socket.IO queue with ECHOCHAT_SOCKETIO_MESSAGE_QUEUE or socketio_message_queue.
-    # Do not rely on generic REDIS_URL; Echo-Chat keeps Redis DBs separated.
+    # Socket.IO queue with HUI_SOCKETIO_MESSAGE_QUEUE or socketio_message_queue.
+    # Do not rely on generic REDIS_URL; Hui Chat keeps Redis DBs separated.
     message_queue = socketio_profile.get("message_queue")
     if message_queue:
         _require_redis_connectivity(message_queue)
@@ -850,7 +850,7 @@ def _create_socketio_instance(app: Flask, settings: Dict[str, Any], cors_origins
     # Some Engine.IO versions concatenate cookie attributes as strings and crash
     # when dict values such as httponly=True/secure=False are booleans.
     # JWT/auth cookies remain hardened separately by Flask/JWT settings.
-    engineio_cookie = "echochat_io"
+    engineio_cookie = "hui_io"
 
     socketio = SocketIO(
         app,
@@ -869,7 +869,7 @@ def _create_socketio_instance(app: Flask, settings: Dict[str, Any], cors_origins
 
     runtime_context = {
         "async_mode": async_mode,
-        "ws_enabled": app.config.get("ECHOCHAT_WS_ENABLED"),
+        "ws_enabled": app.config.get("HUI_WS_ENABLED"),
         "message_queue": message_queue,
         "worker_count": socketio_profile.get("worker_count"),
         "production_instance_count": socketio_profile.get("production_instance_count"),
@@ -880,8 +880,8 @@ def _create_socketio_instance(app: Flask, settings: Dict[str, Any], cors_origins
         "engineio_cookie_mode": "compatibility-name-only",
     }
     _configure_realtime_shared_state(app, settings, runtime_context)
-    app.config["ECHOCHAT_SOCKETIO_MESSAGE_QUEUE"] = message_queue
-    app.config["ECHOCHAT_SOCKETIO_RUNTIME_PROFILE"] = dict(runtime_context)
+    app.config["HUI_SOCKETIO_MESSAGE_QUEUE"] = message_queue
+    app.config["HUI_SOCKETIO_RUNTIME_PROFILE"] = dict(runtime_context)
     return socketio, runtime_context
 
 
@@ -900,8 +900,8 @@ def _record_startup_preflight(
                 init_db_pool_if_needed=False,
                 runtime_context=runtime_context,
             )
-        app.config["ECHOCHAT_STARTUP_PREFLIGHT"] = startup_preflight
-        app.config["ECHOCHAT_LAST_PREFLIGHT"] = startup_preflight
+        app.config["HUI_STARTUP_PREFLIGHT"] = startup_preflight
+        app.config["HUI_LAST_PREFLIGHT"] = startup_preflight
         log_preflight_summary(startup_preflight, logger=logging.getLogger(__name__))
     except Exception as exc:
         logging.warning("Could not complete startup preflight: %s", exc)
@@ -912,8 +912,8 @@ def _record_startup_preflight(
             "counts": {"ok": 0, "warn": 1, "fail": 0, "disabled": 0, "info": 0},
             "error": str(exc),
         }
-        app.config["ECHOCHAT_STARTUP_PREFLIGHT"] = fallback
-        app.config["ECHOCHAT_LAST_PREFLIGHT"] = dict(fallback)
+        app.config["HUI_STARTUP_PREFLIGHT"] = fallback
+        app.config["HUI_LAST_PREFLIGHT"] = dict(fallback)
 
 
 
@@ -926,7 +926,7 @@ def _register_application_routes(
     register_auth_routes(app, settings, limiter=limiter)
     register_main_routes(app, settings, socketio)
     # NOTE: Legacy HTTP DM routes performed server-side decryption.
-    # EchoChat's active direct messaging path is Socket.IO ciphertext relay
+    # HuiChat's active direct messaging path is Socket.IO ciphertext relay
     # (see socket_handlers.py). Keeping HTTP DM routes disabled avoids
     # accidental server-side plaintext handling.
     register_group_routes(app, settings, limiter=limiter)
@@ -961,7 +961,7 @@ def _log_startup_banner(settings: Dict[str, Any], settings_file: Optional[Path] 
         server_label = _runtime_server_name(settings)
         logging.info("==================== %s Boot ====================", server_label)
         logging.info("%s version: %s", server_label, APP_VERSION)
-        logging.info("Schema mode: tracked migrations (echochat_schema_meta)")
+        logging.info("Schema mode: tracked migrations (hui_schema_meta)")
         logging.info("Settings file: %s (exists=%s%s)", str(cfg_path) if cfg_path else "<none>", cfg_exists,
                      f", mtime={cfg_mtime}" if cfg_mtime else "")
         logging.info(
@@ -1014,9 +1014,9 @@ def create_app(
     app.config["APP_VERSION"] = APP_VERSION
     # Expose the live settings file path to admin endpoints so they can
     # persist runtime settings updates without guessing filenames.
-    app.config["ECHOCHAT_SETTINGS_FILE"] = str(settings_file) if settings_file else None
+    app.config["HUI_SETTINGS_FILE"] = str(settings_file) if settings_file else None
     # Expose the live runtime settings dict to blueprints that need it.
-    app.config["ECHOCHAT_SETTINGS"] = settings
+    app.config["HUI_SETTINGS"] = settings
 
     trust_proxy_headers = bool(settings.get("trust_proxy_headers", False))
     proxy_fix_hops = _safe_int(settings.get("proxy_fix_hops", 1), 1, name="proxy_fix_hops", minimum=0, maximum=5)
@@ -1025,9 +1025,9 @@ def create_app(
     proxy_fix_x_host = _safe_int(settings.get("proxy_fix_x_host", proxy_fix_hops), proxy_fix_hops, name="proxy_fix_x_host", minimum=0, maximum=5)
     proxy_fix_x_port = _safe_int(settings.get("proxy_fix_x_port", proxy_fix_hops), proxy_fix_hops, name="proxy_fix_x_port", minimum=0, maximum=5)
     proxy_fix_x_prefix = _safe_int(settings.get("proxy_fix_x_prefix", 0), 0, name="proxy_fix_x_prefix", minimum=0, maximum=5)
-    app.config["ECHOCHAT_TRUST_PROXY_HEADERS"] = trust_proxy_headers
-    app.config["ECHOCHAT_PROXY_FIX_HOPS"] = proxy_fix_hops
-    app.config["ECHOCHAT_PROXY_FIX_COUNTS"] = {
+    app.config["HUI_TRUST_PROXY_HEADERS"] = trust_proxy_headers
+    app.config["HUI_PROXY_FIX_HOPS"] = proxy_fix_hops
+    app.config["HUI_PROXY_FIX_COUNTS"] = {
         "x_for": proxy_fix_x_for,
         "x_proto": proxy_fix_x_proto,
         "x_host": proxy_fix_x_host,
@@ -1063,10 +1063,10 @@ def create_app(
 
 
     def _get_csp_nonce() -> str:
-        nonce = getattr(g, "echochat_csp_nonce", None)
+        nonce = getattr(g, "hui_csp_nonce", None)
         if not nonce:
             nonce = secrets.token_urlsafe(16)
-            g.echochat_csp_nonce = nonce
+            g.hui_csp_nonce = nonce
         return nonce
 
     def _origin_for_csp(url: Any) -> str | None:
@@ -1134,7 +1134,7 @@ def create_app(
         return "; ".join(f"{k} {' '.join(v)}" for k, v in directives.items())
 
     @app.context_processor
-    def inject_echochat_template_globals():
+    def inject_hui_template_globals():
         server_name = str(settings.get("server_name") or DEFAULT_SERVER_NAME).strip() or DEFAULT_SERVER_NAME
         password_policy = password_policy_metadata()
         return {
@@ -1156,14 +1156,14 @@ def create_app(
 
     app.config.update(
         SECRET_KEY=app.secret_key,
-        SESSION_COOKIE_NAME="echochat_session",
+        SESSION_COOKIE_NAME="hui_session",
         SESSION_COOKIE_SECURE=cookie_secure,
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE=cookie_samesite,
         JWT_SECRET_KEY=_ensure_jwt_secret(settings, settings_file),
         JWT_TOKEN_LOCATION=["cookies"],
-        JWT_ACCESS_COOKIE_NAME="echochat_access",
-        JWT_REFRESH_COOKIE_NAME="echochat_refresh",
+        JWT_ACCESS_COOKIE_NAME="hui_access",
+        JWT_REFRESH_COOKIE_NAME="hui_refresh",
         JWT_ACCESS_COOKIE_PATH="/",
         JWT_REFRESH_COOKIE_PATH="/token/refresh",
         # Keep CSRF cookies readable from /chat while restricting refresh token cookie path.
@@ -1217,7 +1217,7 @@ def create_app(
             resp.headers.setdefault("Origin-Agent-Cluster", "?1")
             resp.headers.setdefault("X-Permitted-Cross-Domain-Policies", "none")
 
-            # Permissions-Policy: do not block camera/microphone (EchoChat voice + webcam).
+            # Permissions-Policy: do not block camera/microphone (HuiChat voice + webcam).
             # Default media Permissions-Policy fallback: camera=(self), microphone=(self).
             resp.headers.setdefault(
                 "Permissions-Policy",
@@ -1326,7 +1326,7 @@ def create_app(
     # CORS (hardened defaults)
     # ------------------------------------------------------------------
     # Default: CORS is OFF unless explicitly configured.
-    # Why: EchoChat uses cookie-based auth; "*" + credentials is unsafe.
+    # Why: HuiChat uses cookie-based auth; "*" + credentials is unsafe.
     cors_cfg = settings.get("cors_allowed_origins")
     if cors_cfg is None:
         cors_cfg = settings.get("allowed_origins")
@@ -1355,7 +1355,7 @@ def create_app(
     if cors_candidate is not None:
         # Disallow wildcard with credentials.
         if cors_candidate == "*" or (isinstance(cors_candidate, (list, tuple)) and "*" in cors_candidate):
-            logging.warning("CORS origins includes '*'. Disabling CORS because EchoChat uses credentialed cookies.")
+            logging.warning("CORS origins includes '*'. Disabling CORS because HuiChat uses credentialed cookies.")
             cors_candidate = None
 
     if _use_same_origin_lan_cors_mode(settings, cors_candidate):
@@ -1378,7 +1378,7 @@ def create_app(
         else:
             print("⚠️  flask-cors not installed; CORS settings ignored.")
 
-    app.config["ECHOCHAT_EFFECTIVE_CORS_ORIGINS"] = cors_origins
+    app.config["HUI_EFFECTIVE_CORS_ORIGINS"] = cors_origins
 
     lan_warning = _public_lan_http_warning(settings)
     if lan_warning:
@@ -1387,9 +1387,9 @@ def create_app(
     storage_uri = settings.get("rate_limit_storage_uri") or settings.get("rate_limit_storage") or "memory://"
     simple_guard_storage_uri = str(settings.get("simple_rate_limit_storage_uri") or storage_uri or "").strip()
     if simple_guard_storage_uri.startswith(("redis://", "rediss://")):
-        app.config["ECHOCHAT_SIMPLE_RATE_LIMIT_REDIS_URL"] = simple_guard_storage_uri
+        app.config["HUI_SIMPLE_RATE_LIMIT_REDIS_URL"] = simple_guard_storage_uri
     else:
-        app.config["ECHOCHAT_SIMPLE_RATE_LIMIT_REDIS_URL"] = ""
+        app.config["HUI_SIMPLE_RATE_LIMIT_REDIS_URL"] = ""
     if limiter is None:
         limiter = Limiter(
             key_func=lambda: get_request_ip(),
@@ -1611,7 +1611,7 @@ def create_app(
 
     # Expose the SocketIO instance to blueprints that need to emit events from
     # normal HTTP routes (e.g., invite notifications).
-    app.config["ECHOCHAT_SOCKETIO"] = socketio
+    app.config["HUI_SOCKETIO"] = socketio
 
     # ───── Global Socket.IO Error Handler (Fix A) ─────
     # Flask-SocketIO will otherwise log/propagate JWT errors raised inside
@@ -1693,7 +1693,7 @@ def run_web_server(
     scheme = "https" if https_enabled else "http"
     print(f"🚀  Starting {_runtime_server_name(settings)} on {scheme}://{host}:{port} (debug={debug})")
 
-    async_mode = app.config.get("ECHOCHAT_SOCKETIO_ASYNC_MODE") or "threading"
+    async_mode = app.config.get("HUI_SOCKETIO_ASYNC_MODE") or "threading"
     use_reloader = bool(debug and async_mode == "threading")
 
     # Background janitor: cleanup inactive custom rooms + expired messages.
@@ -1701,7 +1701,7 @@ def run_web_server(
     # separate service (see janitor_runner.py) to avoid N janitors. In debug
     # reloader mode, only the serving child process should start the thread;
     # the parent watcher process must stay cleanup-free.
-    if bool(app.config.get("ECHOCHAT_START_JANITOR_INPROCESS", True)):
+    if bool(app.config.get("HUI_START_JANITOR_INPROCESS", True)):
         if use_reloader and os.environ.get("WERKZEUG_RUN_MAIN") not in {"true", "1"}:
             logging.info("Skipping in-process janitor startup in Werkzeug reloader parent process")
         else:
@@ -1714,7 +1714,7 @@ def run_web_server(
     # suppresses noisy request log lines and removes bearer-like URL material.
     try:
 
-        class _EchoChatSensitiveAccessFilter(logging.Filter):
+        class _HuiChatSensitiveAccessFilter(logging.Filter):
             def filter(self, record: logging.LogRecord) -> bool:  # type: ignore
                 try:
                     msg = record.getMessage()
@@ -1729,7 +1729,7 @@ def run_web_server(
                     record.args = ()
                 return True
 
-        logging.getLogger("werkzeug").addFilter(_EchoChatSensitiveAccessFilter())
+        logging.getLogger("werkzeug").addFilter(_HuiChatSensitiveAccessFilter())
     except Exception:
         pass
 
@@ -1747,7 +1747,7 @@ def run_web_server(
             print(
                 "⚠️  HTTPS via ssl_context is only supported by the built-in threading server. "
                 "Starting without built-in TLS for async_mode=%s; use a reverse proxy or "
-                "set ECHOCHAT_SOCKETIO_ASYNC=threading if you need direct dev HTTPS."
+                "set HUI_SOCKETIO_ASYNC=threading if you need direct dev HTTPS."
                 % async_mode
             )
 

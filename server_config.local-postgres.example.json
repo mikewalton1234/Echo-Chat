@@ -1,5 +1,5 @@
 {
-  "server_name": "Echo-Chat Local",
+  "server_name": "Hui Chat Local",
   "server_host": "0.0.0.0",
   "server_port": 5000,
   "run_mode": "development",
@@ -14,7 +14,7 @@
   "socketio_transports": [
     "polling"
   ],
-  "database_url": "postgresql://YOUR_LINUX_USERNAME@localhost:5432/echochat",
+  "database_url": "postgresql://YOUR_LINUX_USERNAME@localhost:5432/hui_chat",
   "database_bootstrap_url": "postgresql://YOUR_LINUX_USERNAME@localhost:5432/postgres",
   "hosting_mode": "lan",
   "public_base_url": "http://127.0.0.1:5000",

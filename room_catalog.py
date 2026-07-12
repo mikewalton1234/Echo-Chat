@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Official Echo-Chat room catalog loading/normalization helpers.
+"""Official Hui Chat room catalog loading/normalization helpers.
 
 The official room browser, database preload, and room-media code all consume
 ``chat_rooms.json``.  Keep parsing here so one malformed catalog entry cannot

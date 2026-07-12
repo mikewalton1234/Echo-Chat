@@ -66,14 +66,14 @@ from webrtc_ice_config import (
     turn_credential_errors,
     voice_ice_servers,
 )
-from echo_voice_protocol import (
-    ECHO_WEBCAM_QUALITY_PROFILES,
-    echo_voice_audio_quality,
-    echo_voice_bool,
-    echo_voice_client_config,
-    echo_voice_room_capacity,
-    echo_voice_room_limit,
-    echo_webcam_quality,
+from hui_voice_protocol import (
+    HUI_WEBCAM_QUALITY_PROFILES,
+    hui_voice_audio_quality,
+    hui_voice_bool,
+    hui_voice_client_config,
+    hui_voice_room_capacity,
+    hui_voice_room_limit,
+    hui_webcam_quality,
 )
 
 try:
@@ -692,7 +692,7 @@ STARTED_AT = _utcnow()
 def _global_broadcast_delivery_estimate() -> dict[str, int]:
     """Best-effort count of live Socket.IO recipients before a global emit.
 
-    Socket.IO broadcast emits do not return an acknowledgement count. EchoChat
+    Socket.IO broadcast emits do not return an acknowledgement count. HuiChat
     keeps its own presence registry, backed by Redis when configured, so the
     admin panel can show a realistic delivery estimate instead of a hard-coded 0.
     """
@@ -783,8 +783,8 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         if not allow_remote and not _is_local_request():
             return jsonify({"error": "Forbidden (local requests only)"}), 403
 
-        settings_file_path = current_app.config.get("ECHOCHAT_SETTINGS_FILE")
-        runtime_settings = current_app.config.get("ECHOCHAT_SETTINGS") or {}
+        settings_file_path = current_app.config.get("HUI_SETTINGS_FILE")
+        runtime_settings = current_app.config.get("HUI_SETTINGS") or {}
         dsn = get_db_connection_string(runtime_settings if isinstance(runtime_settings, dict) else settings)
 
         payload = {
@@ -1664,7 +1664,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         are allowed because they call _admin_testlab_require_admin_or_404()
         internally after validating the random link token.
         """
-        return bool(getattr(view_func, "_echochat_admin_route_gate", False))
+        return bool(getattr(view_func, "_hui_admin_route_gate", False))
 
     _ADMIN_ROUTE_INTERNAL_GATE_ENDPOINTS = {
         "admin_test_lab_legacy_page",
@@ -2005,7 +2005,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
         uptime_seconds = max(0, int((_utcnow() - STARTED_AT).total_seconds()))
 
-        last_preflight = current_app.config.get("ECHOCHAT_LAST_PREFLIGHT") or {}
+        last_preflight = current_app.config.get("HUI_LAST_PREFLIGHT") or {}
 
         return _admin_json_response(
             {
@@ -2028,14 +2028,14 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 "last_preflight_time": last_preflight.get("timestamp"),
                 "last_preflight_counts": last_preflight.get("counts") or {},
                 "settings_snapshot": {
-                    "voice_enabled": echo_voice_bool(settings, "voice_enabled", True),
-                    "voice_max_room_peers": echo_voice_room_limit(settings),
+                    "voice_enabled": hui_voice_bool(settings, "voice_enabled", True),
+                    "voice_max_room_peers": hui_voice_room_limit(settings),
                     "p2p_file_enabled": bool(settings.get("p2p_file_enabled", True)),
                     "giphy_enabled": bool(settings.get("giphy_enabled", True)),
                     "health_endpoint_enabled": bool(settings.get("enable_health_check_endpoint", False)),
-                    "av_mode": str(settings.get("av_mode") or ("echo" if echo_voice_bool(settings, "webcam_enabled", True) else "standard")),
-                    "webcam_enabled": echo_voice_bool(settings, "webcam_enabled", True),
-                    "webcam_quality": echo_webcam_quality(settings),
+                    "av_mode": str(settings.get("av_mode") or ("hui" if hui_voice_bool(settings, "webcam_enabled", True) else "standard")),
+                    "webcam_enabled": hui_voice_bool(settings, "webcam_enabled", True),
+                    "webcam_quality": hui_webcam_quality(settings),
                     "webcam_codec_strategy": str(settings.get("webcam_codec_strategy") or "prefer-compatible"),
                     "webcam_approval_mode": webcam_policy(settings).get("webcam_approval_mode"),
                     "webcam_max_viewers": webcam_policy(settings).get("webcam_max_viewers"),
@@ -2054,18 +2054,18 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
     @require_recent_admin_auth
     def admin_diagnostics():
         runtime_ctx = {
-            "async_mode": current_app.config.get("ECHOCHAT_SOCKETIO_ASYNC_MODE"),
-            "ws_enabled": current_app.config.get("ECHOCHAT_WS_ENABLED"),
-            "message_queue": current_app.config.get("ECHOCHAT_SOCKETIO_MESSAGE_QUEUE"),
+            "async_mode": current_app.config.get("HUI_SOCKETIO_ASYNC_MODE"),
+            "ws_enabled": current_app.config.get("HUI_WS_ENABLED"),
+            "message_queue": current_app.config.get("HUI_SOCKETIO_MESSAGE_QUEUE"),
         }
-        startup_snapshot = current_app.config.get("ECHOCHAT_STARTUP_PREFLIGHT")
+        startup_snapshot = current_app.config.get("HUI_STARTUP_PREFLIGHT")
         current = run_preflight(
             settings,
-            settings_file=current_app.config.get("ECHOCHAT_SETTINGS_FILE"),
+            settings_file=current_app.config.get("HUI_SETTINGS_FILE"),
             init_db_pool_if_needed=False,
             runtime_context=runtime_ctx,
         )
-        current_app.config["ECHOCHAT_LAST_PREFLIGHT"] = current
+        current_app.config["HUI_LAST_PREFLIGHT"] = current
         return _admin_json_response(
             {
                 "ok": True,
@@ -2190,10 +2190,10 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         add_check("private_room_e2ee", "Private-room E2EE required", private_room_required, "Invite-only/private custom rooms block plaintext room messages.")
         add_check("all_room_e2ee", "All-room E2EE strict mode", all_room_required, "Public rooms are plaintext by default for moderation/search. Strict mode requires encrypted envelopes in every room.", level=("ok" if all_room_required else "warn"))
         previous_profile_keys = bool(sensitive_field_previous_keys_available(settings))
-        add_check("profile_field_key", "Profile-field encryption key", (not profile_encrypt) or profile_key, "Set ECHOCHAT_PROFILE_FIELD_KEY or generated stable secrets for phone/address/location encryption.")
-        add_check("email_at_rest", "Email encrypted at rest", (not email_encrypt) or (email_field_key and email_hash_key), "Set ECHOCHAT_EMAIL_FIELD_KEY and ECHOCHAT_EMAIL_HASH_KEY before encrypting stored emails.")
-        add_check("security_backup_encryption", "Encrypted security backups", (not backup_encrypt) or backup_key, "Set ECHOCHAT_SECURITY_BACKUP_KEY or generated stable crypto keys; new security backups are .json.enc by default.")
-        add_check("profile_field_previous_keys", "Profile-field previous keys", True, "During rotation, put old keys in ECHOCHAT_PROFILE_FIELD_PREVIOUS_KEYS until the rotation tool rewrites old envelopes.", level=("warn" if previous_profile_keys else "ok"))
+        add_check("profile_field_key", "Profile-field encryption key", (not profile_encrypt) or profile_key, "Set HUI_PROFILE_FIELD_KEY or generated stable secrets for phone/address/location encryption.")
+        add_check("email_at_rest", "Email encrypted at rest", (not email_encrypt) or (email_field_key and email_hash_key), "Set HUI_EMAIL_FIELD_KEY and HUI_EMAIL_HASH_KEY before encrypting stored emails.")
+        add_check("security_backup_encryption", "Encrypted security backups", (not backup_encrypt) or backup_key, "Set HUI_SECURITY_BACKUP_KEY or generated stable crypto keys; new security backups are .json.enc by default.")
+        add_check("profile_field_previous_keys", "Profile-field previous keys", True, "During rotation, put old keys in HUI_PROFILE_FIELD_PREVIOUS_KEYS until the rotation tool rewrites old envelopes.", level=("warn" if previous_profile_keys else "ok"))
         add_check("secret_persistence", "Config secret persistence", not secrets_persist, "Production should keep secrets in env/secret manager, not server_config.json.", level=("ok" if not secrets_persist else "warn"))
         add_check("testlab_random", "Test Lab randomized links", True, "Predictable Test Lab pages stay dark; random URLs are session-bound and short-lived.")
         add_check("testlab_referrer", "Test Lab no-referrer policy", True, "Tokenized Test Lab pages send Referrer-Policy: no-referrer.")
@@ -2289,7 +2289,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
     # ── Runtime settings (admin GUI) ──────────────────────────────
     def _settings_path() -> Path:
         """Return the live settings JSON path (best-effort)."""
-        p = (current_app.config.get("ECHOCHAT_SETTINGS_FILE") or CONFIG_FILE) if current_app else CONFIG_FILE
+        p = (current_app.config.get("HUI_SETTINGS_FILE") or CONFIG_FILE) if current_app else CONFIG_FILE
         return Path(str(p))
 
     _settings_persist_report: dict[str, object] = {}
@@ -2432,7 +2432,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
 
 
-    # ── Echo media request payload helper ─────────────────────────────
+    # ── Hui media request payload helper ─────────────────────────────
     def _request_payload() -> dict:
         data = {}
         try:
@@ -2446,24 +2446,24 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             pass
         return data
 
-    # ── Echo media controls are handled through /admin/settings/media.
+    # ── Hui media controls are handled through /admin/settings/media.
 
     @app.route("/admin/settings/voice", methods=["GET"])
     @require_permission("admin:settings")
     def admin_get_voice_settings():
         """Return current voice settings for the injected admin panel."""
-        cfg = echo_voice_client_config(settings)
+        cfg = hui_voice_client_config(settings)
         return _admin_json_response(
             {
                 "ok": True,
-                "voice_enabled": echo_voice_bool(settings, "voice_enabled", True),
-                "voice_max_room_peers": echo_voice_room_limit(settings),
-                "voice_audio_quality": echo_voice_audio_quality(settings),
-                "voice_auto_quality": echo_voice_bool(settings, "voice_auto_quality", True),
-                "voice_noise_cancellation": echo_voice_bool(settings, "voice_noise_cancellation", True),
-                "voice_echo_cancellation": echo_voice_bool(settings, "voice_echo_cancellation", True),
-                "voice_auto_gain_control": echo_voice_bool(settings, "voice_auto_gain_control", True),
-                "voice_default_push_to_talk": echo_voice_bool(settings, "voice_default_push_to_talk", True),
+                "voice_enabled": hui_voice_bool(settings, "voice_enabled", True),
+                "voice_max_room_peers": hui_voice_room_limit(settings),
+                "voice_audio_quality": hui_voice_audio_quality(settings),
+                "voice_auto_quality": hui_voice_bool(settings, "voice_auto_quality", True),
+                "voice_noise_cancellation": hui_voice_bool(settings, "voice_noise_cancellation", True),
+                "voice_echo_cancellation": hui_voice_bool(settings, "voice_echo_cancellation", True),
+                "voice_auto_gain_control": hui_voice_bool(settings, "voice_auto_gain_control", True),
+                "voice_default_push_to_talk": hui_voice_bool(settings, "voice_default_push_to_talk", True),
                 "client_config": cfg,
             }
         )
@@ -2505,7 +2505,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         raw_limit = _incoming("voice_max_room_peers")
         try:
             if raw_limit is None or str(raw_limit).strip() == "":
-                new_limit = echo_voice_room_limit(settings)
+                new_limit = hui_voice_room_limit(settings)
             else:
                 new_limit = int(str(raw_limit).strip())
         except Exception:
@@ -2517,19 +2517,19 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         if new_limit > 500:
             return _admin_json_response({"ok": False, "error": "voice_max_room_peers too large (max 500 or 0 for unlimited)"}, 400)
 
-        quality = str(_incoming("voice_audio_quality", echo_voice_audio_quality(settings)) or "balanced").strip().lower()
+        quality = str(_incoming("voice_audio_quality", hui_voice_audio_quality(settings)) or "balanced").strip().lower()
         if quality not in {"low", "balanced", "high"}:
             return _admin_json_response({"ok": False, "error": "voice_audio_quality must be low, balanced, or high"}, 400)
 
         patch = {
-            "voice_enabled": _parse_bool("voice_enabled", echo_voice_bool(settings, "voice_enabled", True)),
+            "voice_enabled": _parse_bool("voice_enabled", hui_voice_bool(settings, "voice_enabled", True)),
             "voice_max_room_peers": new_limit,
             "voice_audio_quality": quality,
-            "voice_auto_quality": _parse_bool("voice_auto_quality", echo_voice_bool(settings, "voice_auto_quality", True)),
-            "voice_noise_cancellation": _parse_bool("voice_noise_cancellation", echo_voice_bool(settings, "voice_noise_cancellation", True)),
-            "voice_echo_cancellation": _parse_bool("voice_echo_cancellation", echo_voice_bool(settings, "voice_echo_cancellation", True)),
-            "voice_auto_gain_control": _parse_bool("voice_auto_gain_control", echo_voice_bool(settings, "voice_auto_gain_control", True)),
-            "voice_default_push_to_talk": _parse_bool("voice_default_push_to_talk", echo_voice_bool(settings, "voice_default_push_to_talk", True)),
+            "voice_auto_quality": _parse_bool("voice_auto_quality", hui_voice_bool(settings, "voice_auto_quality", True)),
+            "voice_noise_cancellation": _parse_bool("voice_noise_cancellation", hui_voice_bool(settings, "voice_noise_cancellation", True)),
+            "voice_echo_cancellation": _parse_bool("voice_echo_cancellation", hui_voice_bool(settings, "voice_echo_cancellation", True)),
+            "voice_auto_gain_control": _parse_bool("voice_auto_gain_control", hui_voice_bool(settings, "voice_auto_gain_control", True)),
+            "voice_default_push_to_talk": _parse_bool("voice_default_push_to_talk", hui_voice_bool(settings, "voice_default_push_to_talk", True)),
         }
 
         settings.update(patch)
@@ -2559,7 +2559,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 "voice_echo_cancellation": patch["voice_echo_cancellation"],
                 "voice_auto_gain_control": patch["voice_auto_gain_control"],
                 "voice_default_push_to_talk": patch["voice_default_push_to_talk"],
-                "client_config": echo_voice_client_config(settings),
+                "client_config": hui_voice_client_config(settings),
                 "persisted": bool(persisted),
                 "persistence": _last_settings_persistence_meta(),
                 "kicked": int(enforcement.get("kicked", 0) or 0),
@@ -2651,30 +2651,30 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         )
 
 
-    # ── Settings: Echo Media / webcam (persisted + runtime) ─────────────
+    # ── Settings: Hui Media / webcam (persisted + runtime) ─────────────
     @app.route("/admin/settings/media", methods=["GET"])
     @require_permission("admin:settings")
     def admin_get_media_settings():
-        """Return non-secret Echo built-in WebRTC webcam/media settings."""
+        """Return non-secret Hui built-in WebRTC webcam/media settings."""
         decision = resolve_av_mode(settings)
         policy = webcam_policy(settings)
         return _admin_json_response(
             {
                 "ok": True,
-                "av_mode": str(settings.get("av_mode") or decision.get("requested_mode") or "echo"),
-                "active_mode": str(decision.get("mode") or "echo"),
-                "voice_enabled": echo_voice_bool(settings, "voice_enabled", True),
-                "webcam_enabled": echo_voice_bool(settings, "webcam_enabled", True),
-                "echo_webcam_enabled": echo_voice_bool(settings, "echo_webcam_enabled", echo_voice_bool(settings, "webcam_enabled", True)),
-                "webcam_quality": echo_webcam_quality(settings),
-                "webcam_quality_profiles": ECHO_WEBCAM_QUALITY_PROFILES,
+                "av_mode": str(settings.get("av_mode") or decision.get("requested_mode") or "hui"),
+                "active_mode": str(decision.get("mode") or "hui"),
+                "voice_enabled": hui_voice_bool(settings, "voice_enabled", True),
+                "webcam_enabled": hui_voice_bool(settings, "webcam_enabled", True),
+                "hui_webcam_enabled": hui_voice_bool(settings, "hui_webcam_enabled", hui_voice_bool(settings, "webcam_enabled", True)),
+                "webcam_quality": hui_webcam_quality(settings),
+                "webcam_quality_profiles": HUI_WEBCAM_QUALITY_PROFILES,
                 "webcam_codec_strategy": str(settings.get("webcam_codec_strategy") or "prefer-compatible"),
-                "webcam_transport": "echo-webrtc-mesh",
+                "webcam_transport": "hui-webrtc-mesh",
                 "webcam_approval_mode": policy.get("webcam_approval_mode"),
                 "webcam_max_viewers": policy.get("webcam_max_viewers"),
                 "default_media_policy": policy.get("default_media_policy"),
                 "server_enforced_webcam_permissions": bool(policy.get("server_enforced_webcam_permissions")),
-                "client_config": {**echo_voice_client_config(settings), **client_av_config(settings)},
+                "client_config": {**hui_voice_client_config(settings), **client_av_config(settings)},
                 "webrtc_ice_summary": ice_server_summary(settings),
                 "decision": decision,
             }
@@ -2684,26 +2684,26 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
     @require_permission("admin:settings")
     @require_recent_admin_auth
     def admin_set_media_settings():
-        """Update Echo built-in WebRTC webcam defaults and media policy."""
+        """Update Hui built-in WebRTC webcam defaults and media policy."""
         actor = _actor()
         data = _request_payload()
 
-        mode = str(data.get("av_mode") or data.get("mode") or settings.get("av_mode") or "echo").strip().lower().replace("-", "_")
+        mode = str(data.get("av_mode") or data.get("mode") or settings.get("av_mode") or "hui").strip().lower().replace("-", "_")
         mode_aliases = {
-            "webrtc": "echo",
-            "built_in": "echo",
-            "built-in": "echo",
-            "builtin": "echo",
-            "echo": "echo",
+            "webrtc": "hui",
+            "built_in": "hui",
+            "built-in": "hui",
+            "builtin": "hui",
+            "hui": "hui",
             "standard": "standard",
             "voice_only": "standard",
         }
         mode = mode_aliases.get(mode)
-        if mode not in {"echo", "standard"}:
-            return _admin_json_response({"ok": False, "error": "mode must be echo or standard"}, 400)
+        if mode not in {"hui", "standard"}:
+            return _admin_json_response({"ok": False, "error": "mode must be hui or standard"}, 400)
 
-        quality = str(data.get("webcam_quality") or data.get("echo_webcam_quality") or echo_webcam_quality(settings)).strip().lower()
-        if quality not in ECHO_WEBCAM_QUALITY_PROFILES:
+        quality = str(data.get("webcam_quality") or data.get("hui_webcam_quality") or hui_webcam_quality(settings)).strip().lower()
+        if quality not in HUI_WEBCAM_QUALITY_PROFILES:
             return _admin_json_response({"ok": False, "error": "webcam_quality must be low, balanced, or high"}, 400)
 
         codec = str(data.get("webcam_codec_strategy") or settings.get("webcam_codec_strategy") or "prefer-compatible").strip().lower().replace("_", "-")
@@ -2737,23 +2737,23 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         default_media_policy = default_aliases.get(raw_default, "user_choice")
 
         if "webcam_enabled" in data:
-            webcam_enabled = echo_voice_bool({"webcam_enabled": data.get("webcam_enabled")}, "webcam_enabled", True)
+            webcam_enabled = hui_voice_bool({"webcam_enabled": data.get("webcam_enabled")}, "webcam_enabled", True)
         else:
-            webcam_enabled = echo_voice_bool(settings, "webcam_enabled", mode == "echo")
+            webcam_enabled = hui_voice_bool(settings, "webcam_enabled", mode == "hui")
 
-        # Webcam is now an Echo built-in WebRTC feature.  If the admin checks
+        # Webcam is now a Hui built-in WebRTC feature.  If the admin checks
         # "allow room webcams" while the old voice-only/standard mode is
-        # still selected, honor the webcam intent by switching to Echo mode
+        # still selected, honor the webcam intent by switching to Hui mode
         # instead of silently saving a disabled camera configuration.
         if webcam_enabled and mode == "standard":
-            mode = "echo"
+            mode = "hui"
 
         patch = {
             "av_mode": mode,
             "webcam_enabled": bool(webcam_enabled),
-            "echo_webcam_enabled": bool(webcam_enabled),
+            "hui_webcam_enabled": bool(webcam_enabled),
             "webcam_quality": quality,
-            "echo_webcam_quality": quality,
+            "hui_webcam_quality": quality,
             "webcam_codec_strategy": codec,
             "webcam_approval_mode": webcam_approval_mode,
             "webcam_max_viewers": max_viewers,
@@ -2764,7 +2764,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         persisted = _persist_settings_patch(patch)
         decision = resolve_av_mode(settings)
         try:
-            log_audit_event(actor, "set_echo_media_settings", "*", f"mode={mode} webcam={patch['webcam_enabled']} quality={quality} codec={codec} policy={webcam_approval_mode} max_viewers={max_viewers} persisted={persisted}")
+            log_audit_event(actor, "set_hui_media_settings", "*", f"mode={mode} webcam={patch['webcam_enabled']} quality={quality} codec={codec} policy={webcam_approval_mode} max_viewers={max_viewers} persisted={persisted}")
         except Exception:
             pass
         return jsonify(
@@ -2780,7 +2780,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 "webcam_approval_mode": webcam_approval_mode,
                 "webcam_max_viewers": max_viewers,
                 "default_media_policy": default_media_policy,
-                "client_config": {**echo_voice_client_config(settings), **client_av_config(settings)},
+                "client_config": {**hui_voice_client_config(settings), **client_av_config(settings)},
                 "webrtc_ice_summary": ice_server_summary(settings),
                 "decision": decision,
             }
@@ -2790,7 +2790,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
     # ── Settings: GIFs (GIPHY) (persisted + runtime) ───────────────────
     def _has_giphy_key() -> bool:
         try:
-            v = (os.getenv("ECHOCHAT_GIPHY_API_KEY") or os.getenv("GIPHY_API_KEY") or str(settings.get("giphy_api_key") or "")).strip()
+            v = (os.getenv("HUI_GIPHY_API_KEY") or os.getenv("GIPHY_API_KEY") or str(settings.get("giphy_api_key") or "")).strip()
             if v:
                 return True
             base_dir = Path(__file__).resolve().parent
@@ -4287,7 +4287,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
                 "sound_notifications_default": True,
                 "sound_pack_load_local_builtins": True,
                 "sound_pack_external_urls": [],
-                "sound_pack_default": "echo_modern_generated",
+                "sound_pack_default": "hui_modern_generated",
                 "sound_theme_default": "soft_chime",
                 "sound_event_dm": "mellow_pluck",
                 "sound_event_room_message": "soft_chime",
@@ -4323,7 +4323,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
             out["sound_pack_load_local_builtins"] = sound_pack_local_builtins_enabled(out.get("sound_pack_load_local_builtins"), default=True)
             out["sound_pack_external_urls"] = sanitize_sound_pack_external_urls(out.get("sound_pack_external_urls"))
-            out["sound_pack_default"] = normalize_sound_pack_identifier(out.get("sound_pack_default"), "echo_modern_generated")
+            out["sound_pack_default"] = normalize_sound_pack_identifier(out.get("sound_pack_default"), "hui_modern_generated")
             for key, default_theme in {
                 "sound_theme_default": "soft_chime",
                 "sound_event_dm": "mellow_pluck",
@@ -4501,7 +4501,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             patch["sound_pack_external_urls"] = clean_urls
 
         if "sound_pack_default" in patch:
-            patch["sound_pack_default"] = normalize_sound_pack_identifier(patch.get("sound_pack_default"), "echo_modern_generated")
+            patch["sound_pack_default"] = normalize_sound_pack_identifier(patch.get("sound_pack_default"), "hui_modern_generated")
 
         if "emoticons_asset_mode" in patch:
             mode = str(patch.get("emoticons_asset_mode") or "local_first").strip().lower().replace("-", "_")
@@ -7150,7 +7150,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
         from flask_jwt_extended import set_access_cookies, set_refresh_cookies
         from routes_auth import create_auth_session, store_auth_token
 
-        ua = "EchoChatAdminTestLab/1.0"
+        ua = "HuiChatAdminTestLab/1.0"
         ip = "127.0.0.1"
         sid = create_auth_session(username=username, user_agent=ua, ip_address=ip)
         access_token = create_access_token(identity=username, additional_claims={"sid": sid})
@@ -7535,7 +7535,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
 
     def _settings_snapshot() -> dict:
         try:
-            runtime = current_app.config.get("ECHOCHAT_SETTINGS") or {}
+            runtime = current_app.config.get("HUI_SETTINGS") or {}
         except Exception:
             runtime = {}
         snap = dict(settings or {})
@@ -8611,7 +8611,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
             record("direct message user2 -> user1", bool((dmr2 or {}).get("success")) and saw, details={"reply": dmr2, "received": recv1}, category="social")
 
             # PM P2P file-transfer signaling path. This cannot prove browser NAT
-            # traversal from Flask's test client, but it does prove the EchoChat
+            # traversal from Flask's test client, but it does prove the HuiChat
             # server creates the direct-transfer session, relays offer/answer/ICE
             # between two logged-in users, and cleans up the session afterward.
             p2p_transfer_id = f"p2p_diag_{stamp}"[-64:]
@@ -9655,7 +9655,7 @@ def register_admin_tools(app, settings, socketio=None, limiter=None):
     def admin_test_lab_page(token: str):
         _admin_testlab_require_link_or_404(token)
         _admin_testlab_require_admin_or_404()
-        html = render_template('admin_test_lab.html', app_version=current_app.config.get('APP_VERSION', ''), server_name=str(settings.get('server_name') or 'Echo-Chat').strip() or 'Echo-Chat')
+        html = render_template('admin_test_lab.html', app_version=current_app.config.get('APP_VERSION', ''), server_name=str(settings.get('server_name') or 'Hui Chat').strip() or 'Hui Chat')
         return _admin_no_store_html_response(html)
 
     @app.route('/admin/test_lab/<token>/readiness', methods=['POST'])

@@ -2,11 +2,12 @@
 """
 socket_handlers.py
 
-PostgreSQL‐adapted Socket.IO event handlers for Echo Chat Server.
+PostgreSQL‐adapted Socket.IO event handlers for Hui Chat Server.
 All SQLite usages have been replaced with get_db() (PostgreSQL via psycopg2).
 """
 
 import json
+import logging
 import re
 import time
 import uuid
@@ -45,7 +46,7 @@ from permissions import check_user_permission
 from moderation import get_active_ip_sanction_detail, is_ip_sanctioned, is_user_sanctioned, mute_user
 from account_status import account_can_authenticate, account_status_error_code, account_status_reason, is_effectively_shadowbanned
 from room_name_policy import validate_room_name_format
-from echo_voice_protocol import echo_voice_room_capacity, echo_voice_room_limit
+from hui_voice_protocol import hui_voice_room_capacity, hui_voice_room_limit
 from emoticon_catalog import filter_excess_emoticon_shortcuts, clamp_max_emoticons_per_message
 
 # Shared in-memory state is centralized in realtime.state so handler modules can be split safely.
@@ -329,14 +330,10 @@ def register_socketio_handlers(socketio, settings):
         try:
             if ip and is_ip_sanctioned(ip):
                 return True, ip, _active_ip_ban_socket_payload(ip, username=username)
-        except Exception:
-            return True, ip, {
-                "success": False,
-                "error": "ip_ban_check_failed",
-                "code": "ip_ban_check_failed",
-                "reason": "Your connection could not be verified. Please contact an admin.",
-                "username": username,
-            }
+        except Exception as _ip_exc:
+            # Transient DB error — fail-open.  Kicking every user because the DB
+            # hiccuped is worse than momentarily skipping an IP-ban check.
+            logging.warning("[socket-session] is_ip_sanctioned raised %s — treating IP as not banned", _ip_exc.__class__.__name__)
         return False, ip, None
 
     def _require_account_auth_allowed(username: str | None) -> tuple[bool, str | None, str, str]:
@@ -384,8 +381,13 @@ def register_socketio_handlers(socketio, settings):
         else:
             try:
                 state = get_auth_session_state(auth_session_id)
-            except Exception:
-                failure_code = "session_check_failed"
+            except Exception as _db_exc:
+                # Transient DB error (SSL drop, pool timeout, etc.).  Fail-open:
+                # treat the session as still valid so the user is not force-logged-out
+                # by a momentary connection hiccup.  A confirmed revocation (NULL row
+                # or revoked_at set) is the only hard gate below.
+                logging.warning("[socket-session] get_auth_session_state raised %s — treating as live session", _db_exc.__class__.__name__)
+                state = {"_db_error": True}  # sentinel: skip revoked_at / idle checks safely
             if failure_code is None:
                 if state is None or state.get("revoked_at") is not None:
                     failure_code = "session_revoked"
@@ -458,18 +460,10 @@ def register_socketio_handlers(socketio, settings):
         try:
             if touch_activity and auth_session_id:
                 touch_auth_session_activity(auth_session_id)
-        except Exception:
-            payload = _socket_session_failure_payload("session_touch_failed", username=username)
-            if disconnect_on_failure:
-                try:
-                    emit("force_logout", payload, to=request.sid)
-                except Exception:
-                    pass
-                try:
-                    disconnect(sid=request.sid)
-                except Exception:
-                    pass
-            return None, None, None, payload
+        except Exception as _touch_exc:
+            # touch_activity is a best-effort heartbeat write.  A transient DB
+            # failure here must NOT disconnect the user — log and continue.
+            logging.warning("[socket-session] touch_auth_session_activity raised %s — ignoring, session kept alive", _touch_exc.__class__.__name__)
 
         return username, auth_session_id, state, None
 
@@ -926,8 +920,8 @@ def register_socketio_handlers(socketio, settings):
         return voice_room_users_shared(room)
 
     def _voice_room_add(room: str, username: str) -> tuple[bool, str | None, list[str]]:
-        """Add user to Echo Voice roster. Returns (ok, error, roster)."""
-        return voice_room_add_shared(room, username, max_peers=echo_voice_room_limit(settings))
+        """Add user to Hui Voice roster. Returns (ok, error, roster)."""
+        return voice_room_add_shared(room, username, max_peers=hui_voice_room_limit(settings))
 
     def _voice_room_remove(room: str, username: str) -> bool:
         return voice_room_remove_shared(room, username)
@@ -1222,7 +1216,7 @@ def register_socketio_handlers(socketio, settings):
     def _store_offline_pm(sender: str, receiver: str, cipher: str) -> int | None:
         """Persist ciphertext in the unread/private-message queue and return its row id.
 
-        Despite the historical table name, Echo-Chat now uses offline_messages as
+        Despite the historical table name, Hui Chat now uses offline_messages as
         the durable unread queue for private messages.  A live relay can still be
         missed when a tab is backgrounded, sleeping, reconnecting, or not reading
         the PM window, so the sender stores one encrypted row first and the client

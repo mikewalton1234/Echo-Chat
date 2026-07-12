@@ -97,7 +97,7 @@ def _emit_to_username(username: str, event: str, payload: dict) -> bool:
     Returns True if at least one session was targeted.
     """
     try:
-        socketio = current_app.config.get("ECHOCHAT_SOCKETIO")
+        socketio = current_app.config.get("HUI_SOCKETIO")
         if not socketio:
             return False
         from realtime.state import user_sids
@@ -187,7 +187,7 @@ def _force_leave_revoked_custom_room_member(room_name: str, username: str, actor
     if not room_name or not target_lc:
         return 0
     try:
-        socketio = current_app.config.get("ECHOCHAT_SOCKETIO")
+        socketio = current_app.config.get("HUI_SOCKETIO")
         if not socketio:
             return 0
         from realtime.state import connected_room_targets, update_connected_room
@@ -305,7 +305,7 @@ def _get_live_counts() -> dict[str, int]:
 
 
 def _runtime_settings() -> dict:
-    cfg = current_app.config.get("ECHOCHAT_SETTINGS") or {}
+    cfg = current_app.config.get("HUI_SETTINGS") or {}
     return cfg if isinstance(cfg, dict) else {}
 
 

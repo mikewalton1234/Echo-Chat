@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """janitor_runner.py
 
-Run the EchoChat background cleanup loop as a dedicated process.
+Run the HuiChat background cleanup loop as a dedicated process.
 
 Why?
-- If you run EchoChat under Gunicorn or multiple one-worker instances, starting
+- If you run HuiChat under Gunicorn or multiple one-worker instances, starting
   cleanup in every web process can create duplicate janitors.
 - Running this as a single service keeps cleanup predictable and light.
 
@@ -12,7 +12,7 @@ Usage:
   python janitor_runner.py --config server_config.json
 
 Or via env:
-  ECHOCHAT_CONFIG=/path/to/server_config.json python janitor_runner.py
+  HUI_CONFIG=/path/to/server_config.json python janitor_runner.py
 """
 
 from __future__ import annotations
@@ -35,10 +35,10 @@ from janitor import configure_janitor_runtime, run_janitor_cycle, start_janitor
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="EchoChat janitor runner")
+    p = argparse.ArgumentParser(description="HuiChat janitor runner")
     p.add_argument(
         "--config",
-        default=os.environ.get("ECHOCHAT_CONFIG") or CONFIG_FILE,
+        default=os.environ.get("HUI_CONFIG") or CONFIG_FILE,
         help="path to server config JSON",
     )
     p.add_argument(

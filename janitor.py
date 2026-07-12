@@ -270,7 +270,7 @@ def start_janitor(settings: dict, use_live_counts: bool = True):
             logging.info("[JANITOR] background cleanup loop already running; reusing existing thread")
             return _JANITOR_THREAD
 
-        t = threading.Thread(target=_loop, name="echochat_janitor", daemon=True)
+        t = threading.Thread(target=_loop, name="hui_janitor", daemon=True)
         t.start()
         _JANITOR_THREAD = t
         logging.info("[JANITOR] background cleanup loop started")

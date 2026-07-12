@@ -1,4 +1,4 @@
-"""Health/status endpoint helpers for Echo-Chat.
+"""Health/status endpoint helpers for Hui Chat.
 
 The public probe endpoint must stay tiny, unauthenticated, and non-sensitive.
 It should be safe for reverse proxies, uptime monitors, and load balancers.
@@ -86,7 +86,7 @@ def build_health_payload(
 ) -> tuple[dict[str, Any], int]:
     """Build a minimal, non-sensitive health payload.
 
-    Database failure is treated as unhealthy because most Echo-Chat features need
+    Database failure is treated as unhealthy because most Hui Chat features need
     PostgreSQL. Shared state/Redis being disabled is reported as a check value,
     but it does not make a single-worker LAN server unhealthy.
     """

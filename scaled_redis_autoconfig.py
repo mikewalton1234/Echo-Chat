@@ -1,6 +1,6 @@
-"""Beginner-safe Redis defaults for scaled Echo-Chat deployments.
+"""Beginner-safe Redis defaults for scaled Hui Chat deployments.
 
-Echo-Chat scales Socket.IO as multiple one-worker instances. That requires
+Hui Chat scales Socket.IO as multiple one-worker instances. That requires
 three distinct shared Redis roles when the admin selects more than one planned
 instance:
 

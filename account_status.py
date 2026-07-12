@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Account lifecycle status helpers for Echo-Chat.
+"""Account lifecycle status helpers for Hui Chat.
 
-Echo-Chat stores permanent lifecycle state on ``users.status`` and temporary
+Hui Chat stores permanent lifecycle state on ``users.status`` and temporary
 moderation state in ``user_sanctions``.  These helpers expose one effective
 status for login/session checks and admin UI surfaces.
 """

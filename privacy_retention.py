@@ -1,6 +1,6 @@
 """Retention and redaction helpers for IP address and user-agent metadata.
 
-EchoChat keeps recent IP/UA metadata useful for account-security diagnostics, but
+HuiChat keeps recent IP/UA metadata useful for account-security diagnostics, but
 older rows should not retain raw device/network identifiers indefinitely. These
 helpers replace old values with stable, non-reversible hash labels and scrub old
 audit-log details that accidentally include raw `ip=` / `ua=` strings.
@@ -58,7 +58,7 @@ def audit_detail_retention_days(settings: dict | None = None) -> int:
 
 def _hash_salt(settings: dict | None = None) -> str:
     settings = settings or {}
-    return stable_privacy_hash_key_material(settings) or "echochat-local-retention-salt"
+    return stable_privacy_hash_key_material(settings) or "hui-local-retention-salt"
 
 
 def _hash_label(value: Any, kind: str, settings: dict | None = None) -> str | None:

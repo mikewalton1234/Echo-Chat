@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """main.py
 
-Echo-Chat server entrypoint.
+Hui Chat server entrypoint.
 
-Echo-Chat treats ``server_config.json`` as a plaintext settings file.
+Hui Chat treats ``server_config.json`` as a plaintext settings file.
 Production/public mode now keeps secrets out of that file by default. Put
 credentials in environment variables or a secret manager, or explicitly set
-``ECHOCHAT_PERSIST_SECRETS=1`` if you need legacy config-file persistence.
+``HUI_PERSIST_SECRETS=1`` if you need legacy config-file persistence.
 """
 
 from __future__ import annotations
@@ -20,10 +20,10 @@ import shutil
 import subprocess
 import tempfile
 
-# Centralized async bootstrap. In auto mode EchoChat now defaults to the
-# built-in threading runtime; set ECHOCHAT_SOCKETIO_ASYNC=eventlet only when
+# Centralized async bootstrap. In auto mode HuiChat now defaults to the
+# built-in threading runtime; set HUI_SOCKETIO_ASYNC=eventlet only when
 # you explicitly want Eventlet and its monkey-patched runtime model.
-from socketio_async_bootstrap import ECHOCHAT_SOCKETIO_ASYNC
+from socketio_async_bootstrap import HUI_SOCKETIO_ASYNC
 
 import argparse
 from datetime import datetime
@@ -144,7 +144,7 @@ def _build_postgres_dsn(parts: dict) -> str:
         auth = user + ((":" + quote(password)) if password else "")
         host = str(parts.get("host") or "localhost")
         port = str(parts.get("port") or "5432")
-        db = quote(str(parts.get("db") or "echochat"))
+        db = quote(str(parts.get("db") or "hui"))
         return urlunparse((str(parts.get("scheme") or "postgresql"), f"{auth}@{host}:{port}", f"/{db}", "", str(parts.get("query") or ""), str(parts.get("fragment") or "")))
 
 
@@ -227,7 +227,7 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
 
 
 def save_settings(path: Path, settings: dict) -> None:
-    # In production/public mode, or when ECHOCHAT_PERSIST_SECRETS=0, do not write
+    # In production/public mode, or when HUI_PERSIST_SECRETS=0, do not write
     # secrets (DB DSNs, API keys, SMTP/Twilio/TURN credentials, etc.) into
     # server_config.json. Keep them in env/.env or a secret manager instead.
     to_save = scrub_secrets_for_persist(settings)
@@ -256,27 +256,27 @@ def _missing_runtime_env_after_secret_scrub(settings: dict) -> list[str]:
             missing.append("DATABASE_URL or DB_CONNECTION_STRING for the PostgreSQL application database")
 
     if str(settings.get("database_bootstrap_url") or "").strip() and not str(saved.get("database_bootstrap_url") or "").strip():
-        if not _env_any_present("ECHOCHAT_DB_BOOTSTRAP_URL", "DATABASE_BOOTSTRAP_URL"):
-            missing.append("ECHOCHAT_DB_BOOTSTRAP_URL if setup/database repair still needs a bootstrap/admin PostgreSQL DSN")
+        if not _env_any_present("HUI_DB_BOOTSTRAP_URL", "DATABASE_BOOTSTRAP_URL"):
+            missing.append("HUI_DB_BOOTSTRAP_URL if setup/database repair still needs a bootstrap/admin PostgreSQL DSN")
 
     if bool(settings.get("smtp_enabled")) and str(settings.get("smtp_password") or "").strip() and not str(saved.get("smtp_password") or "").strip():
-        if not _env_any_present("ECHOCHAT_SMTP_PASSWORD", "SMTP_PASSWORD", "SMTP_PASS", "MAIL_PASSWORD", "EMAIL_PASSWORD"):
-            missing.append("ECHOCHAT_SMTP_PASSWORD or SMTP_PASSWORD for password-reset email")
+        if not _env_any_present("HUI_SMTP_PASSWORD", "SMTP_PASSWORD", "SMTP_PASS", "MAIL_PASSWORD", "EMAIL_PASSWORD"):
+            missing.append("HUI_SMTP_PASSWORD or SMTP_PASSWORD for password-reset email")
 
     sms_enabled = bool(settings.get("enable_sms_two_factor") or settings.get("enable_two_factor_beta"))
     if sms_enabled:
         twilio_pairs = [
-            ("twilio_account_sid", ("ECHOCHAT_TWILIO_ACCOUNT_SID", "TWILIO_ACCOUNT_SID")),
-            ("twilio_auth_token", ("ECHOCHAT_TWILIO_AUTH_TOKEN", "TWILIO_AUTH_TOKEN")),
-            ("twilio_verify_service_sid", ("ECHOCHAT_TWILIO_VERIFY_SERVICE_SID", "TWILIO_VERIFY_SERVICE_SID")),
+            ("twilio_account_sid", ("HUI_TWILIO_ACCOUNT_SID", "TWILIO_ACCOUNT_SID")),
+            ("twilio_auth_token", ("HUI_TWILIO_AUTH_TOKEN", "TWILIO_AUTH_TOKEN")),
+            ("twilio_verify_service_sid", ("HUI_TWILIO_VERIFY_SERVICE_SID", "TWILIO_VERIFY_SERVICE_SID")),
         ]
         for key, env_names in twilio_pairs:
             if str(settings.get(key) or "").strip() and not str(saved.get(key) or "").strip() and not _env_any_present(*env_names):
                 missing.append("/".join(env_names) + f" for SMS 2FA ({key})")
 
     if str(settings.get("giphy_api_key") or "").strip() and not str(saved.get("giphy_api_key") or "").strip():
-        if not _env_any_present("ECHOCHAT_GIPHY_API_KEY", "GIPHY_API_KEY"):
-            missing.append("ECHOCHAT_GIPHY_API_KEY or GIPHY_API_KEY for GIF search")
+        if not _env_any_present("HUI_GIPHY_API_KEY", "GIPHY_API_KEY"):
+            missing.append("HUI_GIPHY_API_KEY or GIPHY_API_KEY for GIF search")
 
     return missing
 
@@ -321,7 +321,7 @@ def apply_env_overrides(settings: dict) -> None:
 
     # Prefer DB env vars for safety.
     db = os.getenv("DB_CONNECTION_STRING") or os.getenv("DATABASE_URL")
-    bootstrap_db = os.getenv("ECHOCHAT_DB_BOOTSTRAP_URL") or os.getenv("DATABASE_BOOTSTRAP_URL")
+    bootstrap_db = os.getenv("HUI_DB_BOOTSTRAP_URL") or os.getenv("DATABASE_BOOTSTRAP_URL")
     if bootstrap_db:
         settings["database_bootstrap_url"] = str(sanitize_postgres_dsn(bootstrap_db))
     if db:
@@ -336,21 +336,21 @@ def apply_env_overrides(settings: dict) -> None:
         # Keep behavior consistent across the codebase while ignoring placeholder values.
         settings["jwt_secret"] = jwt_secret
 
-    # Echo media env override.
-    av_mode = _str_env("ECHOCHAT_AV_MODE", "AV_MODE")
-    if av_mode and av_mode.strip().lower().replace("-", "_") in {"standard", "echo", "webrtc", "built_in", "builtin"}:
+    # Hui media env override.
+    av_mode = _str_env("HUI_AV_MODE", "AV_MODE")
+    if av_mode and av_mode.strip().lower().replace("-", "_") in {"standard", "hui", "webrtc", "built_in", "builtin"}:
         mode = av_mode.strip().lower().replace("-", "_")
-        settings["av_mode"] = "echo" if mode in {"webrtc", "built_in", "builtin"} else mode
+        settings["av_mode"] = "hui" if mode in {"webrtc", "built_in", "builtin"} else mode
 
     # WebRTC STUN/TURN env overrides.  The browser must receive ICE credentials
     # to use TURN; keep long-lived credentials in env/secret management, not JSON.
     from webrtc_ice_config import apply_turn_credentials, env_ice_servers, parse_ice_servers_text
 
-    p2p_ice = env_ice_servers("ECHOCHAT_P2P_ICE_SERVERS_JSON", "ECHOCHAT_WEBRTC_ICE_SERVERS_JSON", "WEBRTC_ICE_SERVERS_JSON")
-    voice_ice = env_ice_servers("ECHOCHAT_VOICE_ICE_SERVERS_JSON", "ECHOCHAT_WEBCAM_ICE_SERVERS_JSON")
-    turn_urls = _str_env("ECHOCHAT_TURN_URLS", "TURN_URLS")
-    turn_username = _str_env("ECHOCHAT_TURN_USERNAME", "TURN_USERNAME")
-    turn_credential = _str_env("ECHOCHAT_TURN_CREDENTIAL", "ECHOCHAT_TURN_PASSWORD", "TURN_CREDENTIAL", "TURN_PASSWORD")
+    p2p_ice = env_ice_servers("HUI_P2P_ICE_SERVERS_JSON", "HUI_WEBRTC_ICE_SERVERS_JSON", "WEBRTC_ICE_SERVERS_JSON")
+    voice_ice = env_ice_servers("HUI_VOICE_ICE_SERVERS_JSON", "HUI_WEBCAM_ICE_SERVERS_JSON")
+    turn_urls = _str_env("HUI_TURN_URLS", "TURN_URLS")
+    turn_username = _str_env("HUI_TURN_USERNAME", "TURN_USERNAME")
+    turn_credential = _str_env("HUI_TURN_CREDENTIAL", "HUI_TURN_PASSWORD", "TURN_CREDENTIAL", "TURN_PASSWORD")
     if turn_urls:
         parsed_turn = parse_ice_servers_text(turn_urls)
         if parsed_turn:
@@ -363,182 +363,182 @@ def apply_env_overrides(settings: dict) -> None:
         settings["voice_ice_servers"] = voice_ice
 
     # Torrent scraping can be enabled for local/LAN testing without editing JSON.
-    torrent_scrape_enabled = _bool_env("ECHOCHAT_TORRENT_SCRAPE_ENABLED", "TORRENT_SCRAPE_ENABLED")
+    torrent_scrape_enabled = _bool_env("HUI_TORRENT_SCRAPE_ENABLED", "TORRENT_SCRAPE_ENABLED")
     if torrent_scrape_enabled is not None:
         settings["torrent_scrape_enabled"] = torrent_scrape_enabled
 
     # GIPHY (prefer env for production)
-    giphy_key = _str_env("ECHOCHAT_GIPHY_API_KEY", "GIPHY_API_KEY")
+    giphy_key = _str_env("HUI_GIPHY_API_KEY", "GIPHY_API_KEY")
     if giphy_key:
         settings["giphy_api_key"] = giphy_key
 
     # SMTP (optional) — keep secrets out of server_config.json if desired.
-    smtp_enabled = _bool_env("ECHOCHAT_SMTP_ENABLED", "SMTP_ENABLED")
+    smtp_enabled = _bool_env("HUI_SMTP_ENABLED", "SMTP_ENABLED")
     if smtp_enabled is not None:
         settings["smtp_enabled"] = smtp_enabled
 
-    smtp_host = _str_env("ECHOCHAT_SMTP_HOST", "SMTP_HOST")
+    smtp_host = _str_env("HUI_SMTP_HOST", "SMTP_HOST")
     if smtp_host:
         settings["smtp_host"] = smtp_host
 
-    smtp_port = _int_env("ECHOCHAT_SMTP_PORT", "SMTP_PORT")
+    smtp_port = _int_env("HUI_SMTP_PORT", "SMTP_PORT")
     if smtp_port:
         settings["smtp_port"] = smtp_port
 
-    smtp_user = _str_env("ECHOCHAT_SMTP_USERNAME", "ECHOCHAT_SMTP_USER", "SMTP_USERNAME", "SMTP_USER")
+    smtp_user = _str_env("HUI_SMTP_USERNAME", "HUI_SMTP_USER", "SMTP_USERNAME", "SMTP_USER")
     if smtp_user:
         settings["smtp_username"] = smtp_user
 
-    smtp_pass = _str_env("ECHOCHAT_SMTP_PASSWORD", "ECHOCHAT_SMTP_PASS", "SMTP_PASSWORD", "SMTP_PASS")
+    smtp_pass = _str_env("HUI_SMTP_PASSWORD", "HUI_SMTP_PASS", "SMTP_PASSWORD", "SMTP_PASS")
     if smtp_pass:
         settings["smtp_password"] = smtp_pass
 
-    smtp_from = _str_env("ECHOCHAT_SMTP_FROM", "SMTP_FROM")
+    smtp_from = _str_env("HUI_SMTP_FROM", "SMTP_FROM")
     if smtp_from:
         settings["smtp_from"] = smtp_from
 
-    smtp_starttls = _bool_env("ECHOCHAT_SMTP_STARTTLS", "SMTP_STARTTLS")
+    smtp_starttls = _bool_env("HUI_SMTP_STARTTLS", "SMTP_STARTTLS")
     if smtp_starttls is not None:
         settings["smtp_use_starttls"] = smtp_starttls
 
-    smtp_ssl = _bool_env("ECHOCHAT_SMTP_SSL", "SMTP_SSL")
+    smtp_ssl = _bool_env("HUI_SMTP_SSL", "SMTP_SSL")
     if smtp_ssl is not None:
         settings["smtp_use_ssl"] = smtp_ssl
 
     # Twilio/SMS 2FA (prefer env so provider credentials stay out of server_config.json)
-    twilio_beta_enabled = _bool_env("ECHOCHAT_ENABLE_TWO_FACTOR_BETA", "ENABLE_TWO_FACTOR_BETA")
+    twilio_beta_enabled = _bool_env("HUI_ENABLE_TWO_FACTOR_BETA", "ENABLE_TWO_FACTOR_BETA")
     if twilio_beta_enabled is not None:
         settings["enable_two_factor_beta"] = twilio_beta_enabled
 
-    twilio_sms_enabled = _bool_env("ECHOCHAT_ENABLE_SMS_2FA", "ECHOCHAT_ENABLE_SMS_TWO_FACTOR", "ENABLE_SMS_2FA", "ENABLE_SMS_TWO_FACTOR")
+    twilio_sms_enabled = _bool_env("HUI_ENABLE_SMS_2FA", "HUI_ENABLE_SMS_TWO_FACTOR", "ENABLE_SMS_2FA", "ENABLE_SMS_TWO_FACTOR")
     if twilio_sms_enabled is not None:
         settings["enable_sms_two_factor"] = twilio_sms_enabled
         if twilio_sms_enabled:
             settings["enable_two_factor_beta"] = True
 
-    twilio_channel = _str_env("ECHOCHAT_TWILIO_VERIFY_CHANNEL", "ECHOCHAT_TWO_FACTOR_SMS_CHANNEL", "TWILIO_VERIFY_CHANNEL")
+    twilio_channel = _str_env("HUI_TWILIO_VERIFY_CHANNEL", "HUI_TWO_FACTOR_SMS_CHANNEL", "TWILIO_VERIFY_CHANNEL")
     if twilio_channel:
         settings["two_factor_sms_channel"] = twilio_channel.strip().lower()
 
-    twilio_timeout = _int_env("ECHOCHAT_TWO_FACTOR_LOGIN_TIMEOUT_SECONDS", "TWO_FACTOR_LOGIN_TIMEOUT_SECONDS")
+    twilio_timeout = _int_env("HUI_TWO_FACTOR_LOGIN_TIMEOUT_SECONDS", "TWO_FACTOR_LOGIN_TIMEOUT_SECONDS")
     if twilio_timeout:
         settings["two_factor_login_timeout_seconds"] = twilio_timeout
 
-    twilio_account_sid = _str_env("ECHOCHAT_TWILIO_ACCOUNT_SID", "TWILIO_ACCOUNT_SID")
+    twilio_account_sid = _str_env("HUI_TWILIO_ACCOUNT_SID", "TWILIO_ACCOUNT_SID")
     if twilio_account_sid:
         settings["twilio_account_sid"] = twilio_account_sid
 
-    twilio_auth_token = _str_env("ECHOCHAT_TWILIO_AUTH_TOKEN", "TWILIO_AUTH_TOKEN")
+    twilio_auth_token = _str_env("HUI_TWILIO_AUTH_TOKEN", "TWILIO_AUTH_TOKEN")
     if twilio_auth_token:
         settings["twilio_auth_token"] = twilio_auth_token
 
-    twilio_verify_service_sid = _str_env("ECHOCHAT_TWILIO_VERIFY_SERVICE_SID", "TWILIO_VERIFY_SERVICE_SID")
+    twilio_verify_service_sid = _str_env("HUI_TWILIO_VERIFY_SERVICE_SID", "TWILIO_VERIFY_SERVICE_SID")
     if twilio_verify_service_sid:
         settings["twilio_verify_service_sid"] = twilio_verify_service_sid
 
     # Dynamic DNS helper. Keep provider passwords/tokens in env for production.
-    ddns_enabled = _bool_env("ECHOCHAT_DYNAMIC_DNS_ENABLED", "ECHOCHAT_DDNS_ENABLED", "DDNS_ENABLED")
+    ddns_enabled = _bool_env("HUI_DYNAMIC_DNS_ENABLED", "HUI_DDNS_ENABLED", "DDNS_ENABLED")
     if ddns_enabled is not None:
         settings["dynamic_dns_enabled"] = ddns_enabled
 
-    ddns_provider = _str_env("ECHOCHAT_DYNAMIC_DNS_PROVIDER", "ECHOCHAT_DDNS_PROVIDER", "DDNS_PROVIDER")
+    ddns_provider = _str_env("HUI_DYNAMIC_DNS_PROVIDER", "HUI_DDNS_PROVIDER", "DDNS_PROVIDER")
     if ddns_provider:
         settings["dynamic_dns_provider"] = ddns_provider
 
-    ddns_username = _str_env("ECHOCHAT_DYNAMIC_DNS_USERNAME", "ECHOCHAT_DDNS_USERNAME", "DDNS_USERNAME")
+    ddns_username = _str_env("HUI_DYNAMIC_DNS_USERNAME", "HUI_DDNS_USERNAME", "DDNS_USERNAME")
     if ddns_username:
         settings["dynamic_dns_username"] = ddns_username
 
-    ddns_password = _str_env("ECHOCHAT_DYNAMIC_DNS_PASSWORD", "ECHOCHAT_DDNS_PASSWORD", "DDNS_PASSWORD")
+    ddns_password = _str_env("HUI_DYNAMIC_DNS_PASSWORD", "HUI_DDNS_PASSWORD", "DDNS_PASSWORD")
     if ddns_password:
         settings["dynamic_dns_password"] = ddns_password
 
-    ddns_domain = _str_env("ECHOCHAT_DYNAMIC_DNS_DOMAIN", "ECHOCHAT_DDNS_DOMAIN", "DDNS_DOMAIN")
+    ddns_domain = _str_env("HUI_DYNAMIC_DNS_DOMAIN", "HUI_DDNS_DOMAIN", "DDNS_DOMAIN")
     if ddns_domain:
         settings["dynamic_dns_domain"] = ddns_domain
 
-    ddns_update_url = _str_env("ECHOCHAT_DYNAMIC_DNS_UPDATE_URL", "ECHOCHAT_DDNS_UPDATE_URL", "DDNS_UPDATE_URL")
+    ddns_update_url = _str_env("HUI_DYNAMIC_DNS_UPDATE_URL", "HUI_DDNS_UPDATE_URL", "DDNS_UPDATE_URL")
     if ddns_update_url:
         settings["dynamic_dns_update_url"] = ddns_update_url
 
-    public_base_url = _str_env("ECHOCHAT_PUBLIC_BASE_URL", "ECHOCHAT_PUBLIC_URL", "PUBLIC_BASE_URL", "PUBLIC_URL")
+    public_base_url = _str_env("HUI_PUBLIC_BASE_URL", "HUI_PUBLIC_URL", "PUBLIC_BASE_URL", "PUBLIC_URL")
     if public_base_url:
         settings["public_base_url"] = public_base_url
 
-    cookie_secure = _bool_env("ECHOCHAT_COOKIE_SECURE", "COOKIE_SECURE")
+    cookie_secure = _bool_env("HUI_COOKIE_SECURE", "COOKIE_SECURE")
     if cookie_secure is not None:
         settings["cookie_secure"] = cookie_secure
 
-    cookie_samesite = _str_env("ECHOCHAT_COOKIE_SAMESITE", "COOKIE_SAMESITE")
+    cookie_samesite = _str_env("HUI_COOKIE_SAMESITE", "COOKIE_SAMESITE")
     if cookie_samesite:
         settings["cookie_samesite"] = cookie_samesite
 
-    trust_proxy_headers = _bool_env("ECHOCHAT_TRUST_PROXY_HEADERS", "TRUST_PROXY_HEADERS")
+    trust_proxy_headers = _bool_env("HUI_TRUST_PROXY_HEADERS", "TRUST_PROXY_HEADERS")
     if trust_proxy_headers is not None:
         settings["trust_proxy_headers"] = trust_proxy_headers
 
-    proxy_fix_hops = _int_env("ECHOCHAT_PROXY_FIX_HOPS", "PROXY_FIX_HOPS")
+    proxy_fix_hops = _int_env("HUI_PROXY_FIX_HOPS", "PROXY_FIX_HOPS")
     if proxy_fix_hops is not None and proxy_fix_hops >= 0:
         settings["proxy_fix_hops"] = proxy_fix_hops
     for _env_name, _setting_key in (
-        ("ECHOCHAT_PROXY_FIX_X_FOR", "proxy_fix_x_for"),
-        ("ECHOCHAT_PROXY_FIX_X_PROTO", "proxy_fix_x_proto"),
-        ("ECHOCHAT_PROXY_FIX_X_HOST", "proxy_fix_x_host"),
-        ("ECHOCHAT_PROXY_FIX_X_PORT", "proxy_fix_x_port"),
-        ("ECHOCHAT_PROXY_FIX_X_PREFIX", "proxy_fix_x_prefix"),
+        ("HUI_PROXY_FIX_X_FOR", "proxy_fix_x_for"),
+        ("HUI_PROXY_FIX_X_PROTO", "proxy_fix_x_proto"),
+        ("HUI_PROXY_FIX_X_HOST", "proxy_fix_x_host"),
+        ("HUI_PROXY_FIX_X_PORT", "proxy_fix_x_port"),
+        ("HUI_PROXY_FIX_X_PREFIX", "proxy_fix_x_prefix"),
     ):
         _proxy_val = _int_env(_env_name)
         if _proxy_val is not None and _proxy_val >= 0:
             settings[_setting_key] = _proxy_val
 
-    run_mode = _str_env("ECHOCHAT_RUN_MODE", "ECHOCHAT_SERVER_MODE", "ECHOCHAT_DEPLOYMENT_MODE")
+    run_mode = _str_env("HUI_RUN_MODE", "HUI_SERVER_MODE", "HUI_DEPLOYMENT_MODE")
     if run_mode:
         settings["run_mode"] = run_mode.strip().lower()
 
-    production_mode = _bool_env("ECHOCHAT_PRODUCTION_MODE", "PRODUCTION_MODE")
+    production_mode = _bool_env("HUI_PRODUCTION_MODE", "PRODUCTION_MODE")
     if production_mode is not None:
         settings["production_mode"] = production_mode
         settings["run_mode"] = "production" if production_mode else "development"
 
-    production_bind = _str_env("ECHOCHAT_PRODUCTION_BIND", "PRODUCTION_BIND")
+    production_bind = _str_env("HUI_PRODUCTION_BIND", "PRODUCTION_BIND")
     if production_bind:
         settings["production_bind"] = production_bind
 
-    production_workers = _int_env("ECHOCHAT_WORKERS", "ECHOCHAT_PRODUCTION_WORKERS", "PRODUCTION_WORKERS", "WEB_CONCURRENCY")
+    production_workers = _int_env("HUI_WORKERS", "HUI_PRODUCTION_WORKERS", "PRODUCTION_WORKERS", "WEB_CONCURRENCY")
     if production_workers is not None and production_workers > 0:
         settings["production_workers"] = production_workers
 
-    production_instances = _int_env("ECHOCHAT_PRODUCTION_INSTANCES", "ECHOCHAT_INSTANCE_COUNT", "PRODUCTION_INSTANCES")
+    production_instances = _int_env("HUI_PRODUCTION_INSTANCES", "HUI_INSTANCE_COUNT", "PRODUCTION_INSTANCES")
     if production_instances is not None and production_instances > 0:
         settings["production_instance_count"] = max(1, min(10, production_instances))
 
-    instance_base_port = _int_env("ECHOCHAT_INSTANCE_BASE_PORT", "PRODUCTION_INSTANCE_BASE_PORT")
+    instance_base_port = _int_env("HUI_INSTANCE_BASE_PORT", "PRODUCTION_INSTANCE_BASE_PORT")
     if instance_base_port is not None and instance_base_port > 0:
         settings["production_instance_base_port"] = instance_base_port
 
-    enable_health_endpoint = _bool_env("ECHOCHAT_ENABLE_HEALTH_ENDPOINT", "ENABLE_HEALTH_CHECK_ENDPOINT")
+    enable_health_endpoint = _bool_env("HUI_ENABLE_HEALTH_ENDPOINT", "ENABLE_HEALTH_CHECK_ENDPOINT")
     if enable_health_endpoint is not None:
         settings["enable_health_check_endpoint"] = enable_health_endpoint
 
-    health_endpoint = _str_env("ECHOCHAT_HEALTH_ENDPOINT", "HEALTH_CHECK_ENDPOINT")
+    health_endpoint = _str_env("HUI_HEALTH_ENDPOINT", "HEALTH_CHECK_ENDPOINT")
     if health_endpoint:
         # Accept both "health" and "/health" in env files; Flask routes need a leading slash.
         settings["health_check_endpoint"] = health_endpoint if health_endpoint.startswith("/") else f"/{health_endpoint}"
 
-    socketio_message_queue = _str_env("ECHOCHAT_SOCKETIO_MESSAGE_QUEUE", "SOCKETIO_MESSAGE_QUEUE")
+    socketio_message_queue = _str_env("HUI_SOCKETIO_MESSAGE_QUEUE", "SOCKETIO_MESSAGE_QUEUE")
     if socketio_message_queue:
         settings["socketio_message_queue"] = socketio_message_queue
 
-    rate_limit_storage_uri = _str_env("ECHOCHAT_RATE_LIMIT_STORAGE_URI", "RATELIMIT_STORAGE_URI")
+    rate_limit_storage_uri = _str_env("HUI_RATE_LIMIT_STORAGE_URI", "RATELIMIT_STORAGE_URI")
     if rate_limit_storage_uri:
         settings["rate_limit_storage_uri"] = rate_limit_storage_uri
         settings["rate_limit_storage"] = rate_limit_storage_uri
 
-    simple_rate_limit_storage_uri = _str_env("ECHOCHAT_SIMPLE_RATE_LIMIT_STORAGE_URI", "SIMPLE_RATE_LIMIT_STORAGE_URI")
+    simple_rate_limit_storage_uri = _str_env("HUI_SIMPLE_RATE_LIMIT_STORAGE_URI", "SIMPLE_RATE_LIMIT_STORAGE_URI")
     if simple_rate_limit_storage_uri:
         settings["simple_rate_limit_storage_uri"] = simple_rate_limit_storage_uri
 
-    socketio_transports = _str_env("ECHOCHAT_SOCKETIO_TRANSPORTS", "SOCKETIO_TRANSPORTS")
+    socketio_transports = _str_env("HUI_SOCKETIO_TRANSPORTS", "SOCKETIO_TRANSPORTS")
     if socketio_transports:
         settings["socketio_transports"] = [
             item.strip()
@@ -546,15 +546,15 @@ def apply_env_overrides(settings: dict) -> None:
             if item.strip()
         ]
 
-    auto_allow_lan_origins = _bool_env("ECHOCHAT_AUTO_ALLOW_LAN_ORIGINS", "AUTO_ALLOW_LAN_ORIGINS")
+    auto_allow_lan_origins = _bool_env("HUI_AUTO_ALLOW_LAN_ORIGINS", "AUTO_ALLOW_LAN_ORIGINS")
     if auto_allow_lan_origins is not None:
         settings["auto_allow_lan_origins"] = auto_allow_lan_origins
 
-    shared_state_redis_url = _str_env("ECHOCHAT_SHARED_STATE_REDIS_URL", "SHARED_STATE_REDIS_URL")
+    shared_state_redis_url = _str_env("HUI_SHARED_STATE_REDIS_URL", "SHARED_STATE_REDIS_URL")
     if shared_state_redis_url:
         settings["shared_state_redis_url"] = shared_state_redis_url
 
-    cors_allowed_origins = _str_env("ECHOCHAT_CORS_ALLOWED_ORIGINS", "CORS_ALLOWED_ORIGINS")
+    cors_allowed_origins = _str_env("HUI_CORS_ALLOWED_ORIGINS", "CORS_ALLOWED_ORIGINS")
     if cors_allowed_origins:
         settings["cors_allowed_origins"] = [
             item.strip()
@@ -562,7 +562,7 @@ def apply_env_overrides(settings: dict) -> None:
             if item.strip()
         ]
 
-    allowed_origins = _str_env("ECHOCHAT_ALLOWED_ORIGINS", "ALLOWED_ORIGINS")
+    allowed_origins = _str_env("HUI_ALLOWED_ORIGINS", "ALLOWED_ORIGINS")
     if allowed_origins:
         settings["allowed_origins"] = [
             item.strip()
@@ -570,34 +570,34 @@ def apply_env_overrides(settings: dict) -> None:
             if item.strip()
         ]
 
-    hosting_mode = _str_env("ECHOCHAT_HOSTING_MODE", "HOSTING_MODE")
+    hosting_mode = _str_env("HUI_HOSTING_MODE", "HOSTING_MODE")
     if hosting_mode:
         settings["hosting_mode"] = hosting_mode.strip().lower().replace("-", "_").replace(" ", "_")
 
-    reverse_proxy_lan_port = _int_env("ECHOCHAT_REVERSE_PROXY_LAN_PORT", "REVERSE_PROXY_LAN_PORT")
+    reverse_proxy_lan_port = _int_env("HUI_REVERSE_PROXY_LAN_PORT", "REVERSE_PROXY_LAN_PORT")
     if reverse_proxy_lan_port is not None and reverse_proxy_lan_port > 0:
         settings["reverse_proxy_lan_port"] = reverse_proxy_lan_port
 
-    deployment_kit_output_dir = _str_env("ECHOCHAT_DEPLOYMENT_KIT_OUTPUT_DIR", "DEPLOYMENT_KIT_OUTPUT_DIR")
+    deployment_kit_output_dir = _str_env("HUI_DEPLOYMENT_KIT_OUTPUT_DIR", "DEPLOYMENT_KIT_OUTPUT_DIR")
     if deployment_kit_output_dir:
         settings["deployment_kit_output_dir"] = deployment_kit_output_dir
 
-    systemd_service_user = _str_env("ECHOCHAT_SYSTEMD_SERVICE_USER", "SYSTEMD_SERVICE_USER")
+    systemd_service_user = _str_env("HUI_SYSTEMD_SERVICE_USER", "SYSTEMD_SERVICE_USER")
     if systemd_service_user:
         settings["systemd_service_user"] = systemd_service_user
 
-    systemd_working_directory = _str_env("ECHOCHAT_SYSTEMD_WORKING_DIRECTORY", "SYSTEMD_WORKING_DIRECTORY")
+    systemd_working_directory = _str_env("HUI_SYSTEMD_WORKING_DIRECTORY", "SYSTEMD_WORKING_DIRECTORY")
     if systemd_working_directory:
         settings["systemd_working_directory"] = systemd_working_directory
 
-    systemd_env_file = _str_env("ECHOCHAT_SYSTEMD_ENV_FILE", "SYSTEMD_ENV_FILE")
+    systemd_env_file = _str_env("HUI_SYSTEMD_ENV_FILE", "SYSTEMD_ENV_FILE")
     if systemd_env_file:
         settings["systemd_env_file"] = systemd_env_file
 
     apply_scaled_runtime_safety_defaults(settings)
 
 
-def _default_local_postgres_parts(db_name: str = "echochat") -> dict:
+def _default_local_postgres_parts(db_name: str = "hui") -> dict:
     return {
         "scheme": "postgresql",
         "user": getpass.getuser(),
@@ -614,7 +614,7 @@ def seed_first_run_local_config(path: Path, settings: dict) -> dict:
     """Auto-seed a usable local config on first run.
 
     When server_config.json is missing, setup should not force the user to hand-create
-    the file or trip over placeholder DSNs like USER/PASSWORD/echo_db. Seed a local
+    the file or trip over placeholder DSNs like USER/PASSWORD/hui_db. Seed a local
     PostgreSQL DSN using the current OS user and standard localhost defaults instead.
     """
     if path.exists():
@@ -622,7 +622,7 @@ def seed_first_run_local_config(path: Path, settings: dict) -> dict:
     seeded = dict(settings or {})
     changed = False
     if not str(seeded.get("database_url") or "").strip():
-        seeded["database_url"] = _build_postgres_dsn(_default_local_postgres_parts("echochat"))
+        seeded["database_url"] = _build_postgres_dsn(_default_local_postgres_parts("hui"))
         changed = True
     if not str(seeded.get("database_bootstrap_url") or "").strip():
         seeded["database_bootstrap_url"] = _build_postgres_dsn(_default_local_postgres_parts("postgres"))
@@ -772,7 +772,7 @@ def _find_gunicorn_executable() -> str | None:
 def _production_worker_class_from_settings(settings: dict, env: dict | None = None) -> str:
     env = env or os.environ
     explicit = str(
-        env.get("ECHOCHAT_GUNICORN_WORKER_CLASS")
+        env.get("HUI_GUNICORN_WORKER_CLASS")
         or settings.get("production_worker_class")
         or settings.get("gunicorn_worker_class")
         or ""
@@ -781,7 +781,7 @@ def _production_worker_class_from_settings(settings: dict, env: dict | None = No
         return "gthread" if explicit == "threading" else explicit
 
     async_mode = str(
-        env.get("ECHOCHAT_SOCKETIO_ASYNC")
+        env.get("HUI_SOCKETIO_ASYNC")
         or settings.get("production_async_mode")
         or "threading"
     ).strip().lower()
@@ -889,25 +889,25 @@ def _exec_production_server(settings: dict, settings_path: Path) -> None:
         raise SystemExit(2)
 
     env = os.environ.copy()
-    env.setdefault("ECHOCHAT_CONFIG", str(settings_path))
-    env.setdefault("ECHOCHAT_SOCKETIO_ASYNC", str(settings.get("production_async_mode") or "threading"))
-    env.setdefault("ECHOCHAT_BIND", _production_bind_from_settings(settings))
-    env.setdefault("ECHOCHAT_WORKERS", str(_production_workers_from_settings(settings)))
-    env.setdefault("ECHOCHAT_PRODUCTION_WORKERS", env["ECHOCHAT_WORKERS"])
-    env.setdefault("ECHOCHAT_PRODUCTION_INSTANCES", str(_production_instance_count_from_settings(settings)))
-    env.setdefault("ECHOCHAT_INSTANCE_BASE_PORT", str(_production_instance_base_port_from_settings(settings)))
+    env.setdefault("HUI_CONFIG", str(settings_path))
+    env.setdefault("HUI_SOCKETIO_ASYNC", str(settings.get("production_async_mode") or "threading"))
+    env.setdefault("HUI_BIND", _production_bind_from_settings(settings))
+    env.setdefault("HUI_WORKERS", str(_production_workers_from_settings(settings)))
+    env.setdefault("HUI_PRODUCTION_WORKERS", env["HUI_WORKERS"])
+    env.setdefault("HUI_PRODUCTION_INSTANCES", str(_production_instance_count_from_settings(settings)))
+    env.setdefault("HUI_INSTANCE_BASE_PORT", str(_production_instance_base_port_from_settings(settings)))
     if str(settings.get("socketio_message_queue") or "").strip():
-        env.setdefault("ECHOCHAT_SOCKETIO_MESSAGE_QUEUE", str(settings.get("socketio_message_queue")).strip())
+        env.setdefault("HUI_SOCKETIO_MESSAGE_QUEUE", str(settings.get("socketio_message_queue")).strip())
     if str(settings.get("shared_state_redis_url") or "").strip():
-        env.setdefault("ECHOCHAT_SHARED_STATE_REDIS_URL", str(settings.get("shared_state_redis_url")).strip())
-    env.setdefault("ECHOCHAT_FORWARDED_ALLOW_IPS", str(settings.get("forwarded_allow_ips") or "127.0.0.1"))
-    env.setdefault("ECHOCHAT_GUNICORN_LOGLEVEL", str(settings.get("production_loglevel") or "info"))
-    env.setdefault("ECHOCHAT_GUNICORN_WORKER_CLASS", _production_worker_class_from_settings(settings, env))
+        env.setdefault("HUI_SHARED_STATE_REDIS_URL", str(settings.get("shared_state_redis_url")).strip())
+    env.setdefault("HUI_FORWARDED_ALLOW_IPS", str(settings.get("forwarded_allow_ips") or "127.0.0.1"))
+    env.setdefault("HUI_GUNICORN_LOGLEVEL", str(settings.get("production_loglevel") or "info"))
+    env.setdefault("HUI_GUNICORN_WORKER_CLASS", _production_worker_class_from_settings(settings, env))
 
-    worker_class = env["ECHOCHAT_GUNICORN_WORKER_CLASS"]
+    worker_class = env["HUI_GUNICORN_WORKER_CLASS"]
     readiness_errors = _blocking_public_beta_readiness_errors(settings, settings_path)
     if readiness_errors:
-        print("❌ Public beta production readiness failed. Echo-Chat will not start as an internet-facing beta yet.")
+        print("❌ Public beta production readiness failed. Hui Chat will not start as an internet-facing beta yet.")
         for err in readiness_errors[:12]:
             print(f"   - {err}")
         if len(readiness_errors) > 12:
@@ -923,7 +923,7 @@ def _exec_production_server(settings: dict, settings_path: Path) -> None:
         print("❌ Production mode is enabled, but this environment is missing a required production runtime dependency.")
         for err in dependency_errors:
             print(f"   - {err}")
-        print("\nFix it from your Echo-Chat project folder:")
+        print("\nFix it from your Hui Chat project folder:")
         print(_production_dependency_install_hint())
         print("\nThen start again with:")
         print("python main.py --production")
@@ -933,22 +933,22 @@ def _exec_production_server(settings: dict, settings_path: Path) -> None:
 
     server_name = _server_display_name(settings)
     print(f"🚀  Starting {server_name} in production mode with Gunicorn.")
-    print(f"   config:  {env['ECHOCHAT_CONFIG']}")
-    print(f"   bind:    {env['ECHOCHAT_BIND']}")
-    print(f"   workers: {env['ECHOCHAT_WORKERS']} per instance")
+    print(f"   config:  {env['HUI_CONFIG']}")
+    print(f"   bind:    {env['HUI_BIND']}")
+    print(f"   workers: {env['HUI_WORKERS']} per instance")
     planned_instances = _production_instance_count_from_settings(settings)
     if planned_instances > 1:
         base_port = _production_instance_base_port_from_settings(settings)
         end_port = base_port + planned_instances - 1
         print(f"   scale:   {planned_instances} planned one-worker instance(s), ports {base_port}-{end_port}")
         print("   note:    this command starts one instance; use the deployment kit/systemd template for all planned instances.")
-    print(f"   async:   {env['ECHOCHAT_SOCKETIO_ASYNC']}")
+    print(f"   async:   {env['HUI_SOCKETIO_ASYNC']}")
     print(f"   worker:  {worker_class}")
-    print(f"   queue:   {'configured' if str(env.get('ECHOCHAT_SOCKETIO_MESSAGE_QUEUE') or '').strip() else 'not configured'}")
-    print(f"   shared:  {'configured' if str(env.get('ECHOCHAT_SHARED_STATE_REDIS_URL') or '').strip() else 'not configured'}")
+    print(f"   queue:   {'configured' if str(env.get('HUI_SOCKETIO_MESSAGE_QUEUE') or '').strip() else 'not configured'}")
+    print(f"   shared:  {'configured' if str(env.get('HUI_SHARED_STATE_REDIS_URL') or '').strip() else 'not configured'}")
     if planned_instances > 1 and bool(settings.get("auto_configure_scaled_redis", True)):
         print("   Redis:   auto-config enabled for scaled deployments")
-    print(f"   fwd IPs: {env.get('ECHOCHAT_FORWARDED_ALLOW_IPS')}")
+    print(f"   fwd IPs: {env.get('HUI_FORWARDED_ALLOW_IPS')}")
     from redis_socketio_readiness import blocking_topology_errors, build_redis_socketio_report, format_redis_socketio_report
 
     topology_errors = blocking_topology_errors(settings)
@@ -971,19 +971,19 @@ def _exec_production_server(settings: dict, settings_path: Path) -> None:
 
 def _run_setup_tui_doctor() -> None:
     """Print terminal/curses facts needed by the blue setup UI."""
-    print("=== Echo-Chat setup TUI doctor ===")
+    print("=== Hui Chat setup TUI doctor ===")
     print(f"stdin is TTY:  {os.isatty(0)}")
     print(f"stdout is TTY: {os.isatty(1)}")
     print(f"TERM:          {os.environ.get('TERM') or '(empty)'}")
     print(f"COLORTERM:     {os.environ.get('COLORTERM') or '(empty)'}")
     print(f"Konsole vars:  KONSOLE_VERSION={os.environ.get('KONSOLE_VERSION') or '(empty)'}")
-    print(f"setup legacy:  ECHOCHAT_SETUP_LEGACY={os.environ.get('ECHOCHAT_SETUP_LEGACY') or '(empty)'}")
-    print(f"setup force:   ECHOCHAT_SETUP_TUI={os.environ.get('ECHOCHAT_SETUP_TUI') or '(empty)'}")
-    if os.environ.get("ECHOCHAT_DOTENV_FILE"):
-        print(f"dotenv file:   {os.environ.get('ECHOCHAT_DOTENV_FILE')}")
-        keys = os.environ.get("ECHOCHAT_DOTENV_KEYS", "")
-        if "ECHOCHAT_SETUP_LEGACY" in {x.strip() for x in keys.split(',') if x.strip()}:
-            print("dotenv note:   ECHOCHAT_SETUP_LEGACY came from .env and will be ignored by setup.")
+    print(f"setup legacy:  HUI_SETUP_LEGACY={os.environ.get('HUI_SETUP_LEGACY') or '(empty)'}")
+    print(f"setup force:   HUI_SETUP_TUI={os.environ.get('HUI_SETUP_TUI') or '(empty)'}")
+    if os.environ.get("HUI_DOTENV_FILE"):
+        print(f"dotenv file:   {os.environ.get('HUI_DOTENV_FILE')}")
+        keys = os.environ.get("HUI_DOTENV_KEYS", "")
+        if "HUI_SETUP_LEGACY" in {x.strip() for x in keys.split(',') if x.strip()}:
+            print("dotenv note:   HUI_SETUP_LEGACY came from .env and will be ignored by setup.")
     try:
         size = shutil.get_terminal_size(fallback=(0, 0))
         print(f"terminal size: {size.columns}x{size.lines}")
@@ -1004,7 +1004,7 @@ def _run_setup_tui_doctor() -> None:
     except Exception as exc:
         print(f"terminfo:      FAILED: {exc}")
     print("Recommendation:")
-    print("  TERM=xterm-256color ECHOCHAT_SETUP_TUI=1 python main.py --setup")
+    print("  TERM=xterm-256color HUI_SETUP_TUI=1 python main.py --setup")
 
 def _setup_bypassing_cli_command(args: argparse.Namespace) -> bool:
     """Return True for explicit CLI actions that must not auto-launch setup.
@@ -1063,7 +1063,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--deployment-kit-output-dir", default="deploy/generated-deployment", help="output directory for --write-deployment-kit")
     p.add_argument("--generate-proxy-config", choices=["all", "caddy", "nginx"], help="generate Caddy/Nginx reverse proxy config files and exit")
     p.add_argument("--proxy-output-dir", default="deploy/generated-proxy", help="output directory for --generate-proxy-config")
-    p.add_argument("--generate-secrets", action="store_true", help="print strong Echo-Chat .env secrets and exit")
+    p.add_argument("--generate-secrets", action="store_true", help="print strong Hui Chat .env secrets and exit")
     p.add_argument("--write-env-secrets", action="store_true", help="with --generate-secrets, write/update .env with chmod 600")
     return p.parse_args()
 
@@ -1124,15 +1124,15 @@ def main() -> None:
         if not persist_secrets_enabled(settings):
             print("🔐 Secret persistence is disabled for this mode; keep DB/API/SMTP/Twilio/TURN secrets in environment variables or .env.\n")
         if secret_result.get("generated"):
-            print(f"🔐 Generated stable core secrets: {', '.join(secret_result.get("generated", []))}")
+            print(f"🔐 Generated stable core secrets: {', '.join(secret_result.get('generated', []))}")
             if secret_result.get("env_file"):
-                print(f"   Saved to protected env file: {secret_result.get("env_file")}")
+                print(f"   Saved to protected env file: {secret_result.get('env_file')}")
             print()
         if missing_runtime_env:
-            print("⚠️  Setup saved successfully, but Echo-Chat will not auto-start yet because required runtime secrets were kept out of server_config.json:")
+            print("⚠️  Setup saved successfully, but Hui Chat will not auto-start yet because required runtime secrets were kept out of server_config.json:")
             for item in missing_runtime_env:
                 print(f"   - {item}")
-            print("\nSet those environment variables, or rerun setup with ECHOCHAT_PERSIST_SECRETS=1 if you intentionally want legacy config-file secret storage.")
+            print("\nSet those environment variables, or rerun setup with HUI_PERSIST_SECRETS=1 if you intentionally want legacy config-file secret storage.")
             return
         settings = _reload_saved_settings_for_runtime(settings_path)
 
@@ -1147,8 +1147,8 @@ def main() -> None:
         bundle = generate_secret_bundle(include_crypto=True)
         if args.write_env_secrets:
             env_path = write_env_secrets(bundle, path=Path(".env"))
-            print(f"✅ Wrote strong Echo-Chat secrets to {env_path} (chmod 600).")
-            print("Restart Echo-Chat so the new .env values are loaded.")
+            print(f"✅ Wrote strong Hui Chat secrets to {env_path} (chmod 600).")
+            print("Restart Hui Chat so the new .env values are loaded.")
         else:
             print(format_env_bundle(bundle), end="")
         return
@@ -1259,14 +1259,14 @@ def main() -> None:
     try:
         prepare_runtime_database(settings)
     except Exception as exc:
-        print("❌ Echo-Chat could not start because the PostgreSQL database setting is not usable.")
+        print("❌ Hui Chat could not start because the PostgreSQL database setting is not usable.")
         print(f"   {exc}")
         print("\nFix options:")
         print("   1. Run setup again: python main.py --setup")
         print("   2. Or set a local PostgreSQL DSN, for example:")
-        print("      export DATABASE_URL=postgresql://$USER@localhost:5432/echochat")
+        print("      export DATABASE_URL=postgresql://$USER@localhost:5432/hui_chat")
         print("   3. If setup needs to create/repair the DB, also set:")
-        print("      export ECHOCHAT_DB_BOOTSTRAP_URL=postgresql://$USER@localhost:5432/postgres")
+        print("      export HUI_DB_BOOTSTRAP_URL=postgresql://$USER@localhost:5432/postgres")
         raise SystemExit(2)
     configure_logging(settings)
 

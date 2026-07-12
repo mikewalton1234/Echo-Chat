@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Echo-Chat server – database facade helpers (PostgreSQL version)
+Hui Chat server – database facade helpers (PostgreSQL version)
 
 This module remains the compatibility facade while connection, migration,
 auth, room, and schema/bootstrap helpers now live in the ``db/`` package.

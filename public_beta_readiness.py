@@ -1,4 +1,4 @@
-"""Public beta readiness checks for Echo-Chat.
+"""Public beta readiness checks for Hui Chat.
 
 These checks are intentionally conservative and mostly configuration-based.
 They are safe to run before the database is ready and do not start network
@@ -260,7 +260,7 @@ def apply_hosting_mode_preset(settings: dict[str, Any], mode: str, public_base_u
         out["production_workers"] = int(out.get("production_workers") or 1)
         out["production_async_mode"] = str(out.get("production_async_mode") or "threading")
         out["socketio_transports"] = out.get("socketio_transports") or ["polling"]
-        # TLS is normally terminated by Caddy/Nginx. Keep Echo-Chat's built-in
+        # TLS is normally terminated by Caddy/Nginx. Keep Hui Chat's built-in
         # HTTPS listener off unless the admin explicitly turns it on.
         out["https"] = bool(out.get("https", False))
         if origin:
@@ -310,11 +310,11 @@ def build_public_beta_readiness(settings: dict[str, Any], *, settings_file: str 
     if public_mode:
         items.append(ReadinessItem("pass", "hosting-mode", "Hosting mode is public beta", "Setup is checking the server as an internet-facing beta deployment."))
     elif no_domain_mode:
-        items.append(ReadinessItem("warn", "hosting-mode", "No domain yet", "Echo-Chat is in a safe waiting-room mode for LAN testing only.", "Get a real domain or HTTPS tunnel before inviting internet testers."))
+        items.append(ReadinessItem("warn", "hosting-mode", "No domain yet", "Hui Chat is in a safe waiting-room mode for LAN testing only.", "Get a real domain or HTTPS tunnel before inviting internet testers."))
     elif mode == "lan":
         items.append(ReadinessItem("warn", "hosting-mode", "Hosting mode is LAN/local", "This is fine for home testing, but not enough for public beta testers.", "In setup, choose Hosting mode: Public beta with domain + HTTPS after you have a domain."))
     else:
-        items.append(ReadinessItem("warn", "hosting-mode", "Hosting mode is advanced/custom", "Echo-Chat will not automatically assume every public-beta safety default in advanced mode."))
+        items.append(ReadinessItem("warn", "hosting-mode", "Hosting mode is advanced/custom", "Hui Chat will not automatically assume every public-beta safety default in advanced mode."))
 
     if public_mode:
         if placeholder_public_url:
@@ -401,33 +401,33 @@ def build_public_beta_readiness(settings: dict[str, Any], *, settings_file: str 
         if not secrets_persist:
             items.append(ReadinessItem("pass", "secret-persistence", "Config secret persistence disabled", "Production/public mode keeps secrets in environment variables or a secret manager."))
         else:
-            items.append(ReadinessItem("fail", "secret-persistence", "Config secret persistence is enabled", "Public beta configs should not write API keys, database passwords, JWT secrets, or encryption keys to server_config.json.", "Set ECHOCHAT_PERSIST_SECRETS=0 or use public_beta/production mode defaults."))
+            items.append(ReadinessItem("fail", "secret-persistence", "Config secret persistence is enabled", "Public beta configs should not write API keys, database passwords, JWT secrets, or encryption keys to server_config.json.", "Set HUI_PERSIST_SECRETS=0 or use public_beta/production mode defaults."))
 
         profile_encrypt = _truthy(settings.get("encrypt_sensitive_profile_fields", True))
-        profile_key = _field_crypto_key_available(settings, field_env="ECHOCHAT_PROFILE_FIELD_KEY", field_setting="profile_field_encryption_key")
+        profile_key = _field_crypto_key_available(settings, field_env="HUI_PROFILE_FIELD_KEY", field_setting="profile_field_encryption_key")
         if profile_encrypt and profile_key:
             items.append(ReadinessItem("pass", "profile-field-crypto", "Sensitive profile-field crypto ready", "Phone/address/location-style fields can be encrypted at rest."))
         elif profile_encrypt:
-            items.append(ReadinessItem("fail", "profile-field-crypto", "Sensitive profile-field crypto key missing", "Encryption is enabled but no stable profile-field key is available.", "Set ECHOCHAT_PROFILE_FIELD_KEY before public beta."))
+            items.append(ReadinessItem("fail", "profile-field-crypto", "Sensitive profile-field crypto key missing", "Encryption is enabled but no stable profile-field key is available.", "Set HUI_PROFILE_FIELD_KEY before public beta."))
         else:
-            items.append(ReadinessItem("fail", "profile-field-crypto", "Sensitive profile-field crypto disabled", "Public beta should not store sensitive profile/contact fields as plaintext.", "Set encrypt_sensitive_profile_fields=true and provide ECHOCHAT_PROFILE_FIELD_KEY."))
+            items.append(ReadinessItem("fail", "profile-field-crypto", "Sensitive profile-field crypto disabled", "Public beta should not store sensitive profile/contact fields as plaintext.", "Set encrypt_sensitive_profile_fields=true and provide HUI_PROFILE_FIELD_KEY."))
 
         email_encrypt = _truthy(settings.get("encrypt_email_at_rest", True))
-        email_field_key = _field_crypto_key_available(settings, field_env="ECHOCHAT_EMAIL_FIELD_KEY", field_setting="email_field_encryption_key", fallback_envs=("ECHOCHAT_PROFILE_FIELD_KEY",))
+        email_field_key = _field_crypto_key_available(settings, field_env="HUI_EMAIL_FIELD_KEY", field_setting="email_field_encryption_key", fallback_envs=("HUI_PROFILE_FIELD_KEY",))
         email_hash_key = bool(stable_email_hash_key_material(settings))
         if email_encrypt and email_field_key and email_hash_key:
             items.append(ReadinessItem("pass", "email-at-rest-crypto", "Email at-rest encryption ready", "Email lookup hashes and display envelopes have effective keys."))
         elif email_encrypt:
-            items.append(ReadinessItem("fail", "email-at-rest-crypto", "Email at-rest encryption key missing", "Encryption is enabled but email field/hash key material is incomplete.", "Set ECHOCHAT_EMAIL_FIELD_KEY and ECHOCHAT_EMAIL_HASH_KEY before public beta."))
+            items.append(ReadinessItem("fail", "email-at-rest-crypto", "Email at-rest encryption key missing", "Encryption is enabled but email field/hash key material is incomplete.", "Set HUI_EMAIL_FIELD_KEY and HUI_EMAIL_HASH_KEY before public beta."))
         else:
             items.append(ReadinessItem("fail", "email-at-rest-crypto", "Email at-rest encryption disabled", "Public beta should not keep account emails as plaintext-only user rows.", "Set encrypt_email_at_rest=true and provide email encryption keys."))
 
         backup_encrypt = _truthy(settings.get("encrypt_security_backups", True))
-        backup_key = _field_crypto_key_available(settings, field_env="ECHOCHAT_SECURITY_BACKUP_KEY", field_setting="security_backup_encryption_key", fallback_envs=("ECHOCHAT_PROFILE_FIELD_KEY", "ECHOCHAT_EMAIL_FIELD_KEY"))
+        backup_key = _field_crypto_key_available(settings, field_env="HUI_SECURITY_BACKUP_KEY", field_setting="security_backup_encryption_key", fallback_envs=("HUI_PROFILE_FIELD_KEY", "HUI_EMAIL_FIELD_KEY"))
         if backup_encrypt and backup_key:
             items.append(ReadinessItem("pass", "security-backups", "Encrypted security backups ready", "Security-operation backups will be written as encrypted .json.enc envelopes."))
         elif backup_encrypt:
-            items.append(ReadinessItem("fail", "security-backups", "Security backup encryption key missing", "Backup encryption is enabled but no backup/profile/email/app key is available.", "Set ECHOCHAT_SECURITY_BACKUP_KEY before public beta."))
+            items.append(ReadinessItem("fail", "security-backups", "Security backup encryption key missing", "Backup encryption is enabled but no backup/profile/email/app key is available.", "Set HUI_SECURITY_BACKUP_KEY before public beta."))
         else:
             items.append(ReadinessItem("fail", "security-backups", "Security backup encryption disabled", "Security-operation backups can contain emails and contact fields and must be encrypted for public beta.", "Set encrypt_security_backups=true."))
 
@@ -446,7 +446,7 @@ def build_public_beta_readiness(settings: dict[str, Any], *, settings_file: str 
         if stable_privacy_hash_key_material(settings):
             items.append(ReadinessItem("pass", "privacy-hash-key", "Privacy-retention hash key is stable", "Old IP/user-agent hashes will remain consistent across restarts."))
         else:
-            items.append(ReadinessItem("fail", "privacy-hash-key", "Privacy-retention hash key is missing", "Retention hashing would fall back to an unstable or fixed local salt.", "Set ECHOCHAT_PRIVACY_HASH_KEY before public beta."))
+            items.append(ReadinessItem("fail", "privacy-hash-key", "Privacy-retention hash key is missing", "Retention hashing would fall back to an unstable or fixed local salt.", "Set HUI_PRIVACY_HASH_KEY before public beta."))
 
     if public_mode:
         if not _truthy(settings.get("torrent_scrape_enabled", False)):
@@ -502,12 +502,12 @@ def build_public_beta_readiness(settings: dict[str, Any], *, settings_file: str 
             else:
                 items.append(ReadinessItem("warn", "proxy-headers", "Proxy header hop count is broad", f"proxy_fix_hops={hops}", "Use the exact number of trusted local proxy hops, usually 1."))
         else:
-            items.append(ReadinessItem("warn", "proxy-headers", "Proxy headers are not trusted", "If Caddy/Nginx terminates HTTPS, Echo-Chat should trust exactly that proxy hop.", "Set trust_proxy_headers=true and proxy_fix_hops=1 when behind one local reverse proxy."))
+            items.append(ReadinessItem("warn", "proxy-headers", "Proxy headers are not trusted", "If Caddy/Nginx terminates HTTPS, Hui Chat should trust exactly that proxy hop.", "Set trust_proxy_headers=true and proxy_fix_hops=1 when behind one local reverse proxy."))
 
     if public_mode:
-        forwarded_allow_ips = str(os.getenv("ECHOCHAT_FORWARDED_ALLOW_IPS") or settings.get("forwarded_allow_ips") or "127.0.0.1").strip()
+        forwarded_allow_ips = str(os.getenv("HUI_FORWARDED_ALLOW_IPS") or settings.get("forwarded_allow_ips") or "127.0.0.1").strip()
         if forwarded_allow_ips == "*":
-            items.append(ReadinessItem("warn", "forwarded-allow-ips", "Gunicorn trusts forwarded headers from all IPs", "ECHOCHAT_FORWARDED_ALLOW_IPS=*", "Use 127.0.0.1 or the exact reverse-proxy IP unless Gunicorn is unreachable from untrusted networks."))
+            items.append(ReadinessItem("warn", "forwarded-allow-ips", "Gunicorn trusts forwarded headers from all IPs", "HUI_FORWARDED_ALLOW_IPS=*", "Use 127.0.0.1 or the exact reverse-proxy IP unless Gunicorn is unreachable from untrusted networks."))
         else:
             items.append(ReadinessItem("pass", "forwarded-allow-ips", "Gunicorn forwarded-header trust is scoped", forwarded_allow_ips or "127.0.0.1"))
 
@@ -564,9 +564,9 @@ def build_public_beta_readiness(settings: dict[str, Any], *, settings_file: str 
     db_host = _parse_dsn_host(database_url)
     db_scheme = urlparse(database_url).scheme.lower() if database_url else ""
     if not database_url:
-        items.append(ReadinessItem("fail" if public_mode else "warn", "database-url", "Database URL is missing", "Echo-Chat needs PostgreSQL before real beta testing."))
+        items.append(ReadinessItem("fail" if public_mode else "warn", "database-url", "Database URL is missing", "Hui Chat needs PostgreSQL before real beta testing."))
     elif db_scheme not in {"postgresql", "postgres", "postgresql+psycopg2"}:
-        items.append(ReadinessItem("fail" if public_mode else "warn", "database-url", "Database URL is not PostgreSQL", f"scheme={db_scheme or '(missing)'}", "Use a PostgreSQL DATABASE_URL such as postgresql://user@localhost:5432/echochat."))
+        items.append(ReadinessItem("fail" if public_mode else "warn", "database-url", "Database URL is not PostgreSQL", f"scheme={db_scheme or '(missing)'}", "Use a PostgreSQL DATABASE_URL such as postgresql://user@localhost:5432/hui_chat."))
     elif _is_private_host(db_host):
         items.append(ReadinessItem("pass", "database-host", "Database host is private/local", db_host or "local socket/localhost"))
     else:
@@ -574,7 +574,7 @@ def build_public_beta_readiness(settings: dict[str, Any], *, settings_file: str 
 
     bind = str(settings.get("production_bind") or "").strip() or f"{settings.get('server_host') or settings.get('host') or '0.0.0.0'}:{settings.get('server_port') or settings.get('port') or 5000}"
     if public_mode and (bind.startswith("0.0.0.0:") or bind.startswith("[::]:")):
-        items.append(ReadinessItem("warn", "raw-bind", "Echo-Chat binds on all interfaces", bind, "Use firewall rules or bind to 127.0.0.1 behind Caddy/Nginx for public beta."))
+        items.append(ReadinessItem("warn", "raw-bind", "Hui Chat binds on all interfaces", bind, "Use firewall rules or bind to 127.0.0.1 behind Caddy/Nginx for public beta."))
     else:
         items.append(ReadinessItem("pass", "raw-bind", "Bind address reviewed", bind))
 
@@ -607,7 +607,7 @@ def build_public_beta_readiness(settings: dict[str, Any], *, settings_file: str 
 def format_public_beta_readiness_report(report: dict[str, Any]) -> str:
     marker = {"pass": "PASS", "warn": "WARN", "fail": "FAIL"}
     lines = [
-        "Echo-Chat Public Beta Readiness",
+        "Hui Chat Public Beta Readiness",
         "",
         f"Overall: {str(report.get('overall') or 'unknown').upper()}",
         f"Mode: {report.get('mode') or 'unknown'}",
@@ -627,7 +627,7 @@ def format_public_beta_readiness_report(report: dict[str, Any]) -> str:
         lines.extend([
             "",
             "No-domain path:",
-            "  1. Keep Echo-Chat in LAN testing mode.",
+            "  1. Keep Hui Chat in LAN testing mode.",
             "  2. Do not invite internet testers yet.",
             "  3. Get a domain, or use a tunnel provider that gives an HTTPS hostname.",
             "  4. Set public_base_url to that exact HTTPS address.",

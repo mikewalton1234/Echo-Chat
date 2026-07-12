@@ -1,17 +1,17 @@
 """wsgi.py
 
-Gunicorn entrypoint for EchoChat.
+Gunicorn entrypoint for HuiChat.
 
 Run (single instance example):
-  ECHOCHAT_SOCKETIO_ASYNC=threading \
+  HUI_SOCKETIO_ASYNC=threading \
   gunicorn -k gthread -w 1 --threads 100 -b 127.0.0.1:5000 wsgi:app
 
 Scale-out example:
   Start separate one-worker instances on ports 5000-5009 behind sticky Caddy/Nginx routing,
-  with ECHOCHAT_SOCKETIO_MESSAGE_QUEUE=redis://127.0.0.1:6379/1.
+  with HUI_SOCKETIO_MESSAGE_QUEUE=redis://127.0.0.1:6379/1.
 
 Notes:
-- Keep Gunicorn at -w 1 per Echo-Chat instance; do not run Gunicorn with multiple workers for Socket.IO.
+- Keep Gunicorn at -w 1 per Hui Chat instance; do not run Gunicorn with multiple workers for Socket.IO.
 - Do NOT start the janitor loop inside Gunicorn workers; run janitor_runner.py
   as a separate systemd service.
 """
@@ -25,7 +25,7 @@ load_project_dotenv()
 import os
 
 # ---- Shared Socket.IO async bootstrap ----
-from socketio_async_bootstrap import ECHOCHAT_SOCKETIO_ASYNC
+from socketio_async_bootstrap import HUI_SOCKETIO_ASYNC
 
 from pathlib import Path
 
@@ -37,9 +37,9 @@ from server_init import create_app
 def _resolve_config_path() -> Path:
     # Prefer explicit env path when running under systemd.
     p = (
-        os.environ.get("ECHOCHAT_CONFIG")
-        or os.environ.get("ECHOCHAT_CONFIG_FILE")
-        or os.environ.get("ECHOCHAT_SETTINGS")
+        os.environ.get("HUI_CONFIG")
+        or os.environ.get("HUI_CONFIG_FILE")
+        or os.environ.get("HUI_SETTINGS")
         or CONFIG_FILE
     )
     return Path(p)
@@ -53,5 +53,5 @@ apply_env_overrides(_settings)
 app, socketio = create_app(_settings, limiter=None, settings_file=_settings_path)
 
 # Expose these for tooling / introspection.
-app.config["ECHOCHAT_GUNICORN"] = True
-app.config["ECHOCHAT_SETTINGS_PATH"] = str(_settings_path)
+app.config["HUI_GUNICORN"] = True
+app.config["HUI_SETTINGS_PATH"] = str(_settings_path)

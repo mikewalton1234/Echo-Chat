@@ -23,7 +23,7 @@ def load_config(key):
         with open(CONFIG_FILE, "rb") as f:
             data = f.read()
 
-        # Echo-Chat's current main path uses *plaintext JSON* for server_config.json.
+        # Hui Chat's current main path uses *plaintext JSON* for server_config.json.
         # Older/experimental flows used Fernet-encrypted bytes.
         # Detect JSON first; fall back to Fernet decryption.
         try:

@@ -68,7 +68,7 @@ def encrypt_plaintext_profile_fields(settings: dict | None = None, *, limit: int
     if not sensitive_field_key_available(settings):
         result["ok"] = False
         result["skipped_no_key"] = True
-        result["error"] = "Missing ECHOCHAT_PROFILE_FIELD_KEY or stable SECRET_KEY"
+        result["error"] = "Missing HUI_PROFILE_FIELD_KEY or stable SECRET_KEY"
         return result
     limit = max(1, min(int(limit or 2500), 100000))
     conn = get_db()
@@ -99,8 +99,8 @@ def encrypt_plaintext_profile_fields(settings: dict | None = None, *, limit: int
 def rotate_profile_field_envelopes(settings: dict | None = None, *, limit: int = 2500, dry_run: bool = False) -> dict:
     """Re-encrypt all decryptable sensitive profile fields under the active key.
 
-    Deployment flow: set ECHOCHAT_PROFILE_FIELD_KEY to the new key, place the
-    old key(s) in ECHOCHAT_PROFILE_FIELD_PREVIOUS_KEYS, run this action, verify
+    Deployment flow: set HUI_PROFILE_FIELD_KEY to the new key, place the
+    old key(s) in HUI_PROFILE_FIELD_PREVIOUS_KEYS, run this action, verify
     encrypted_undecryptable is zero, then remove previous keys.
     """
     settings = settings or {}
@@ -118,7 +118,7 @@ def rotate_profile_field_envelopes(settings: dict | None = None, *, limit: int =
     if not sensitive_field_key_available(settings):
         result["ok"] = False
         result["skipped_no_key"] = True
-        result["error"] = "Missing ECHOCHAT_PROFILE_FIELD_KEY or stable SECRET_KEY"
+        result["error"] = "Missing HUI_PROFILE_FIELD_KEY or stable SECRET_KEY"
         return result
     limit = max(1, min(int(limit or 2500), 100000))
     conn = get_db()

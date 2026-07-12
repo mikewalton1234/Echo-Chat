@@ -44,9 +44,9 @@ def effective_twilio_settings(settings: Dict[str, Any] | None) -> Dict[str, Any]
     the same secret lookup rules.
     """
     src = dict(settings or {})
-    account_sid = _env_str("ECHOCHAT_TWILIO_ACCOUNT_SID", "TWILIO_ACCOUNT_SID") or str(src.get("twilio_account_sid") or "").strip()
-    auth_token = _env_str("ECHOCHAT_TWILIO_AUTH_TOKEN", "TWILIO_AUTH_TOKEN") or str(src.get("twilio_auth_token") or "").strip()
-    service_sid = _env_str("ECHOCHAT_TWILIO_VERIFY_SERVICE_SID", "TWILIO_VERIFY_SERVICE_SID") or str(src.get("twilio_verify_service_sid") or "").strip()
+    account_sid = _env_str("HUI_TWILIO_ACCOUNT_SID", "TWILIO_ACCOUNT_SID") or str(src.get("twilio_account_sid") or "").strip()
+    auth_token = _env_str("HUI_TWILIO_AUTH_TOKEN", "TWILIO_AUTH_TOKEN") or str(src.get("twilio_auth_token") or "").strip()
+    service_sid = _env_str("HUI_TWILIO_VERIFY_SERVICE_SID", "TWILIO_VERIFY_SERVICE_SID") or str(src.get("twilio_verify_service_sid") or "").strip()
     beta_enabled = bool(src.get("enable_two_factor_beta", False))
     sms_enabled = bool(src.get("enable_sms_two_factor", False))
     channel = normalize_twilio_channel(src.get("two_factor_sms_channel") or "sms")
@@ -77,11 +77,11 @@ def twilio_setup_errors(settings: Dict[str, Any] | None) -> list[str]:
     if beta_enabled and not sms_enabled:
         errors.append("Two-factor beta is enabled, but SMS 2FA is off; turn both on for Twilio Verify SMS login.")
     if not str(cfg.get("twilio_account_sid") or "").strip():
-        errors.append("SMS 2FA is enabled, but Twilio Account SID is missing. Use server_config.json or ECHOCHAT_TWILIO_ACCOUNT_SID.")
+        errors.append("SMS 2FA is enabled, but Twilio Account SID is missing. Use server_config.json or HUI_TWILIO_ACCOUNT_SID.")
     if not str(cfg.get("twilio_auth_token") or "").strip():
-        errors.append("SMS 2FA is enabled, but Twilio Auth Token is missing. Store it in config or use ECHOCHAT_TWILIO_AUTH_TOKEN / TWILIO_AUTH_TOKEN.")
+        errors.append("SMS 2FA is enabled, but Twilio Auth Token is missing. Store it in config or use HUI_TWILIO_AUTH_TOKEN / TWILIO_AUTH_TOKEN.")
     if not str(cfg.get("twilio_verify_service_sid") or "").strip():
-        errors.append("SMS 2FA is enabled, but Twilio Verify Service SID is missing. Use server_config.json or ECHOCHAT_TWILIO_VERIFY_SERVICE_SID.")
+        errors.append("SMS 2FA is enabled, but Twilio Verify Service SID is missing. Use server_config.json or HUI_TWILIO_VERIFY_SERVICE_SID.")
     channel = str(cfg.get("two_factor_sms_channel") or "sms")
     if channel not in _ALLOWED_VERIFY_CHANNELS:
         errors.append("SMS 2FA channel must be sms or whatsapp.")

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """emailer.py
 
-SMTP sender for Echo-Chat transactional email (password reset now, account
+SMTP sender for Hui Chat transactional email (password reset now, account
 verification later).
 
 Design goals:
@@ -11,15 +11,15 @@ Design goals:
   - No fake success: if SMTP is not configured, return a hard failure.
 
 Supported settings keys / env vars:
-  smtp_enabled                 ECHOCHAT_SMTP_ENABLED / SMTP_ENABLED
-  smtp_host / smtp_server       ECHOCHAT_SMTP_HOST / SMTP_HOST
-  smtp_port                    ECHOCHAT_SMTP_PORT / SMTP_PORT
-  smtp_username / smtp_user     ECHOCHAT_SMTP_USERNAME / SMTP_USERNAME
-  smtp_password / smtp_pass     ECHOCHAT_SMTP_PASSWORD / SMTP_PASSWORD
-  smtp_use_starttls / smtp_tls  ECHOCHAT_SMTP_STARTTLS / SMTP_STARTTLS
-  smtp_use_ssl / smtp_ssl       ECHOCHAT_SMTP_SSL / SMTP_SSL
-  smtp_from / from_email        ECHOCHAT_SMTP_FROM / SMTP_FROM
-  smtp_timeout_seconds          ECHOCHAT_SMTP_TIMEOUT / SMTP_TIMEOUT
+  smtp_enabled                 HUI_SMTP_ENABLED / SMTP_ENABLED
+  smtp_host / smtp_server       HUI_SMTP_HOST / SMTP_HOST
+  smtp_port                    HUI_SMTP_PORT / SMTP_PORT
+  smtp_username / smtp_user     HUI_SMTP_USERNAME / SMTP_USERNAME
+  smtp_password / smtp_pass     HUI_SMTP_PASSWORD / SMTP_PASSWORD
+  smtp_use_starttls / smtp_tls  HUI_SMTP_STARTTLS / SMTP_STARTTLS
+  smtp_use_ssl / smtp_ssl       HUI_SMTP_SSL / SMTP_SSL
+  smtp_from / from_email        HUI_SMTP_FROM / SMTP_FROM
+  smtp_timeout_seconds          HUI_SMTP_TIMEOUT / SMTP_TIMEOUT
   smtp_provider                 optional provider hint (brevo, custom, etc.)
 """
 
@@ -47,23 +47,23 @@ _PLACEHOLDER_FROM_DOMAINS = {
     "example.com",
     "example.net",
     "example.org",
-    # EchoChat does not own this domain for arbitrary installs. Treat it as a
+    # HuiChat does not own this domain for arbitrary installs. Treat it as a
     # dangerous sample/default unless the admin deliberately removes this guard.
-    "echochat.com",
+    "hui.com",
     "smtp-brevo.com",
 }
 
 
 def _mark_smtp_stage(exc: BaseException, stage: str) -> BaseException:
     try:
-        setattr(exc, "_echochat_smtp_stage", stage)
+        setattr(exc, "_hui_smtp_stage", stage)
     except Exception:
         pass
     return exc
 
 
 def _smtp_stage(exc: BaseException) -> str:
-    return str(getattr(exc, "_echochat_smtp_stage", "") or "")
+    return str(getattr(exc, "_hui_smtp_stage", "") or "")
 
 
 def _is_timeoutish_smtp_error(exc: BaseException) -> bool:
@@ -125,7 +125,7 @@ def _from_address_warning(provider: str, from_email: str) -> str | None:
         if provider in {"brevo", "resend", "smtp2go", "mailersend", "mailjet"}:
             return "invalid_from_placeholder"
         return "from_placeholder_not_deliverable"
-    if addr in {"noreply@echochat.com", "no-reply@echochat.com", "noreplay@echochat.com"}:
+    if addr in {"no-reply@yourdomain.com", "no-reply@hui.com", "noreplay@hui.com"}:
         return "invalid_from_placeholder"
     return None
 
@@ -227,24 +227,24 @@ def _smtp_mode_hint(provider: str, host: str, port: int, starttls: bool, use_ssl
 
 
 def _smtp_settings(settings: dict) -> dict:
-    env_enabled = _env("ECHOCHAT_SMTP_ENABLED", "SMTP_ENABLED")
+    env_enabled = _env("HUI_SMTP_ENABLED", "SMTP_ENABLED")
     enabled = _bool_value(env_enabled, default=bool(_get(settings, "smtp_enabled", default=False)))
 
-    host = _env("ECHOCHAT_SMTP_HOST", "SMTP_HOST") or _get(settings, "smtp_host", "smtp_server", default="")
+    host = _env("HUI_SMTP_HOST", "SMTP_HOST") or _get(settings, "smtp_host", "smtp_server", default="")
     try:
-        port = int(_env("ECHOCHAT_SMTP_PORT", "SMTP_PORT") or _get(settings, "smtp_port", default=587) or 587)
+        port = int(_env("HUI_SMTP_PORT", "SMTP_PORT") or _get(settings, "smtp_port", default=587) or 587)
     except Exception:
         port = 587
     provider = _provider_hint(settings, str(host or ""))
-    timeout = _int_value(_env("ECHOCHAT_SMTP_TIMEOUT", "SMTP_TIMEOUT") or _get(settings, "smtp_timeout_seconds", default=20), 20, min_value=3, max_value=120)
+    timeout = _int_value(_env("HUI_SMTP_TIMEOUT", "SMTP_TIMEOUT") or _get(settings, "smtp_timeout_seconds", default=20), 20, min_value=3, max_value=120)
 
-    username = _env("ECHOCHAT_SMTP_USERNAME", "ECHOCHAT_SMTP_USER", "SMTP_USERNAME", "SMTP_USER") or _get(settings, "smtp_username", "smtp_user", default="")
-    password = _env("ECHOCHAT_SMTP_PASSWORD", "ECHOCHAT_SMTP_PASS", "SMTP_PASSWORD", "SMTP_PASS") or _get(settings, "smtp_password", "smtp_pass", default="")
+    username = _env("HUI_SMTP_USERNAME", "HUI_SMTP_USER", "SMTP_USERNAME", "SMTP_USER") or _get(settings, "smtp_username", "smtp_user", default="")
+    password = _env("HUI_SMTP_PASSWORD", "HUI_SMTP_PASS", "SMTP_PASSWORD", "SMTP_PASS") or _get(settings, "smtp_password", "smtp_pass", default="")
 
-    env_starttls = _env("ECHOCHAT_SMTP_STARTTLS", "SMTP_STARTTLS")
+    env_starttls = _env("HUI_SMTP_STARTTLS", "SMTP_STARTTLS")
     starttls = _bool_value(env_starttls, default=bool(_get(settings, "smtp_use_starttls", "smtp_tls", default=True)))
 
-    env_ssl = _env("ECHOCHAT_SMTP_SSL", "SMTP_SSL")
+    env_ssl = _env("HUI_SMTP_SSL", "SMTP_SSL")
     use_ssl = _bool_value(env_ssl, default=bool(_get(settings, "smtp_use_ssl", "smtp_ssl", default=False)))
     if port in {465, 2465, 8465, 443}:
         use_ssl = True
@@ -254,7 +254,7 @@ def _smtp_settings(settings: dict) -> dict:
         starttls = False
 
     server_display_name = _display_server_name(settings)
-    from_email = _env("ECHOCHAT_SMTP_FROM", "SMTP_FROM") or _get(
+    from_email = _env("HUI_SMTP_FROM", "SMTP_FROM") or _get(
         settings,
         "smtp_from",
         "from_email",

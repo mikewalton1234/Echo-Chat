@@ -1,4 +1,4 @@
-"""Redis and Socket.IO production topology checks for Echo-Chat.
+"""Redis and Socket.IO production topology checks for Hui Chat.
 
 This module is deliberately dependency-light. It can run before PostgreSQL is
 configured and before the Flask app is imported. The optional live Redis ping is
@@ -75,7 +75,7 @@ def _int_setting(settings: dict[str, Any], *keys: str, default: int = 0) -> int:
 
 
 def _production_workers(settings: dict[str, Any]) -> int:
-    for env_key in ("ECHOCHAT_WORKERS", "ECHOCHAT_PRODUCTION_WORKERS", "WEB_CONCURRENCY", "PRODUCTION_WORKERS"):
+    for env_key in ("HUI_WORKERS", "HUI_PRODUCTION_WORKERS", "WEB_CONCURRENCY", "PRODUCTION_WORKERS"):
         raw = os.getenv(env_key)
         if raw:
             try:
@@ -88,7 +88,7 @@ def _production_workers(settings: dict[str, Any]) -> int:
 
 
 def _production_instances(settings: dict[str, Any]) -> int:
-    for env_key in ("ECHOCHAT_PRODUCTION_INSTANCES", "ECHOCHAT_INSTANCE_COUNT", "PRODUCTION_INSTANCES"):
+    for env_key in ("HUI_PRODUCTION_INSTANCES", "HUI_INSTANCE_COUNT", "PRODUCTION_INSTANCES"):
         raw = os.getenv(env_key)
         if raw:
             try:
@@ -102,7 +102,7 @@ def _production_instances(settings: dict[str, Any]) -> int:
 
 def _worker_class(settings: dict[str, Any]) -> str:
     raw = (
-        os.getenv("ECHOCHAT_GUNICORN_WORKER_CLASS")
+        os.getenv("HUI_GUNICORN_WORKER_CLASS")
         or settings.get("production_worker_class")
         or settings.get("gunicorn_worker_class")
         or "gthread"
@@ -112,7 +112,7 @@ def _worker_class(settings: dict[str, Any]) -> str:
 
 
 def _async_mode(settings: dict[str, Any]) -> str:
-    raw = os.getenv("ECHOCHAT_SOCKETIO_ASYNC") or settings.get("production_async_mode") or settings.get("socketio_async_mode") or "threading"
+    raw = os.getenv("HUI_SOCKETIO_ASYNC") or settings.get("production_async_mode") or settings.get("socketio_async_mode") or "threading"
     return str(raw or "threading").strip().lower()
 
 
@@ -133,7 +133,7 @@ def _as_transports(value: Any) -> list[str]:
 
 
 def _socketio_transports(settings: dict[str, Any], workers: int, async_mode: str) -> list[str]:
-    explicit = os.getenv("ECHOCHAT_SOCKETIO_TRANSPORTS") or settings.get("socketio_transports")
+    explicit = os.getenv("HUI_SOCKETIO_TRANSPORTS") or settings.get("socketio_transports")
     parsed = _as_transports(explicit)
     if parsed:
         return parsed
@@ -149,7 +149,7 @@ def _queue_url(settings: dict[str, Any]) -> str:
     if not isinstance(socketio_profile, dict):
         socketio_profile = {}
     return str(
-        os.getenv("ECHOCHAT_SOCKETIO_MESSAGE_QUEUE")
+        os.getenv("HUI_SOCKETIO_MESSAGE_QUEUE")
         or os.getenv("SOCKETIO_MESSAGE_QUEUE")
         or socketio_profile.get("message_queue")
         or settings.get("socketio_message_queue")
@@ -159,7 +159,7 @@ def _queue_url(settings: dict[str, Any]) -> str:
 
 def _rate_limit_url(settings: dict[str, Any]) -> str:
     return str(
-        os.getenv("ECHOCHAT_RATE_LIMIT_STORAGE_URI")
+        os.getenv("HUI_RATE_LIMIT_STORAGE_URI")
         or os.getenv("RATELIMIT_STORAGE_URI")
         or settings.get("rate_limit_storage_uri")
         or settings.get("rate_limit_storage")
@@ -169,7 +169,7 @@ def _rate_limit_url(settings: dict[str, Any]) -> str:
 
 def _shared_state_url(settings: dict[str, Any]) -> str:
     return str(
-        os.getenv("ECHOCHAT_SHARED_STATE_REDIS_URL")
+        os.getenv("HUI_SHARED_STATE_REDIS_URL")
         or os.getenv("SHARED_STATE_REDIS_URL")
         or settings.get("shared_state_redis_url")
         or ""
@@ -336,11 +336,11 @@ def build_redis_socketio_report(settings: dict[str, Any], *, live_check: bool = 
             "production-workers",
             "Gunicorn multi-worker mode is not beginner-safe for Socket.IO",
             f"production_workers={workers}; worker_class={worker_class}; transports={','.join(transports)}",
-            "Use production_workers=1. Later scale with multiple one-worker Echo-Chat instances behind a sticky reverse proxy plus socketio_message_queue=redis://127.0.0.1:6379/1.",
+            "Use production_workers=1. Later scale with multiple one-worker Hui Chat instances behind a sticky reverse proxy plus socketio_message_queue=redis://127.0.0.1:6379/1.",
         ))
 
     if instances <= 1:
-        items.append(RedisSocketIOItem("pass", "production-instances", "Single Echo-Chat instance planned", "One instance with one worker is the beginner-safe deployment."))
+        items.append(RedisSocketIOItem("pass", "production-instances", "Single Hui Chat instance planned", "One instance with one worker is the beginner-safe deployment."))
     elif queue_is_redis:
         items.append(RedisSocketIOItem("pass", "production-instances", "Multiple one-worker instances planned", f"production_instance_count={instances}. Use sticky proxy routing across the instance ports."))
     else:
@@ -351,7 +351,7 @@ def build_redis_socketio_report(settings: dict[str, Any], *, live_check: bool = 
     elif queue_is_redis:
         items.append(RedisSocketIOItem("pass", "socketio-message-queue", "Socket.IO Redis message queue configured", _redact_url(queue)))
     elif queue:
-        items.append(RedisSocketIOItem("warn", "socketio-message-queue", "Socket.IO message queue is not Redis", _redact_url(queue), "Redis is the documented/simple path for Echo-Chat public beta."))
+        items.append(RedisSocketIOItem("warn", "socketio-message-queue", "Socket.IO message queue is not Redis", _redact_url(queue), "Redis is the documented/simple path for Hui Chat public beta."))
     elif public_mode:
         items.append(RedisSocketIOItem("warn", "socketio-message-queue", "Socket.IO message queue is not configured", "Single-instance public beta can start without it, but Redis queue is recommended before adding testers or scaling.", f"Set socketio_message_queue={RECOMMENDED_SOCKETIO_QUEUE_REDIS}."))
     elif workers <= 1 and instances <= 1:
@@ -361,7 +361,7 @@ def build_redis_socketio_report(settings: dict[str, Any], *, live_check: bool = 
 
     generic_redis_url = str(os.getenv("REDIS_URL") or "").strip()
     if generic_redis_url and not queue:
-        items.append(RedisSocketIOItem("warn", "generic-redis-url", "Generic REDIS_URL is not used as the Socket.IO queue", _redact_url(generic_redis_url), "Set ECHOCHAT_SOCKETIO_MESSAGE_QUEUE explicitly; keep REDIS_URL only for tools that truly require a generic Redis setting."))
+        items.append(RedisSocketIOItem("warn", "generic-redis-url", "Generic REDIS_URL is not used as the Socket.IO queue", _redact_url(generic_redis_url), "Set HUI_SOCKETIO_MESSAGE_QUEUE explicitly; keep REDIS_URL only for tools that truly require a generic Redis setting."))
 
     if rate_is_redis:
         items.append(RedisSocketIOItem("pass", "rate-limit-storage", "Redis-backed rate limits configured", _redact_url(rate_url)))
@@ -471,7 +471,7 @@ def blocking_topology_errors(settings: dict[str, Any]) -> list[str]:
 def format_redis_socketio_report(report: dict[str, Any]) -> str:
     marker = {"pass": "PASS", "warn": "WARN", "fail": "FAIL"}
     lines = [
-        "Echo-Chat Redis + Socket.IO Production Checker",
+        "Hui Chat Redis + Socket.IO Production Checker",
         "",
         f"Overall: {str(report.get('overall') or 'unknown').upper()}",
         f"Mode: {report.get('mode') or 'unknown'}",
@@ -505,6 +505,6 @@ def format_redis_socketio_report(report: dict[str, Any]) -> str:
         f"  Use {RECOMMENDED_SOCKETIO_QUEUE_REDIS} for Socket.IO before scaling.",
         f"  Use {RECOMMENDED_SHARED_STATE_REDIS} for shared realtime state before scaling.",
         "  Setup auto-fills those Redis URLs when production_instance_count is greater than 1.",
-        "  Scale later with multiple one-worker Echo-Chat instances behind sticky routing.",
+        "  Scale later with multiple one-worker Hui Chat instances behind sticky routing.",
     ])
     return "\n".join(lines).rstrip() + "\n"

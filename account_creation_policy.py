@@ -38,8 +38,8 @@ _COMMON_WEAK_PASSWORDS = {
     "administrator",
     "changeme",
     "defaultpassword",
-    "echochat",
-    "echochat123",
+    "hui",
+    "hui-chat123",
     "mikeschatserver",
     "mikeserver",
     "iloveyou",
@@ -60,7 +60,7 @@ _WEAK_PASSWORD_SEEDS = tuple(
             "administrator",
             "changeme",
             "defaultpassword",
-            "echochat",
+            "hui",
             "iloveyou",
             "letmein",
             "mikeschatserver",
@@ -132,7 +132,7 @@ def recovery_pin_policy_summary() -> str:
 def validate_recovery_pin(pin: str | None) -> tuple[bool, str | None]:
     """Validate the low-entropy Recovery PIN used as a second reset secret.
 
-    Echo-Chat intentionally keeps this rule narrow and consistent across setup,
+    Hui Chat intentionally keeps this rule narrow and consistent across setup,
     public registration, admin-created accounts, forgot-password, and reset flows.
     PINs are never stored plaintext; callers hash valid values before storage.
     """

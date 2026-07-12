@@ -23,7 +23,7 @@ def _read_app_version() -> str:
 APP_VERSION = _read_app_version()
 
 # Public project name. This is the software/repository identity.
-PROJECT_NAME = "Echo-Chat"
+PROJECT_NAME = "Hui Chat"
 
 # Default visible chat-server name for first-run installs. Admins can change
 # server_config.json -> server_name during setup to brand their own server.
@@ -34,7 +34,7 @@ DEFAULT_SERVER_NAME = PROJECT_NAME
 def server_display_name(settings: dict | None = None, *, default: str | None = None) -> str:
     """Return the public chat-server display name for runtime/tool output.
 
-    Echo-Chat is the project/software name. ``server_name`` is the
+    Hui Chat is the project/software name. ``server_name`` is the
     admin-selected name users should see for a deployed server.
     """
     fallback = str(default or DEFAULT_SERVER_NAME).replace("\r", " ").replace("\n", " ").strip() or DEFAULT_SERVER_NAME
@@ -140,10 +140,10 @@ def sanitize_postgres_dsn(dsn: str | None) -> str | None:
 def is_placeholder_postgres_dsn(dsn: str | None) -> bool:
     """Return True when a DSN still looks like example/template data.
 
-    We specifically guard against the historical EchoChat placeholder
-    postgresql://USER:PASSWORD@localhost:5432/echo_db and close variants.
+    We specifically guard against the historical HuiChat placeholder
+    postgresql://USER:PASSWORD@localhost:5432/hui_db and close variants.
     A custom database name must *not* be treated as invalid just because it is
-    different from ``echochat``.
+    different from ``hui``.
     """
     s = sanitize_postgres_dsn(dsn)
     if s is None:
@@ -160,7 +160,7 @@ def is_placeholder_postgres_dsn(dsn: str | None) -> bool:
     password = str(p.password or "").strip().lower()
     host = str(p.hostname or "").strip().lower()
     db = str((p.path or "").lstrip("/") or "").strip().lower()
-    return (user in {"user", "username", "your_user", "dbuser"} and password in {"password", "pass", "your_password", "dbpassword"}) or (user == "user" and db == "echo_db" and host in {"", "localhost", "127.0.0.1", "::1"})
+    return (user in {"user", "username", "your_user", "dbuser"} and password in {"password", "pass", "your_password", "dbpassword"}) or (user == "user" and db == "hui_db" and host in {"", "localhost", "127.0.0.1", "::1"})
 
 def get_db_connection_string(settings: dict | None = None) -> str:
     """Return the PostgreSQL DSN.
@@ -183,7 +183,7 @@ def get_db_connection_string(settings: dict | None = None) -> str:
         if not is_placeholder_postgres_dsn(candidate):
             return candidate
 
-    # 3) If a local server_config.json exists (common in EchoChat), read it.
+    # 3) If a local server_config.json exists (common in HuiChat), read it.
     #    This avoids relying on DEFAULT_DB_CONNECTION_STRING which may contain
     #    a non-existent Postgres role (e.g. OS username).
     try:
@@ -215,7 +215,7 @@ def redact_postgres_dsn(dsn: str | None) -> str | None:
     """Return a DSN safe to print (password redacted).
 
     Example:
-        postgresql://user:***@localhost:5432/echo_db
+        postgresql://user:***@localhost:5432/hui_db
     """
     if dsn is None:
         return None
@@ -270,12 +270,12 @@ DB_CONNECTION_STRING = get_db_connection_string()
 CHAT_PARTS_DIR = Path(__file__).resolve().parent / "static" / "js" / "chat_parts"
 SOUND_PACKS_DIR = Path(__file__).resolve().parent / "static" / "js" / "sound_packs"
 SOUND_PACK_SCRIPT_PATHS = [
-    "/static/js/sound_packs/0001_echo_modern_generated.js",
+    "/static/js/sound_packs/0001_hui_modern_generated.js",
     "/static/js/sound_packs/0002_classic_messenger_generated.js",
 ]
 
 
-def normalize_sound_pack_identifier(value: object, default: str = "echo_modern_generated") -> str:
+def normalize_sound_pack_identifier(value: object, default: str = "hui_modern_generated") -> str:
     """Return a safe client sound-pack/sound identifier.
 
     Sound packs are JavaScript files loaded in the browser.  The server stores
@@ -284,7 +284,7 @@ def normalize_sound_pack_identifier(value: object, default: str = "echo_modern_g
     fixed allow-list.  Keep this normalizer aligned with the browser sound-pack
     registry so admin-saved custom IDs remain selectable after reload.
     """
-    fallback = str(default or "echo_modern_generated").strip().lower() or "echo_modern_generated"
+    fallback = str(default or "hui_modern_generated").strip().lower() or "hui_modern_generated"
     raw = str(value or fallback).strip().lower()
     raw = raw.replace("-", "_").replace(" ", "_")
     if raw.endswith(".js"):
@@ -292,7 +292,7 @@ def normalize_sound_pack_identifier(value: object, default: str = "echo_modern_g
     raw = re.sub(r"[^a-z0-9_:-]+", "_", raw)
     raw = re.sub(r"_+", "_", raw).strip("_:")
     file_aliases = {
-        "0001_echo_modern_generated": "echo_modern_generated",
+        "0001_hui_modern_generated": "hui_modern_generated",
         "0002_classic_messenger_generated": "classic_messenger_generated",
     }
     raw = file_aliases.get(raw, raw)
@@ -324,7 +324,7 @@ def sound_pack_local_builtins_enabled(value: object, *, default: bool = True) ->
 def sanitize_sound_pack_external_urls(value: object, *, max_urls: int = 12) -> list[str]:
     """Return safe HTTPS URLs for browser-loaded online sound-pack JS files.
 
-    Admin-configured sound packs are intentionally client-side: Echo-Chat only
+    Admin-configured sound packs are intentionally client-side: Hui Chat only
     stores the URL list and prints script tags.  The JavaScript is fetched by the
     browser from the remote host.  Only HTTPS ``.js`` URLs without credentials
     are allowed so admins do not accidentally create mixed-content, credential,
@@ -370,7 +370,7 @@ def sanitize_sound_pack_external_urls(value: object, *, max_urls: int = 12) -> l
 def sound_pack_script_src(script_url: str, app_version: str | None = None) -> str:
     """Return the script URL to render in the template.
 
-    Local Echo-Chat assets get the app-version cache buster.  Online sound-pack
+    Local Hui Chat assets get the app-version cache buster.  Online sound-pack
     URLs are left exactly as the admin configured them, because some CDNs use
     query strings for version pins or integrity workflows.
     """
@@ -506,7 +506,7 @@ def get_sound_pack_script_urls(settings: dict | None = None) -> list[str]:
 def get_chat_script_urls() -> list[str]:
     """Return the ordered frontend script URLs for chat.html.
 
-    Echo-Chat serves the modular files in ``static/js/chat_parts`` directly.
+    Hui Chat serves the modular files in ``static/js/chat_parts`` directly.
     the removed legacy bundle is intentionally no longer part of the runtime so
     the browser always uses the same files developers edit.
     """

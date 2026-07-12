@@ -47,7 +47,7 @@ from constants import (
     normalize_sound_pack_identifier, sanitize_sound_pack_external_urls, sound_pack_script_src,
     sound_pack_local_builtins_enabled,
 )
-from echo_voice_protocol import echo_voice_bool, echo_voice_client_config, echo_voice_room_limit
+from hui_voice_protocol import hui_voice_bool, hui_voice_client_config, hui_voice_room_limit
 from webrtc_ice_config import ice_server_summary, p2p_ice_servers, voice_ice_servers
 from database import get_db
 from database import (
@@ -138,7 +138,7 @@ def register_auth_routes(app, settings, limiter=None):
 
     def _socketio_instance():
         try:
-            return app.config.get("ECHOCHAT_SOCKETIO")
+            return app.config.get("HUI_SOCKETIO")
         except Exception:
             return None
 
@@ -291,7 +291,7 @@ def register_auth_routes(app, settings, limiter=None):
         """Resolve the public URL used in emailed reset links.
 
         Avoid trusting arbitrary Host headers for internet requests. In production,
-        set public_base_url/ECHOCHAT_PUBLIC_BASE_URL. For local dev, deriving from
+        set public_base_url/HUI_PUBLIC_BASE_URL. For local dev, deriving from
         request.host_url is acceptable so localhost/LAN testing still works.
         """
         configured = str(settings.get("public_base_url") or "").strip().rstrip("/")
@@ -307,14 +307,14 @@ def register_auth_routes(app, settings, limiter=None):
         return ""
 
 
-    LOGIN_CSRF_FALLBACK_COOKIE = "echochat_login_csrf"
-    REGISTER_CSRF_FALLBACK_COOKIE = "echochat_register_csrf"
-    FORGOT_CSRF_FALLBACK_COOKIE = "echochat_forgot_csrf"
-    RESET_CSRF_FALLBACK_COOKIE = "echochat_reset_csrf"
-    ENABLE_2FA_CSRF_FALLBACK_COOKIE = "echochat_enable_2fa_csrf"
+    LOGIN_CSRF_FALLBACK_COOKIE = "hui_login_csrf"
+    REGISTER_CSRF_FALLBACK_COOKIE = "hui_register_csrf"
+    FORGOT_CSRF_FALLBACK_COOKIE = "hui_forgot_csrf"
+    RESET_CSRF_FALLBACK_COOKIE = "hui_reset_csrf"
+    ENABLE_2FA_CSRF_FALLBACK_COOKIE = "hui_enable_2fa_csrf"
 
     _EMAIL_RE = re.compile(r"^[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9-]+(?:\.[A-Z0-9-]+)+$", re.IGNORECASE)
-    _DUMMY_LOGIN_HASH = hash_password("EchoChat dummy login timing password v1")
+    _DUMMY_LOGIN_HASH = hash_password("HuiChat dummy login timing password v1")
     _DUMMY_RECOVERY_PIN_HASH = hash_password("000000")
 
     def _dummy_password_verify(candidate: str) -> None:
@@ -414,7 +414,7 @@ def register_auth_routes(app, settings, limiter=None):
         return _set_login_csrf_fallback_cookie(resp, ctx.get("login_csrf_token"))
 
     def _server_challenges(kind: str) -> dict:
-        key = f"ECHOCHAT_{kind.upper()}_CHALLENGES"
+        key = f"HUI_{kind.upper()}_CHALLENGES"
         store = app.config.get(key)
         if not isinstance(store, dict):
             store = {}
@@ -1010,7 +1010,7 @@ def register_auth_routes(app, settings, limiter=None):
         refresh_max_age = max(3600, int(settings.get("refresh_token_days", 7) or 7) * 24 * 60 * 60)
 
         resp.set_cookie(
-            app.config.get("JWT_ACCESS_COOKIE_NAME", "echochat_access"),
+            app.config.get("JWT_ACCESS_COOKIE_NAME", "hui_access"),
             access_token,
             max_age=access_max_age,
             secure=False,
@@ -1019,7 +1019,7 @@ def register_auth_routes(app, settings, limiter=None):
             path=app.config.get("JWT_ACCESS_COOKIE_PATH", "/"),
         )
         resp.set_cookie(
-            app.config.get("JWT_REFRESH_COOKIE_NAME", "echochat_refresh"),
+            app.config.get("JWT_REFRESH_COOKIE_NAME", "hui_refresh"),
             refresh_token,
             max_age=refresh_max_age,
             secure=False,
@@ -1387,7 +1387,7 @@ def register_auth_routes(app, settings, limiter=None):
         if ip_banned:
             return _chat_ip_ban_redirect(banned_ip, ip_ban_message)
 
-        access_cookie_name = app.config.get("JWT_ACCESS_COOKIE_NAME", "echochat_access")
+        access_cookie_name = app.config.get("JWT_ACCESS_COOKIE_NAME", "hui_access")
         access_token = request.cookies.get(access_cookie_name)
         refresh_csrf_cookie = request.cookies.get("csrf_refresh_token")
         server_name = str(settings.get("server_name") or DEFAULT_SERVER_NAME).strip() or DEFAULT_SERVER_NAME
@@ -1545,7 +1545,7 @@ def register_auth_routes(app, settings, limiter=None):
             mode = str(settings.get(key) or default or "none").strip().lower()
             return mode if mode in {"none", "fade", "rise", "slide", "scale"} else str(default or "none")
 
-        def _client_sound_pack(default="echo_modern_generated"):
+        def _client_sound_pack(default="hui_modern_generated"):
             # Server sends only a safe ID; online sound packs may define custom IDs.
             return normalize_sound_pack_identifier(settings.get("sound_pack_default"), default)
 
@@ -1632,7 +1632,7 @@ def register_auth_routes(app, settings, limiter=None):
             "dm_show_sender_every_message": bool(settings.get("dm_show_sender_every_message", False)),
             "group_show_sender_every_message": bool(settings.get("group_show_sender_every_message", False)),
             "sound_notifications_default": bool(settings.get("sound_notifications_default", True)),
-            "sound_pack_default": _client_sound_pack("echo_modern_generated"),
+            "sound_pack_default": _client_sound_pack("hui_modern_generated"),
             "sound_pack_external_urls": sanitize_sound_pack_external_urls(settings.get("sound_pack_external_urls")),
             "sound_pack_load_local_builtins": sound_pack_local_builtins_enabled(settings.get("sound_pack_load_local_builtins", True), default=True),
             "sound_theme_default": _client_sound_theme("sound_theme_default", "soft_chime"),
@@ -1675,10 +1675,10 @@ def register_auth_routes(app, settings, limiter=None):
 
             # Voice chat (WebRTC audio)
             # Uses the same ICE server list as P2P file transfers by default.
-            "voice_enabled": echo_voice_bool(settings, "voice_enabled", True),
+            "voice_enabled": hui_voice_bool(settings, "voice_enabled", True),
             # Missing/blank defaults to 100; an explicit 0 still means unlimited.
-            "voice_max_room_peers": echo_voice_room_limit(settings),
-            **echo_voice_client_config(settings),
+            "voice_max_room_peers": hui_voice_room_limit(settings),
+            **hui_voice_client_config(settings),
             "voice_ice_servers": voice_ice_servers(settings),
 
             # Profile media upload hints. These mirror server-side enforcement for UX only.
@@ -1690,7 +1690,7 @@ def register_auth_routes(app, settings, limiter=None):
             # Auth/session
             "idle_logout_seconds": idle_logout_seconds,
 
-            # Server-owned A/V mode decision. The browser uses Echo's built-in
+            # Server-owned A/V mode decision. The browser uses Hui's built-in
             # WebRTC media engine for room voice/webcam controls.
             **client_av_config(settings),
 
@@ -1703,9 +1703,9 @@ def register_auth_routes(app, settings, limiter=None):
 
             # Socket transport preference. When true, the browser will prefer WebSockets
             # (far fewer requests than long-polling).
-            "ws_enabled": bool(app.config.get("ECHOCHAT_WS_ENABLED", False)),
-            "socketio_transports": list(app.config.get("ECHOCHAT_SOCKETIO_TRANSPORTS", ["websocket", "polling"])),
-            "socketio_websocket_only": bool(app.config.get("ECHOCHAT_SOCKETIO_WEBSOCKET_ONLY", False)),
+            "ws_enabled": bool(app.config.get("HUI_WS_ENABLED", False)),
+            "socketio_transports": list(app.config.get("HUI_SOCKETIO_TRANSPORTS", ["websocket", "polling"])),
+            "socketio_websocket_only": bool(app.config.get("HUI_SOCKETIO_WEBSOCKET_ONLY", False)),
         }
 
         chat_script_urls = get_chat_script_urls()
@@ -1731,7 +1731,7 @@ def register_auth_routes(app, settings, limiter=None):
         if is_admin:
             html = inject_admin_panel(
                 html,
-                csp_nonce=getattr(g, "echochat_csp_nonce", None),
+                csp_nonce=getattr(g, "hui_csp_nonce", None),
             )
 
         resp = make_response(html)
@@ -2290,8 +2290,8 @@ def register_auth_routes(app, settings, limiter=None):
                     )
                 return jsonify({"ok": False, "error": "invalid_csrf"}), 400
 
-        access_cookie_name = app.config.get("JWT_ACCESS_COOKIE_NAME", "echochat_access")
-        refresh_cookie_name = app.config.get("JWT_REFRESH_COOKIE_NAME", "echochat_refresh")
+        access_cookie_name = app.config.get("JWT_ACCESS_COOKIE_NAME", "hui_access")
+        refresh_cookie_name = app.config.get("JWT_REFRESH_COOKIE_NAME", "hui_refresh")
 
         access_token = request.cookies.get(access_cookie_name)
         refresh_token = request.cookies.get(refresh_cookie_name)
@@ -3154,7 +3154,7 @@ def register_auth_routes(app, settings, limiter=None):
                 local_mail_failure = True
                 local_mail_error = "SMTP is not configured."
             elif email_send_info == "missing_public_base_url":
-                logging.error("Password reset email not sent: set public_base_url or ECHOCHAT_PUBLIC_BASE_URL.")
+                logging.error("Password reset email not sent: set public_base_url or HUI_PUBLIC_BASE_URL.")
                 local_mail_failure = True
                 local_mail_error = "public_base_url is missing or invalid."
             elif email_send_info in {"invalid_from_localhost", "invalid_from_placeholder"}:

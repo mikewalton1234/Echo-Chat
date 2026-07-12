@@ -18,11 +18,11 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from secret_manager import resolve_secret, stable_secret_key_material
 
-SENSITIVE_FIELD_PREFIX = "ecenc:v1:"
-_FIELD_KEY_ENV = "ECHOCHAT_PROFILE_FIELD_KEY"
-_PREVIOUS_FIELD_KEYS_ENV = "ECHOCHAT_PROFILE_FIELD_PREVIOUS_KEYS"
-_AAD_PREFIX = b"EchoChat sensitive profile field v1:"
-_KEY_DERIVE_PREFIX = b"EchoChat profile-field encryption key v1\n"
+SENSITIVE_FIELD_PREFIX = "huienc:v1:"
+_FIELD_KEY_ENV = "HUI_PROFILE_FIELD_KEY"
+_PREVIOUS_FIELD_KEYS_ENV = "HUI_PROFILE_FIELD_PREVIOUS_KEYS"
+_AAD_PREFIX = b"Hui Chat sensitive profile field v1:"
+_KEY_DERIVE_PREFIX = b"Hui Chat profile-field encryption key v1\n"
 
 
 def _truthy(value: Any, default: bool = True) -> bool:
@@ -84,7 +84,7 @@ def previous_profile_field_key_materials(settings: dict | None = None) -> list[s
     """Return previous profile-field encryption keys used only for read/rotation.
 
     Keep old keys out of server_config.json in production; prefer
-    ECHOCHAT_PROFILE_FIELD_PREVIOUS_KEYS during a rotation window. Values can
+    HUI_PROFILE_FIELD_PREVIOUS_KEYS during a rotation window. Values can
     be comma, semicolon, or newline separated.
     """
     settings = settings or {}
@@ -139,7 +139,7 @@ def encrypt_sensitive_field(value: Any, settings: dict | None = None, *, field_n
 
     If encryption is disabled or no key material exists, the original value is
     returned. That keeps local/dev installs from breaking, while production can
-    enforce a stable key through SECRET_KEY or ECHOCHAT_PROFILE_FIELD_KEY.
+    enforce a stable key through SECRET_KEY or HUI_PROFILE_FIELD_KEY.
     """
     if value is None:
         return None
@@ -162,7 +162,7 @@ def decrypt_sensitive_field(value: Any, settings: dict | None = None, *, field_n
     """Decrypt a versioned sensitive field; plaintext legacy values pass through.
 
     During key rotation, decryption tries the active key first and then
-    ECHOCHAT_PROFILE_FIELD_PREVIOUS_KEYS / profile_field_previous_keys. That
+    HUI_PROFILE_FIELD_PREVIOUS_KEYS / profile_field_previous_keys. That
     lets admins deploy a new current key while old envelopes remain readable
     until the rotation tool rewrites them.
     """

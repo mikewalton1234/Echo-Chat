@@ -1,6 +1,6 @@
-"""Small .env loader for Echo-Chat entrypoints.
+"""Small .env loader for Hui Chat entrypoints.
 
-Echo-Chat is normally launched with `python main.py`, `gunicorn wsgi:app`, or a
+Hui Chat is normally launched with `python main.py`, `gunicorn wsgi:app`, or a
 standalone janitor process. Those paths do not go through Flask's CLI dotenv
 loader, so this helper loads a project `.env` file early without making
 python-dotenv a hard runtime dependency.
@@ -14,8 +14,9 @@ from pathlib import Path
 from typing import Iterable
 
 
+
 def _candidate_env_files() -> Iterable[Path]:
-    explicit = os.environ.get("ECHOCHAT_ENV_FILE") or os.environ.get("ENV_FILE")
+    explicit = os.environ.get("HUI_ENV_FILE") or os.environ.get("ENV_FILE")
     if explicit:
         yield Path(explicit).expanduser()
     yield Path(__file__).resolve().parent / ".env"
@@ -73,8 +74,8 @@ def load_project_dotenv(*, override: bool = False) -> Path | None:
                 load_dotenv(dotenv_path=path, override=override)
             loaded_keys = sorted(set(os.environ.keys()) - before_keys)
             if loaded_keys:
-                os.environ.setdefault("ECHOCHAT_DOTENV_KEYS", ",".join(loaded_keys))
-                os.environ.setdefault("ECHOCHAT_DOTENV_FILE", str(path))
+                os.environ.setdefault("HUI_DOTENV_KEYS", ",".join(loaded_keys))
+                os.environ.setdefault("HUI_DOTENV_FILE", str(path))
             return path
         except Exception:
             # Startup must never fail only because an optional .env file was

@@ -273,7 +273,7 @@ def _simple_rate_limit_redis_url() -> str:
     if not has_request_context():
         return ''
     try:
-        url = str(current_app.config.get('ECHOCHAT_SIMPLE_RATE_LIMIT_REDIS_URL') or '').strip()
+        url = str(current_app.config.get('HUI_SIMPLE_RATE_LIMIT_REDIS_URL') or '').strip()
     except Exception:
         url = ''
     return url if url.startswith(('redis://', 'rediss://')) else ''
@@ -309,7 +309,7 @@ def _simple_rate_limit_redis(key: str, limit: int, window_sec: int, now: float) 
     client = _simple_rate_limit_redis_client(url) if url else None
     if client is None:
         return None
-    redis_key = f"echochat:srl:{key}"
+    redis_key = f"hui:srl:{key}"
     member = f"{now:.6f}:{os.getpid()}:{threading.get_ident()}"
     cutoff = now - window_sec
     try:
@@ -339,7 +339,7 @@ def simple_rate_limit(key: str, limit: int, window_sec: int) -> tuple[bool, floa
 
     Returns (ok, retry_after_seconds).  When the Flask app provides a Redis rate
     storage URI, this guardrail uses Redis too so broad admin/API/Socket.IO
-    buckets are shared across multiple Echo-Chat instances.
+    buckets are shared across multiple Hui Chat instances.
     """
     try:
         limit = int(limit)
@@ -471,7 +471,7 @@ def trust_proxy_headers_enabled() -> bool:
     if not has_request_context():
         return False
     try:
-        return bool(current_app.config.get('ECHOCHAT_TRUST_PROXY_HEADERS', False))
+        return bool(current_app.config.get('HUI_TRUST_PROXY_HEADERS', False))
     except Exception:
         return False
 
@@ -568,7 +568,7 @@ def request_has_valid_double_submit_csrf(
     JavaScript callers send the token in X-CSRF-TOKEN. Browser logout
     confirmations can submit the same readable JWT CSRF cookie value as a
     hidden form field. Cross-site forms cannot read that cookie, so the form
-    value still has to match one of the Echo-Chat CSRF cookies exactly.
+    value still has to match one of the Hui Chat CSRF cookies exactly.
     """
     req = req or request
     submitted_values: list[str] = []

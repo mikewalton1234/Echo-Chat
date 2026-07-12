@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """permissions.py
 
-Role/permission guards for Echo Chat (PostgreSQL).
+Role/permission guards for Hui Chat (PostgreSQL).
 
 This module provides:
   - require_admin: lightweight JWT-backed admin guard
@@ -126,8 +126,8 @@ def require_permission(permission: str) -> Callable:
 
             return func(*args, **kwargs)
 
-        wrapper._echochat_required_permission = permission  # type: ignore[attr-defined]
-        wrapper._echochat_admin_route_gate = True  # type: ignore[attr-defined]
+        wrapper._hui_required_permission = permission  # type: ignore[attr-defined]
+        wrapper._hui_admin_route_gate = True  # type: ignore[attr-defined]
         return wrapper
 
     return decorator
@@ -153,6 +153,6 @@ def require_admin(func: Callable) -> Callable:
 
         return jsonify({"error": "Admin access required."}), 403
 
-    wrapper._echochat_required_permission = "admin:basic"  # type: ignore[attr-defined]
-    wrapper._echochat_admin_route_gate = True  # type: ignore[attr-defined]
+    wrapper._hui_required_permission = "admin:basic"  # type: ignore[attr-defined]
+    wrapper._hui_admin_route_gate = True  # type: ignore[attr-defined]
     return wrapper

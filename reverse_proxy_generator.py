@@ -1,8 +1,8 @@
-"""Reverse proxy config generator for Echo-Chat public beta hosting.
+"""Reverse proxy config generator for Hui Chat public beta hosting.
 
 The generator is intentionally dependency-free and safe to run before the
 application database exists. It reads the saved setup values and produces
-beginner-friendly Caddy and Nginx examples for one or more local Echo-Chat backends.
+beginner-friendly Caddy and Nginx examples for one or more local Hui Chat backends.
 """
 
 from __future__ import annotations
@@ -154,7 +154,7 @@ def backend_urls(settings: dict[str, Any]) -> list[str]:
 
 def _caddy_reverse_proxy_block(settings: dict[str, Any], indent: str = "    ") -> str:
     upstreams = " ".join(backend_urls(settings))
-    sticky = f"{indent}    lb_policy cookie echochat_lb\n" if _instance_count(settings) > 1 else ""
+    sticky = f"{indent}    lb_policy cookie hui_lb\n" if _instance_count(settings) > 1 else ""
     return (
         f"{indent}reverse_proxy {upstreams} {{\n"
         f"{sticky}"
@@ -167,18 +167,18 @@ def _caddy_reverse_proxy_block(settings: dict[str, Any], indent: str = "    ") -
 
 
 def _nginx_proxy_target(settings: dict[str, Any]) -> str:
-    return "http://echochat_backend" if _instance_count(settings) > 1 else backend_urls(settings)[0]
+    return "http://hui_chat_backend" if _instance_count(settings) > 1 else backend_urls(settings)[0]
 
 
 def _nginx_upstream_block(settings: dict[str, Any]) -> str:
     if _instance_count(settings) <= 1:
         return ""
     servers = "\n".join(f"    server {url.replace('http://', '')};" for url in backend_urls(settings))
-    return f"upstream echochat_backend {{\n    ip_hash;\n{servers}\n}}\n\n"
+    return f"upstream hui_chat_backend {{\n    ip_hash;\n{servers}\n}}\n\n"
 
 def _max_request_size(settings: dict[str, Any]) -> str:
     # Nginx accepts m/k suffixes. Round up so configured request limits are not
-    # accidentally lower than Echo-Chat's own max_request_bytes.
+    # accidentally lower than Hui Chat's own max_request_bytes.
     bytes_value = _safe_int(settings.get("max_request_bytes"), 30 * 1024 * 1024)
     mib = max(1, (bytes_value + 1024 * 1024 - 1) // (1024 * 1024))
     return f"{mib}m"
@@ -199,7 +199,7 @@ def validate_proxy_output_dir(output_dir: str | Path, *, repo_root: str | Path |
     """Return a safe reverse-proxy output directory or raise ValueError.
 
     The generator writes generic names such as ``README.md`` and ``Caddyfile``.
-    Refuse the project root, Echo-Chat source folders, and high-level system
+    Refuse the project root, Hui Chat source folders, and high-level system
     directories so a helper command cannot overwrite real project/deployment
     files by accident.
     """
@@ -224,14 +224,14 @@ def validate_proxy_output_dir(output_dir: str | Path, *, repo_root: str | Path |
     if resolved == repo:
         raise ValueError("Refusing to write reverse proxy configs into the project root because it would overwrite README.md and other project files. Use deploy/generated-proxy instead.")
     if resolved.exists() and (resolved / "main.py").exists() and (resolved / "VERSION.txt").exists():
-        raise ValueError(f"Refusing to write reverse proxy configs into an Echo-Chat source directory: {resolved}")
+        raise ValueError(f"Refusing to write reverse proxy configs into an Hui Chat source directory: {resolved}")
     return resolved
 
 
 def _generation_header(settings: dict[str, Any], proxy_name: str) -> str:
     generated = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     return (
-        f"# Echo-Chat {proxy_name} reverse proxy config\n"
+        f"# Hui Chat {proxy_name} reverse proxy config\n"
         f"# Generated: {generated}\n"
         f"# Public URL: {_public_url(settings)}\n"
         f"# Backend: {backend_url(settings)}\n"
@@ -240,7 +240,7 @@ def _generation_header(settings: dict[str, Any], proxy_name: str) -> str:
 
 
 def generate_caddyfile(settings: dict[str, Any]) -> str:
-    """Return a Caddyfile for Echo-Chat.
+    """Return a Caddyfile for Hui Chat.
 
     With a real public domain this is a public HTTPS reverse proxy config.
     Without a real domain it becomes a LAN-only HTTP helper on port 8080 so
@@ -273,11 +273,11 @@ http://:{lan_port} {{
 
     # Caddy automatically manages HTTPS certificates for public DNS names.
     # Make sure DNS A/AAAA records point to this server and ports 80/443 are open.
-    # Multiple Echo-Chat instances use cookie stickiness so Socket.IO polling stays on one backend.
+    # Multiple Hui Chat instances use cookie stickiness so Socket.IO polling stays on one backend.
 
 {proxy_block}
 
-    # Optional health endpoint. Enable it in Echo-Chat before using uptime checks.
+    # Optional health endpoint. Enable it in Hui Chat before using uptime checks.
     @health path {health_path}
 }}
 """.lstrip()
@@ -354,7 +354,7 @@ server {{
     host = _public_hostname(settings)
     return f"""{header}
 # Put the `upstream` and `map` blocks in the http {{ }} context. If your distro splits configs,
-# place them in /etc/nginx/conf.d/echochat-map.conf or above the server blocks.
+# place them in /etc/nginx/conf.d/hui-chat-map.conf or above the server blocks.
 {upstream_block}map $http_upgrade $connection_upgrade {{
     default upgrade;
     '' close;
@@ -416,7 +416,7 @@ server {{
         proxy_redirect off;
     }}
 
-    # Optional health endpoint. Enable it in Echo-Chat before using uptime checks.
+    # Optional health endpoint. Enable it in Hui Chat before using uptime checks.
     location = {health_path} {{
         proxy_pass {proxy_target};
         proxy_set_header Host $host;
@@ -438,7 +438,7 @@ def proxy_readiness_notes(settings: dict[str, Any]) -> list[str]:
     if has_real_public_domain(settings) and _public_host(settings) != _public_hostname(settings):
         notes.append("Public URL includes a non-default port or userinfo; generated Nginx uses only the hostname in server_name/certificate paths. Review listen/certificate settings manually.")
     if has_real_public_domain(settings) and not bool(settings.get("trust_proxy_headers")):
-        notes.append("Set trust_proxy_headers=true when Caddy/Nginx terminates HTTPS in front of Echo-Chat.")
+        notes.append("Set trust_proxy_headers=true when Caddy/Nginx terminates HTTPS in front of Hui Chat.")
     if has_real_public_domain(settings) and bool(settings.get("auto_allow_lan_origins")):
         notes.append("Disable auto_allow_lan_origins for public beta and use exact allowed_origins instead.")
     allowed = settings.get("allowed_origins") or settings.get("cors_allowed_origins") or []
@@ -458,7 +458,7 @@ def build_proxy_config_bundle(settings: dict[str, Any], proxy: str = "all") -> l
     if proxy in {"all", "caddy"}:
         bundles.append(ProxyConfigBundle("caddy", "Caddyfile", generate_caddyfile(settings)))
     if proxy in {"all", "nginx"}:
-        bundles.append(ProxyConfigBundle("nginx", "echochat.nginx.conf", generate_nginx_config(settings)))
+        bundles.append(ProxyConfigBundle("nginx", "hui-chat.nginx.conf", generate_nginx_config(settings)))
     return bundles
 
 
@@ -473,7 +473,7 @@ def write_proxy_configs(settings: dict[str, Any], output_dir: str | Path, proxy:
     readme = out / "README.md"
     notes = proxy_readiness_notes(settings)
     readme.write_text(
-        "# Echo-Chat generated reverse proxy configs\n\n"
+        "# Hui Chat generated reverse proxy configs\n\n"
         + (
             "**Status: LAN-only / no real public domain configured.**\n\n"
             if not has_real_public_domain(settings)
@@ -483,7 +483,7 @@ def write_proxy_configs(settings: dict[str, Any], output_dir: str | Path, proxy:
         + f"Backend: `{backend_url(settings)}`" + (f" plus {len(backend_urls(settings))-1} more backend(s)" if len(backend_urls(settings)) > 1 else "") + "\n\n"
         + "Generated files:\n"
         + "".join(f"- `{Path(item.path).name}` ({item.proxy})\n" for item in written)
-        + "\nRecommended Echo-Chat settings for public beta:\n\n"
+        + "\nRecommended Hui Chat settings for public beta:\n\n"
         + "```json\n"
         + f"{{\n  \"public_base_url\": \"{_public_url(settings) or 'https://YOUR-REAL-DOMAIN'}\",\n  \"cookie_secure\": true,\n  \"trust_proxy_headers\": true,\n  \"proxy_fix_hops\": 1,\n  \"auto_allow_lan_origins\": false\n}}\n"
         + "```\n\n"
@@ -505,7 +505,7 @@ def write_proxy_configs(settings: dict[str, Any], output_dir: str | Path, proxy:
 def format_proxy_generation_report(settings: dict[str, Any], written: list[ProxyConfigBundle]) -> str:
     real_domain = has_real_public_domain(settings)
     lines = [
-        "Echo-Chat Reverse Proxy Config Generator",
+        "Hui Chat Reverse Proxy Config Generator",
         "",
         f"Public URL: {_public_url(settings) or '(not set - no domain yet)'}",
         f"Backend: {backend_url(settings)}",
