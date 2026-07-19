@@ -8,7 +8,7 @@ It includes public and private chat rooms, direct messages, group chats, friends
 
 > **Public demo notice:** The current hosted demo may respond slowly because it runs on limited hosting resources.
 
-**Try the current demo:** https://Echo-Chat.replit.app
+**Try the current demo:** [https://Echo-Chat.replit.app](https://hui-chat-beta.replit.app/chat)
 
 Current build: **0.11.0-beta.447**
 
